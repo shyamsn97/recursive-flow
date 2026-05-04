@@ -352,7 +352,7 @@ class RLMFlow(LLMClient):
                 node.successor(
                     ErrorNode,
                     code=node.code,
-                    content=self.format_exec_output(node.code, content),
+                    content=self.format_exec_output(content),
                     error="orphaned_delegates",
                 ),
             )
@@ -394,7 +394,7 @@ class RLMFlow(LLMClient):
                 ObservationNode,
                 code=node.code,
                 output=output,
-                content=self.format_exec_output(node.code, output),
+                content=self.format_exec_output(output),
             ),
         )
 
@@ -615,8 +615,8 @@ class RLMFlow(LLMClient):
             return None
         return blocks[0] if self.config.single_block else "\n\n".join(blocks)
 
-    def format_exec_output(self, code: str, output: str) -> str:
-        return EXECUTION_OUTPUT.format(code=code, output=output or "(no output)")
+    def format_exec_output(self, output: str) -> str:
+        return EXECUTION_OUTPUT.format(output=output or "(no output)")
 
     def build_system_prompt_for(self, *, query: str, agent_id: str, depth: int) -> str:
         node = QueryNode(

@@ -31,7 +31,7 @@ NO_CODE_BLOCK = (
     "Try again."
 )
 
-EXECUTION_OUTPUT = "Code executed:\n```python\n{code}\n```\n\nREPL output:\n{output}"
+EXECUTION_OUTPUT = "REPL output:\n{output}"
 
 STUCK_WARNING = (
     "\n\nWARNING: Your code produced no output and did not call done(). "
