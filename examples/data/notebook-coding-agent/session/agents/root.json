@@ -1,9 +1,9 @@
 {
   "agent_id": "root",
-  "latest_leaf_id": "n_d01492fa929d",
+  "latest_leaf_id": "n_efe28b92e224",
   "branch_id": "main",
   "depth": 0,
   "type": "result",
   "terminal": true,
-  "result": "Boids simulation created in output/boids-simulation with split files and trails. Open index.html to run."
+  "result": "Boids simulation created at output/boids-simulation with index.html, style.css, and script.js. Contract and basic checks passed. Open index.html to run."
 }
