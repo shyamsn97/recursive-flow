@@ -1,28 +1,44 @@
-/* styles.css — make the canvas fill the viewport on a black background */
-
-/* Base reset: no margins, no scrollbars, full-height */
+/* Remove margins and scrollbars; full black background */
 html, body {
   height: 100%;
   margin: 0;
-  background: #000; /* black background per contract */
-  overflow: hidden; /* no scrollbars */
+  padding: 0;
+  background: #000;
+  overflow: hidden; /* remove scrollbars */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Ensure the canvas is the only visible element and fills the viewport */
-#boids {
-  display: block;         /* remove inline gap behavior */
-  width: 100vw;           /* fill viewport width */
-  height: 100vh;          /* fill viewport height */
-  max-width: 100%;
-  max-height: 100%;
-  background: transparent; /* drawing will be handled by canvas; keep body black */
-  touch-action: none;     /* avoid touch scrolling on mobile */
+/* Hide scrollbars for WebKit and Firefox */
+html::-webkit-scrollbar, body::-webkit-scrollbar {
+  display: none;
+}
+* {
+  scrollbar-width: none; /* Firefox */
+}
+
+/* Make canvas fill the viewport and render smoothly */
+canvas {
+  display: block;           /* remove inline gap */
+  width: 100vw;             /* full viewport width */
+  height: 100vh;            /* full viewport height */
+  touch-action: none;       /* avoid touch gestures (pinch/scroll) */
+  -ms-touch-action: none;
   -webkit-user-select: none;
-  -ms-user-select: none;
   user-select: none;
-  -webkit-tap-highlight-color: rgba(0,0,0,0);
-  image-rendering: optimizeSpeed;
+
+  /* Promote to its own layer for smoother transforms/animations */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  will-change: transform;
+
+  /* Prefer high-quality rendering for the canvas element */
+  image-rendering: optimizeQuality;
+  /* WebKit-specific preference for contrast/quality */
+  image-rendering: -webkit-optimize-contrast;
 }
 
-/* Ensure the page can't be scrolled with focus outlines, etc. */
-:focus { outline: none; }
+/* Optional: ensure any full-bleed container also sits on black */
+#app, .app, .viewport {
+  background: transparent;
+}

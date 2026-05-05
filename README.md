@@ -5,8 +5,7 @@
   <a href="https://github.com/shyamsn97/rlmflow/pkgs/container/rlmflow"><img src="https://img.shields.io/badge/ghcr.io-rlmflow-2496ED?logo=docker&logoColor=white" alt="Docker" /></a>
 </p>
 
-A Python library for [Recursive Language Models](https://arxiv.org/abs/2512.24601) —
-a typed graph for every recursive run.
+A Python library for createing interactible, steppable graph [Recursive Language Models](https://arxiv.org/abs/2512.24601).
 
 Recursive Language Models are powerful systems -- capable of handling long-context tasks by spawning sub-agents with their own fresh context windows. However. RLMs get messy fast: parents spawn children, children spawn more children, which also can run for multiple steps, etc.
 
@@ -18,12 +17,10 @@ node you can step, inspect, fork, and replay.
   <img src="docs/rlm_animation.gif" alt="rlmflow animation" />
 </p>
 
-## RLMs are Graphs
+## RLMs as Graphs
 
-An RLM run is a tree of agents. A parent agent delegates subtasks to
-children, those children can delegate to their own children, and waits
-and resumes connect their results back up. rlmflow represents that tree
-directly: every step inside an agent is a typed node, and every
+RLMs delegate subtasks to
+children, those children can delegate to their own children, and their results bubble back up. **rlmflow** represents this representation as a tree directory: every step inside an agent is a typed node and every
 delegation is an edge between agents.
 
 For example, this RLM code:
@@ -68,7 +65,7 @@ pip install -e .
 
 ## Quick start
 
-This example is all you need for a simple and interpretable recursive coding agent.
+This example is all you need for a simple and interpretable recursive coding agent. see [notebook](./examples/notebooks/coding_agent.ipynb)
 
 ```python
 from rlmflow import OpenAIClient, RLMConfig, RLMFlow, Workspace
@@ -93,7 +90,13 @@ agent = RLMFlow(
     llm_client=OpenAIClient("gpt-5"),
     runtime=runtime,
     workspace=workspace,
-    config=RLMConfig(max_depth=3, max_iterations=15),
+    config=RLMConfig(max_depth=2, max_iterations=30),
+    llm_clients={ # additional llm clients to be chosen to delegate
+        "fast": {
+            "model": OpenAIClient("gpt-5-mini"),
+            "description": "Cheap model for smaller subtasks",
+        },
+    },
 )
 
 query = "Build a python text-based adventure game with combat and inventory."
@@ -195,28 +198,38 @@ time travel, manual intervention, and gym-style stepping in one file.
 
 ## Rich visualization
 
+See [notebook](./examples/notebooks/viz_walkthrough.ipynb) for a full showcase of vizualization utilities.
+
 Because the run is a typed graph, every visualization is just a render of
 that graph. The coding agent example
 ([`examples/coding-agent/agent.py`](examples/coding-agent/agent.py))
 already exercises every option below — its saved trace under
-`examples/coding-agent/workspace/` is the source for the renders here.
+`examples/data/notebook-coding-agent/` is the source for the renders here.
 
 ### Live terminal tree
 
 `rlmflow.utils.viz.live(agent, state)` drives the step loop and renders a
-Rich tree as nodes are produced. The boids run (`Create a boids
-simulation in plain HTML and javascript`) settles to:
+Rich tree as nodes are produced. The boids run (`Create a simple boids
+simulation in plain HTML and JavaScript, split each component into
+separate files`) settles to:
 
 ```text
-root [supervising] {default}
-  root.html [result] {fast}    -> {"path": "output/boids-sim/index.html", ...}
-  root.css  [result] {fast}    -> {"path": "output/boids-sim/style.css", ...}
-  root.js   [result] {default} -> {"path": "output/boids-sim/script.js", ...}
+root [result] {default:gpt-5} -> Boids simulation written to output/boids-simulation with modular JS (boid, simulation, renderer) and index.html entrypoint.
+  root.index_html    [result] {fast:gpt-5-mini} -> ok
+  root.styles_css    [result] {fast:gpt-5-mini} -> ok
+  root.boid_js       [result] {fast:gpt-5-mini} -> ok
+  root.simulation_js [result] {fast:gpt-5-mini} -> ok
+  root.renderer_js   [result] {fast:gpt-5-mini} -> ok
+  root.main_js       [result] {fast:gpt-5-mini} -> ok
 ```
 
 The same render is available offline as `state.tree()` on any node.
+Filename-flavored agent ids (`index.html` → `index_html`) are sanitized
+because `.` is the parent/child delimiter in the agent tree.
 
 ### Gradio viewer
+
+![](docs/static/gradio_ui.png)
 
 `open_viewer(states)` launches a small browser app for stepping through a
 saved trace — tree, summary, and raw node JSON side by side:
@@ -225,11 +238,11 @@ saved trace — tree, summary, and raw node JSON side by side:
 from rlmflow.utils.trace import load_trace
 from rlmflow.utils.viewer import open_viewer
 
-trace = load_trace("examples/coding-agent/workspace/trace")
+trace = load_trace("examples/data/notebook-coding-agent/trace")
 open_viewer(trace.states)
 ```
 
-Or from a checkpoint via the CLI: `rlmflow view examples/coding-agent/workspace/trace`.
+Or from a checkpoint via the CLI: `rlmflow view examples/data/notebook-coding-agent/trace`.
 
 ### Static renders
 
@@ -249,27 +262,37 @@ tokens              # one-line ASCII sparkline of cumulative tokens
 ```
 
 ```bash
-rlmflow render examples/coding-agent/workspace/trace -f mermaid-flowchart
-rlmflow render examples/coding-agent/workspace/trace -f gantt-html -o run.html
-rlmflow render examples/coding-agent/workspace/trace -f report-md  -o run.md
-rlmflow render examples/coding-agent/workspace/trace -f tokens
+rlmflow render examples/data/notebook-coding-agent/trace -f mermaid-flowchart
+rlmflow render examples/data/notebook-coding-agent/trace -f gantt-html -o run.html
+rlmflow render examples/data/notebook-coding-agent/trace -f report-md  -o run.md
+rlmflow render examples/data/notebook-coding-agent/trace -f tokens
 ```
 
 GitHub renders mermaid inline, so the output drops straight into a doc:
 
 ```mermaid
 stateDiagram-v2
-    state "root (supervising)" as root
+    state "root (result)" as root
     [*] --> root
     root --> html
-    state "root.html (result)" as html
-    html --> [*] : "index.html — 2370 bytes"
+    state "root.index_html (result)" as html
+    html --> [*] : "ok"
     root --> css
-    state "root.css (result)" as css
-    css --> [*] : "style.css — 7221 bytes"
-    root --> js
-    state "root.js (result)" as js
-    js --> [*] : "script.js — 11793 bytes"
+    state "root.styles_css (result)" as css
+    css --> [*] : "ok"
+    root --> boid
+    state "root.boid_js (result)" as boid
+    boid --> [*] : "ok"
+    root --> sim
+    state "root.simulation_js (result)" as sim
+    sim --> [*] : "ok"
+    root --> rend
+    state "root.renderer_js (result)" as rend
+    rend --> [*] : "ok"
+    root --> main
+    state "root.main_js (result)" as main
+    main --> [*] : "ok"
+    root --> [*] : "Boids simulation written to output/boids-simulation..."
 ```
 
 ### Programmatic helpers
@@ -279,16 +302,18 @@ Everything the CLI does is one function call away:
 ```python
 from rlmflow.utils.export import to_mermaid, to_mermaid_flowchart, to_mermaid_sequence, to_dot, to_d2
 from rlmflow.utils.viz import (
-    code_log, error_summary, message_stream, diff_system_prompts,
-    token_sparkline, budget_burndown, bench_table, report_md, tee,
-    slack_webhook, discord_webhook,
+    ascii_boxes, code_log, error_summary, message_stream, diff_system_prompts,
+    gantt, gantt_html, token_sparkline, budget_burndown, bench_table,
+    report_md, live, tee, slack_webhook, discord_webhook,
 )
 from rlmflow.utils.tracing import json_logs
 
-print(token_sparkline(states))         # ▁▂▅█▂   15820 tok over 7 steps
-print(error_summary(state))            # ErrorNode counts grouped by kind
-print(report_md(states, title="run")) # full Markdown report
-json_logs(states, "run.jsonl")         # one node per line
+print(token_sparkline(states))          # ▁▂▅█▂   15820 tok over 7 steps
+print(error_summary(state))             # ErrorNode counts grouped by kind
+print(message_stream("root.boid_js", session))   # rendered transcript for one agent
+print(report_md(states, title="run"))   # full Markdown report
+gantt_html(states, "run.html")          # standalone HTML swimlane
+json_logs(states, "run.jsonl")          # one node per line
 ```
 
 ## Examples
@@ -304,7 +329,9 @@ All examples share flags like `--no-viz`, `--docker-image rlmflow:local`,
 | [`needle_haystack.py`](examples/needle_haystack.py) | Needle-in-a-haystack across 500 files with custom tools and `runtime_factory`. |
 | [`summarizer.py`](examples/summarizer.py) | Recursive map-reduce over a long document. |
 | [`view_demo.py`](examples/view_demo.py) | Launch the Gradio viewer on a saved trace. |
-| [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | Visualization walkthrough — every render, query, and export against the saved boids trace. |
+| [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, open the interactive viewer. **Source of `examples/data/notebook-coding-agent/`** — every other notebook reads from here. |
+| [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | All 9 visualizations against the saved boids trace: inline tree, interactive viewer, topology renders (mermaid/dot/d2/sequence), step-indexed timeline, per-node detail (`message_stream`, `diff_system_prompts`), cost & reports, run-vs-run comparison, CLI equivalents. |
+| [`notebooks/node_basics.ipynb`](examples/notebooks/node_basics.ipynb) | `Node` API tour — walk, find, path_to, filter (`leaves`/`results`/`errors`/`where`), diff snapshots, session access (`FileSession.load`, `chain_to`), event streaming with `tee` / `json_logs`. |
 
 ## CLI
 
@@ -316,18 +343,24 @@ rlmflow version
 ```
 
 `view` and `render` accept a trace directory, `trace.json`, or checkpoint.
-Formats: `mermaid`, `dot`, `tree`, `gantt-html`.
+`render -f` accepts: `mermaid`, `mermaid-flowchart`, `mermaid-sequence`,
+`dot`, `d2`, `tree`, `ascii-boxes`, `gantt-html`, `report-md`, `code-log`,
+`error-summary`, `tokens` — see the [Static renders](#static-renders)
+table above for what each produces.
 
 ## Docs
-- [Positioning](docs/positioning.md): why rlmflow treats RLMs as graphs.
-- [Observability](docs/observability.md): nodes, session/context, traces,
-  visualizations, and the viewer.
-- [Control](docs/control.md): step loop, checkpoint, rewind, intervention,
-  custom prompts, runtimes, and tools.
-- [Runtimes](docs/runtimes.md): `Runtime` protocol, Local / Subprocess
-  / Docker / Modal, writing your own.
+- [Positioning](docs/positioning.md): when to use rlmflow vs rlm-minimal,
+  ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider — decision matrix and
+  per-framework comparisons.
+- [Observability](docs/observability.md): node fields and types, save/load
+  traces, session/context layout, live tree, gantt, topology exports,
+  Gradio viewer, CLI.
+- [Control](docs/control.md): step loop, checkpoint, rewind, fork
+  (`Workspace.fork`), intervention, custom prompts, runtimes, and tools.
+- [Runtimes](docs/runtimes.md): `Runtime` protocol, shipped runtimes
+  (Local / Subprocess / Docker / Modal), writing your own.
 - [Security](docs/security.md): trust model, Docker isolation knobs,
-  approval gates.
+  engine-level caps, proxied tools, approval gates.
 
 ## References
 
