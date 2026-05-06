@@ -34,24 +34,36 @@ _MERMAID_FLOW_CLASS = {
 
 
 def to_mermaid(state: Node, *, include_results: bool = True) -> str:
-    lines = ["stateDiagram-v2"]
+    """Render the node tree as a Mermaid ``stateDiagram-v2``.
+
+    All ``state ... as <id>`` declarations are emitted before any
+    transitions, and transition labels are unquoted plain text. Both
+    are required to render reliably on GitHub's mermaid version, which
+    crashes on forward-referenced states and quoted transition labels
+    with a "Cannot read properties of undefined (reading 'shape')"
+    error.
+    """
+    declarations: list[str] = []
+    transitions: list[str] = []
 
     def walk(node: Node, is_root: bool) -> None:
         nid = _sanitize(node.id)
         label = f"{node.agent_id or 'root'} ({node.type})"
-        lines.append(f'    state "{_escape_mermaid(label)}" as {nid}')
+        declarations.append(f'    state "{_escape_mermaid(label)}" as {nid}')
         if is_root:
-            lines.append(f"    [*] --> {nid}")
+            transitions.append(f"    [*] --> {nid}")
         for child in node.child_nodes():
             cid = _sanitize(child.id)
-            lines.append(f"    {nid} --> {cid}")
             walk(child, is_root=False)
+            transitions.append(f"    {nid} --> {cid}")
         result = getattr(node, "result", None)
         if include_results and node.terminal and result:
-            lines.append(f'    {nid} --> [*] : "{_escape_mermaid(_truncate(result))}"')
+            transitions.append(
+                f"    {nid} --> [*] : {_escape_mermaid(_truncate(result))}"
+            )
 
     walk(state, True)
-    return "\n".join(lines)
+    return "\n".join(["stateDiagram-v2", *declarations, *transitions])
 
 
 _NODE_COLOR = {
