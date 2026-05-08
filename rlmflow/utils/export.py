@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from rlmflow.node import Node
+from rlmflow.utils.viz import VizGraph
 
 
 def _sanitize(node_id: str) -> str:
@@ -174,9 +175,10 @@ def to_mermaid_sequence(state: Node) -> str:
             if child.agent_id != node.agent_id:
                 lines.append(f"    {parent_id}->>+{child_id}: delegate")
             walk(child)
-            if child.agent_id != node.agent_id and child.terminal:
-                kind = "done" if child.type == "result" else child.type
-                result = getattr(child, "result", None)
+            current = child.current()
+            if child.agent_id != node.agent_id and current.terminal:
+                kind = "done" if current.type == "result" else current.type
+                result = getattr(current, "result", None)
                 summary = _truncate(result, 30) if result else kind
                 lines.append(
                     f"    {child_id}-->>-{parent_id}: {_escape_mermaid(summary)}"
@@ -214,4 +216,92 @@ def to_d2(state: Node, *, include_results: bool = True) -> str:
             walk(child)
 
     walk(state)
+    return "\n".join(lines)
+
+
+def viz_graph_to_mermaid_flowchart(
+    graph: VizGraph, *, include_results: bool = True
+) -> str:
+    lines = ["flowchart TD"]
+    for item in graph.nodes:
+        node = item.payload
+        nid = _sanitize(node.id)
+        body = f"{item.label}<br/><i>{node.type}</i>"
+        result = getattr(node, "result", None)
+        if include_results and node.terminal and result:
+            body += f"<br/>{_escape_mermaid(_truncate(result, 40))}"
+        current = "<br/><b>current</b>" if item.current else ""
+        lines.append(
+            f'    {nid}["{body}{current}"]:::{_MERMAID_FLOW_CLASS.get(node.type, "obs")}'
+        )
+    for edge in graph.edges:
+        lines.append(
+            f"    {_sanitize(edge.source)} -->|{edge.kind}| {_sanitize(edge.target)}"
+        )
+    lines.extend(
+        [
+            "    classDef query    fill:#1f6feb22,stroke:#58a6ff,color:#c9d1d9;",
+            "    classDef obs      fill:#1f6feb22,stroke:#58a6ff,color:#c9d1d9;",
+            "    classDef action   fill:#d2992222,stroke:#d29922,color:#c9d1d9;",
+            "    classDef sup      fill:#bc8cff22,stroke:#bc8cff,color:#c9d1d9;",
+            "    classDef resume   fill:#7ee78722,stroke:#7ee787,color:#c9d1d9;",
+            "    classDef err      fill:#f8514922,stroke:#f85149,color:#c9d1d9;",
+            "    classDef result   fill:#3fb95022,stroke:#3fb950,color:#c9d1d9;",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def viz_graph_to_dot(graph: VizGraph, *, include_results: bool = True) -> str:
+    lines = [
+        "digraph rlmflow {",
+        "    rankdir=LR;",
+        '    node [shape=box, style="rounded,filled", fontname="Helvetica"];',
+        '    edge [fontname="Helvetica", fontsize=10];',
+    ]
+    for item in graph.nodes:
+        node = item.payload
+        color = _NODE_COLOR.get(node.type, "#8b949e")
+        parts = [item.label, node.agent_id or "root", node.type]
+        result = getattr(node, "result", None)
+        if include_results and node.terminal and result:
+            parts.append(_truncate(result, 40))
+        label = "\\n".join(_escape_dot(part) for part in parts)
+        penwidth = "2.5" if item.current else "1.0"
+        lines.append(
+            f'    {_sanitize(node.id)} [label="{label}", fillcolor="{color}22", color="{color}", penwidth={penwidth}];'
+        )
+    for edge in graph.edges:
+        style = "solid" if edge.kind == "next" else "dashed"
+        lines.append(
+            f'    {_sanitize(edge.source)} -> {_sanitize(edge.target)} [label="{edge.kind}", style={style}];'
+        )
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def viz_graph_to_d2(graph: VizGraph, *, include_results: bool = True) -> str:
+    styles = {
+        "query": '{ style: { fill: "#1f6feb22"; stroke: "#58a6ff" } }',
+        "observation": '{ style: { fill: "#1f6feb22"; stroke: "#58a6ff" } }',
+        "action": '{ style: { fill: "#d2992222"; stroke: "#d29922" } }',
+        "supervising": '{ style: { fill: "#bc8cff22"; stroke: "#bc8cff" } }',
+        "resume": '{ style: { fill: "#7ee78722"; stroke: "#7ee787" } }',
+        "error": '{ style: { fill: "#f8514922"; stroke: "#f85149" } }',
+        "result": '{ style: { fill: "#3fb95022"; stroke: "#3fb950" } }',
+    }
+    lines: list[str] = []
+    for item in graph.nodes:
+        node = item.payload
+        label = f"{item.label}\\n{node.agent_id}\\n{node.type}"
+        result = getattr(node, "result", None)
+        if include_results and node.terminal and result:
+            label += f"\\n{_truncate(result, 40)}"
+        lines.append(
+            f'{_sanitize(node.id)}: "{label}" {styles.get(node.type, "")}'.rstrip()
+        )
+    for edge in graph.edges:
+        lines.append(
+            f"{_sanitize(edge.source)} -> {_sanitize(edge.target)}: {edge.kind}"
+        )
     return "\n".join(lines)
