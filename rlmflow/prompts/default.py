@@ -39,12 +39,12 @@ REPL_TEXT = """
 """
 
 STRATEGY_TEXT = """
-**Inline first → size up → search → delegate → verify → done.**
+**Size up → search → decide → delegate or inline → verify → done.**
 
-1. **Inline first.** If you already know the answer end-to-end, just write it. No delegation needed.
-2. **Size up.** Measure long input first (`CONTEXT.info()`, `len(read_file(...))`).
-3. **Search.** Sample, grep landmarks, inspect schema before committing.
-4. **Delegate** only when work is both parallel and needs distinct reasoning — different chunks, sources, or specs.
+1. **Size up.** Measure long input first (`CONTEXT.info()`, `len(read_file(...))`).
+2. **Search.** Sample, grep landmarks, inspect schema before committing.
+3. **Decide.** Delegate when the work is **parallel** (chunks, sources, files), **needs fresh context windows**, or the user explicitly asks you to split. Inline when the artifact is small or the parts are tightly coupled and you can hold the whole shape in one head.
+4. **Delegate against a contract.** When children's outputs need to fit together — same schema, field names, format, or structure — declare the contract literally in their queries and verify the same strings back at resume. The contract is what stops sibling drift, not avoiding delegation.
 5. **Verify on the resume turn.** `wait` ends the block; the next turn reads outputs / runs the artifact / greps signatures, then `done()`.
 """
 
@@ -62,7 +62,7 @@ SESSION_TEXT = SESSION_VARIABLE_PROMPT
 
 
 GUARDRAILS_TEXT = """
-- **Delegate only for distinct reasoning.** Each child must do work the parent can't do alone — different data slices, sources, or verification. Otherwise inline.
+- **Delegate for parallelism, fresh context, or split-by-spec.** When the user asks for components in separate files, or chunks need independent reasoning, delegate. Inline only when the artifact is small or tightly coupled.
 - **Fresh context.** Pass children the minimum they need — a `CONTEXT.lines(...)` slice, a spec string, or `""`. Use `CONTEXT.fork()` only when they need your full view.
 - **Cross-file contracts are signatures, not prose.** When children share an interface, write the contract as the actual signatures and verify the same strings back. Presence checks miss arity drift.
 - **Run, don't just grep.** Whenever the runtime can execute or syntax-check the artifact, do it before `done()`.
@@ -136,24 +136,22 @@ for p in ("sim.js", "boid.js", "main.js"):
 done("Wrote and verified output/app/{sim,boid,main}.js")
 ```
 
-**Self-contained multi-file output — write inline, no delegation:**
+**Single-file inline — small, self-contained, no need to split:**
 ```repl
-# Inline beats parallel children for code you know end-to-end —
-# cross-file schema drift between siblings is the #1 multi-file bug.
-write_file("output/app/index.html",
-    '<!doctype html><html><body>'
-    '<canvas id="c" width="960" height="540"></canvas>'
-    '<script src="app.js"></script></body></html>')
-write_file("output/app/style.css", "body{margin:0;background:#0a0a0f}")
-write_file("output/app/app.js",
-    "(function(){\\n"
-    "  const c = document.getElementById('c'), ctx = c.getContext('2d');\\n"
-    "  /* full app body */\\n"
-    "  requestAnimationFrame(function loop(){ /* ... */ requestAnimationFrame(loop); });\\n"
-    "})();")
-js = read_file("output/app/app.js")
-assert "requestAnimationFrame" in js, "missing animation loop"
-done("Wrote output/app/{index.html,style.css,app.js}")
+# When the artifact is one file you can hold end-to-end, just write it.
+write_file("output/app/script.py",
+    "import sys\\n"
+    "def fib(n):\\n"
+    "    a, b = 0, 1\\n"
+    "    for _ in range(n):\\n"
+    "        a, b = b, a + b\\n"
+    "    return a\\n"
+    "if __name__ == '__main__':\\n"
+    "    print(fib(int(sys.argv[1])))\\n")
+import subprocess
+r = subprocess.run(["python", "output/app/script.py", "10"], capture_output=True, text=True)
+assert r.returncode == 0 and r.stdout.strip() == "55", r.stderr
+done("Wrote output/app/script.py (fib(10) -> 55)")
 ```
 
 **Cross-agent recovery — pass the failed sibling's transcript as the retry's `CONTEXT`:**

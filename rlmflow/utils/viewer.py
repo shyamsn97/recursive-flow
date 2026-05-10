@@ -585,14 +585,7 @@ def _build_graph_figure(
     ]
     colors = [_GRAPH_NODE_COLORS.get(n.type, "#8b949e") for n in ordered]
     symbols = [_GRAPH_NODE_SYMBOLS.get(n.type, "circle") for n in ordered]
-    sizes = [
-        14
-        + min(
-            22,
-            (((n.total_input_tokens or 0) + (n.total_output_tokens or 0)) ** 0.5 / 3.5),
-        )
-        for n in ordered
-    ]
+    sizes = [14 for _ in ordered]
     hover = [_node_hover_text(n) for n in ordered]
 
     def text_position(node: Node) -> str:
@@ -697,6 +690,86 @@ def _build_graph_figure(
     return fig
 
 
+def _scale_figure_elements(
+    fig: Any,
+    marker_mult: float,
+    text_mult: float | None = None,
+) -> None:
+    """Multiply pixel-sized elements on a Plotly figure.
+
+    ``marker_mult`` scales markers, marker outlines, and edge widths.
+    ``text_mult`` scales label / title / legend / global font sizes; if
+    ``None`` it defaults to ``marker_mult`` (uniform scaling — the
+    common case).
+
+    ``_build_graph_figure`` lays the plot out for ~420 px display. When
+    rendering to a much larger canvas (image or full-page HTML) those
+    fixed pixel sizes shrink to specks; run this on the returned figure
+    to restore visual weight at the larger canvas. Pass
+    ``text_mult < marker_mult`` (e.g. 2.2 vs 3.5) when labels would
+    otherwise collide on dense trees.
+    """
+    if text_mult is None:
+        text_mult = marker_mult
+    if marker_mult == 1.0 and text_mult == 1.0:
+        return
+    if fig is None:
+        return
+    for trace in getattr(fig, "data", ()):
+        marker = getattr(trace, "marker", None)
+        if marker is not None:
+            size = getattr(marker, "size", None)
+            if isinstance(size, (list, tuple)):
+                marker.size = [s * marker_mult for s in size]
+            elif isinstance(size, (int, float)):
+                marker.size = size * marker_mult
+            mline = getattr(marker, "line", None)
+            if mline is not None and getattr(mline, "width", None) is not None:
+                mline.width = mline.width * marker_mult
+        line = getattr(trace, "line", None)
+        if line is not None and getattr(line, "width", None) is not None:
+            line.width = line.width * marker_mult
+        textfont = getattr(trace, "textfont", None)
+        if textfont is not None and getattr(textfont, "size", None) is not None:
+            textfont.size = textfont.size * text_mult
+    layout = getattr(fig, "layout", None)
+    if layout is None:
+        return
+    if layout.title and layout.title.font and layout.title.font.size:
+        layout.title.font.size = layout.title.font.size * text_mult
+    if layout.legend and layout.legend.font and layout.legend.font.size:
+        layout.legend.font.size = layout.legend.font.size * text_mult
+    if layout.font and layout.font.size:
+        layout.font.size = layout.font.size * text_mult
+
+
+def _normalize_label_positions(fig: Any) -> None:
+    """Force every node label to ``bottom center``.
+
+    ``_build_graph_figure`` alternates ``top center`` / ``bottom
+    center`` by depth, which puts adjacent depths' labels in the *same*
+    inter-row gap and causes collisions on dense trees (e.g. a parent's
+    ``supervising`` label vs. its child's label, or a sibling's label).
+    Forcing every row's labels into the gap below that row only lets
+    adjacent depths use independent vertical bands.
+    """
+    if fig is None:
+        return
+    for trace in getattr(fig, "data", ()):
+        mode = getattr(trace, "mode", None) or ""
+        if "text" not in mode:
+            continue
+        positions = getattr(trace, "textposition", None)
+        if positions is None:
+            continue
+        if isinstance(positions, str):
+            trace.textposition = "bottom center"
+        else:
+            trace.textposition = tuple(
+                "bottom center" if (p or "").startswith("top") else p for p in positions
+            )
+
+
 def node_plot(
     node: Node,
     kind: str = "graph",
@@ -709,6 +782,10 @@ def node_plot(
     title: str | None = None,
     session: Session | str | Path | None = None,
     include_results: bool = True,
+    element_mult: float = 1.0,
+    marker_mult: float | None = None,
+    text_mult: float | None = None,
+    normalize_labels: bool = False,
 ):
     """Render ``node`` in one of several formats.
 
@@ -720,6 +797,19 @@ def node_plot(
     - ``"dot"`` / ``"d2"``: static graph language strings.
     - ``"tree"``: plain text tree.
     - ``"gantt"``: HTML swimlane. Pass ``states=[...]`` for a full run.
+
+    Scaling knobs (Plotly only — ignored for string kinds):
+
+    - ``element_mult`` scales markers / edges / fonts uniformly.
+      Default ``1.0`` keeps the on-screen layout.
+    - ``marker_mult`` overrides ``element_mult`` for markers + edges.
+    - ``text_mult`` overrides ``element_mult`` for fonts. Set lower
+      than ``marker_mult`` (e.g. ``3.5`` vs. ``2.2``) when labels
+      would otherwise collide on dense trees.
+    - ``normalize_labels=True`` forces every node label to
+      ``bottom center`` instead of the alternating top/bottom layout.
+      Useful for static exports of dense trees; the on-screen
+      alternation looks fine at small canvases.
     """
     fmt = kind.lower().replace("-", "_")
     if fmt in {"mermaid", "state", "state_diagram"}:
@@ -815,6 +905,11 @@ def node_plot(
         raise ImportError(
             "Node.plot() requires the viewer extra: `pip install rlmflow[viewer]`."
         )
+    if normalize_labels:
+        _normalize_label_positions(fig)
+    resolved_marker = marker_mult if marker_mult is not None else element_mult
+    resolved_text = text_mult if text_mult is not None else element_mult
+    _scale_figure_elements(fig, resolved_marker, resolved_text)
     return fig
 
 
@@ -831,8 +926,18 @@ def node_plot_html(
     session: Session | str | Path | None = None,
     include_results: bool = True,
     include_plotlyjs: str | bool = "cdn",
+    element_mult: float = 1.0,
+    marker_mult: float | None = None,
+    text_mult: float | None = None,
+    normalize_labels: bool = False,
 ) -> str:
-    """Return an HTML fragment for ``node.plot(kind)``."""
+    """Return an HTML fragment for ``node.plot(kind)``.
+
+    The ``element_mult`` / ``marker_mult`` / ``text_mult`` /
+    ``normalize_labels`` knobs match :func:`node_plot` and let the HTML
+    stepper (:func:`render_html`) and any ad-hoc embeds produce the same
+    polished layout the image exporters use.
+    """
     rendered = node_plot(
         node,
         kind,
@@ -844,6 +949,10 @@ def node_plot_html(
         title=title,
         session=session,
         include_results=include_results,
+        element_mult=element_mult,
+        marker_mult=marker_mult,
+        text_mult=text_mult,
+        normalize_labels=normalize_labels,
     )
     if hasattr(rendered, "to_html"):
         return rendered.to_html(include_plotlyjs=include_plotlyjs, full_html=False)
@@ -856,6 +965,495 @@ def node_plot_html(
         'border-radius:6px;overflow:auto;">'
         f"{escape(str(rendered))}</pre>"
     )
+
+
+_DEFAULT_EXPORT_MARGIN = {"l": 24, "r": 24, "t": 80, "b": 120}
+
+
+def save_image(
+    node: Node,
+    path: str | Path,
+    *,
+    states: list[Node] | None = None,
+    events: list[Node] | None = None,
+    step: int | None = None,
+    mode: GraphMode = "snapshot",
+    width: int = 1800,
+    height: int = 1350,
+    scale: float = 2.0,
+    element_mult: float = 3.0,
+    marker_mult: float | None = None,
+    text_mult: float | None = None,
+    normalize_labels: bool = True,
+    margin: dict | None = None,
+    title: str | None = None,
+    session: Session | str | Path | None = None,
+) -> Path:
+    """Render ``node.plot()`` to an image file (PNG/SVG/PDF/etc.).
+
+    Format is inferred from ``path``'s suffix. Markers, edges, and
+    fonts are scaled so the tree stays visually balanced on the larger
+    export canvas (the on-screen plot is laid out for ~420 px height,
+    so ``element_mult=3.0`` matches a 1350 px export).
+
+    Pass ``marker_mult`` and/or ``text_mult`` separately when labels
+    collide on dense trees — bump ``marker_mult`` higher than
+    ``text_mult`` (e.g. ``3.5`` vs. ``2.2``). ``normalize_labels=True``
+    forces every label to ``bottom center`` so adjacent depths' labels
+    can't share the same vertical band.
+
+    Requires ``kaleido`` for image export — install with
+    ``pip install kaleido``.
+    """
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig = node_plot(
+        node,
+        "graph",
+        states=states,
+        events=events,
+        step=step,
+        mode=mode,
+        height=height,
+        title=title,
+        session=session,
+        element_mult=element_mult,
+        marker_mult=marker_mult,
+        text_mult=text_mult,
+        normalize_labels=normalize_labels,
+    )
+    fig.update_layout(margin=margin if margin is not None else _DEFAULT_EXPORT_MARGIN)
+    try:
+        fig.write_image(out, width=width, height=height, scale=scale)
+    except (ImportError, ValueError) as exc:
+        # Plotly raises ValueError("Image export requires the kaleido package.")
+        raise ImportError(
+            "save_image() requires the `kaleido` package: " "`pip install kaleido`."
+        ) from exc
+    return out
+
+
+def save_steps(
+    states: list[Node],
+    out_dir: str | Path,
+    *,
+    fmt: str = "png",
+    events: list[Node] | None = None,
+    mode: GraphMode = "snapshot",
+    width: int = 1800,
+    height: int = 1350,
+    scale: float = 2.0,
+    element_mult: float = 3.0,
+    marker_mult: float | None = None,
+    text_mult: float | None = None,
+    normalize_labels: bool = True,
+    margin: dict | None = None,
+    title_template: str = "step {i} / {total}: {agent_id} [{type}]",
+    session: Session | str | Path | None = None,
+) -> Path:
+    """Save one image per snapshot in ``states`` under ``out_dir``.
+
+    Files are written as ``step_{i:02d}.{fmt}``. Same scaling /
+    aspect / label knobs as :func:`save_image`. Returns the resolved
+    output directory.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    if not states:
+        return out
+    total = len(states) - 1
+    for i, state in enumerate(states):
+        title = title_template.format(
+            i=i,
+            total=total,
+            agent_id=state.agent_id,
+            type=state.type,
+        )
+        save_image(
+            state,
+            out / f"step_{i:02d}.{fmt}",
+            states=states,
+            events=events,
+            step=i,
+            mode=mode,
+            width=width,
+            height=height,
+            scale=scale,
+            element_mult=element_mult,
+            marker_mult=marker_mult,
+            text_mult=text_mult,
+            normalize_labels=normalize_labels,
+            margin=margin,
+            title=title,
+            session=session,
+        )
+    return out
+
+
+_HTML_STYLES = """
+:root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --panel: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --muted: #8b949e;
+  --blue: #58a6ff;
+  --green: #3fb950;
+  --purple: #bc8cff;
+  --yellow: #d29922;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin: 0;
+  padding: 2rem;
+}
+main { margin: 0 auto; max-width: 1400px; }
+h1, h2, h3 { margin-top: 0; }
+.slide {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: none;
+  margin: 1rem 0;
+  padding: 1rem;
+}
+.slide.active { display: block; }
+.slide-head {
+  align-items: baseline;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+.step { color: var(--muted); white-space: nowrap; }
+.viewer-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.7fr);
+}
+.graph-card, .detail-card { min-width: 0; }
+pre {
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  padding: 1rem;
+}
+table { border-collapse: collapse; width: 100%; }
+th, td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.45rem;
+  text-align: left;
+  vertical-align: top;
+}
+th { color: var(--muted); font-weight: 600; }
+code { color: var(--blue); }
+.pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+}
+.kind-result { color: var(--green); border-color: var(--green); }
+.kind-supervising { color: var(--purple); border-color: var(--purple); }
+.kind-action { color: var(--yellow); border-color: var(--yellow); }
+.kind-query, .kind-observation { color: var(--blue); border-color: var(--blue); }
+.nav {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 1rem;
+}
+.arrow, .dot { cursor: pointer; }
+.arrow {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  height: 2.2rem;
+  width: 2.2rem;
+}
+.dot {
+  background: #30363d;
+  border: 1px solid #484f58;
+  border-radius: 999px;
+  height: 0.7rem;
+  width: 0.7rem;
+}
+.dot.active { background: var(--blue); border-color: var(--blue); }
+@media (max-width: 900px) {
+  .viewer-grid { grid-template-columns: 1fr; }
+  body { padding: 1rem; }
+}
+""".strip()
+
+_HTML_SCRIPT = """
+const slides = [...document.querySelectorAll(".slide")];
+const dots = [...document.querySelectorAll(".dot")];
+let current = 0;
+function show(index) {
+  current = (index + slides.length) % slides.length;
+  slides.forEach((s, i) => s.classList.toggle("active", i === current));
+  dots.forEach((d, i) => d.classList.toggle("active", i === current));
+}
+document.getElementById("prev").addEventListener("click", () => show(current - 1));
+document.getElementById("next").addEventListener("click", () => show(current + 1));
+dots.forEach((dot, idx) => dot.addEventListener("click", () => show(idx)));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowLeft") show(current - 1);
+  if (event.key === "ArrowRight") show(current + 1);
+});
+""".strip()
+
+
+def _node_table_html(state: Node) -> str:
+    from html import escape
+
+    rows = []
+    for node in state.walk():
+        result = getattr(node, "result", "") or ""
+        waiting = ", ".join(getattr(node, "waiting_on", []) or [])
+        detail = result or waiting or getattr(node, "query", "") or ""
+        rows.append(
+            "<tr>"
+            f"<td><code>{escape(node.agent_id)}</code></td>"
+            f"<td><span class='pill kind-{escape(node.type)}'>{escape(node.type)}</span></td>"
+            f"<td>{escape(str(detail)[:120])}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows)
+
+
+def render_html(
+    states: list[Node],
+    *,
+    title: str = "rlmflow trace",
+    events: list[Node] | None = None,
+    mode: GraphMode | None = None,
+    height: int = 720,
+    include_plotlyjs: str | bool = "cdn",
+    session: Session | str | Path | None = None,
+    element_mult: float = 2.0,
+    marker_mult: float | None = None,
+    text_mult: float | None = None,
+    normalize_labels: bool = True,
+) -> str:
+    """Render ``states`` as a single self-contained HTML stepper.
+
+    Each slide pairs the Plotly graph for one snapshot with that
+    snapshot's transcript and a node table. Navigation lives at the
+    bottom (arrows + dots, plus keyboard left/right). The output is
+    standalone — drop it in a PR comment, attach it to a CI artifact,
+    or commit it next to the code that produced the trace.
+
+    Pass ``events=[...]`` and ``mode="events"`` to get the per-event
+    progressive view (matches the Gradio viewer); ``mode="snapshot"``
+    just shows each saved state. Default picks ``"events"`` when events
+    are supplied, otherwise ``"snapshot"``.
+
+    The figure styling matches :func:`save_image`: ``normalize_labels``
+    defaults to ``True`` so adjacent depths' labels can't share the same
+    vertical band, and ``marker_mult`` / ``text_mult`` (or the uniform
+    ``element_mult``) let you fatten markers / shrink labels for dense
+    trees the same way you would when exporting PNGs.
+
+    Defaults are tuned so the live stepper matches the proportions of
+    a ``save_image`` PNG slide: ``height=720`` gives the tree breathing
+    room, and ``element_mult=2.0`` lifts the native 14 px markers to
+    28 px so each node stays clearly readable without encoding token
+    count in marker size.
+    """
+    from html import escape
+
+    if not states:
+        raise ValueError("render_html() needs at least one state")
+    resolved_mode: GraphMode = mode or ("events" if events else "snapshot")
+
+    slides: list[str] = []
+    dots: list[str] = []
+    total = len(states)
+    for idx, state in enumerate(states, start=1):
+        active = " active" if idx == 1 else ""
+        # Only embed plotly.js once (first slide) to keep file size sane.
+        plotly_inc = include_plotlyjs if idx == 1 else False
+        graph_html = node_plot_html(
+            state,
+            "graph",
+            states=states,
+            events=events,
+            step=idx - 1,
+            mode=resolved_mode,
+            height=height,
+            title=f"step {idx} / {total}",
+            session=session,
+            include_plotlyjs=plotly_inc,
+            element_mult=element_mult,
+            marker_mult=marker_mult,
+            text_mult=text_mult,
+            normalize_labels=normalize_labels,
+        )
+        head_title = f"{state.agent_id} \u00b7 {state.type}"
+        slide_body = (
+            f'<section class="slide{active}" data-step="{idx}">'
+            '<div class="slide-head">'
+            f'<span class="step">Step {idx} / {total}</span>'
+            f"<h2>{escape(head_title)}</h2>"
+            "</div>"
+            '<div class="viewer-grid">'
+            f'<div class="graph-card">{graph_html}</div>'
+            '<aside class="detail-card">'
+            f"<h3>Transcript: <code>{escape(state.agent_id)}</code></h3>"
+            f"<pre>{escape(state.transcript(include_system=False))}</pre>"
+            "<h3>Visible Nodes</h3>"
+            "<table>"
+            "<thead><tr><th>Agent</th><th>Type</th><th>Detail</th></tr></thead>"
+            f"<tbody>{_node_table_html(state)}</tbody>"
+            "</table>"
+            "</aside>"
+            "</div>"
+            "</section>"
+        )
+        slides.append(slide_body)
+        dots.append(
+            f'<button class="dot{active}" data-step="{idx}" '
+            f'aria-label="Step {idx}"></button>'
+        )
+
+    return (
+        "<!doctype html>\n"
+        '<html lang="en">\n'
+        "<head>\n"
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"<title>{escape(title)}</title>\n"
+        f"<style>{_HTML_STYLES}</style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<main>\n"
+        f"<h1>{escape(title)}</h1>\n" + "".join(slides) + '\n<div class="nav">\n'
+        '<button class="arrow" id="prev" aria-label="Previous step">&larr;</button>\n'
+        + "".join(dots)
+        + '\n<button class="arrow" id="next" aria-label="Next step">&rarr;</button>\n'
+        "</div>\n"
+        "</main>\n"
+        f"<script>{_HTML_SCRIPT}</script>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+
+def save_html(
+    states: list[Node],
+    path: str | Path,
+    **kwargs: Any,
+) -> Path:
+    """Write :func:`render_html` output to ``path``."""
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_html(states, **kwargs), encoding="utf-8")
+    return out
+
+
+def save_gif(
+    states: list[Node],
+    path: str | Path,
+    *,
+    duration: int = 600,
+    loop: int = 0,
+    events: list[Node] | None = None,
+    mode: GraphMode = "snapshot",
+    width: int = 1200,
+    height: int = 900,
+    scale: float = 1.0,
+    element_mult: float = 2.0,
+    marker_mult: float | None = None,
+    text_mult: float | None = None,
+    normalize_labels: bool = True,
+    margin: dict | None = None,
+    title_template: str = "step {i} / {total}: {agent_id} [{type}]",
+    session: Session | str | Path | None = None,
+) -> Path:
+    """Stitch every snapshot in ``states`` into an animated GIF.
+
+    Renders each state to an in-memory PNG with kaleido, then assembles
+    them with ``Pillow`` (``PIL.Image``). ``duration`` is the per-frame
+    delay in milliseconds (default 600 = ~1.6 fps). ``loop=0`` loops
+    forever; pass a positive int to limit it.
+
+    Requires both ``kaleido`` (for PNG export) and ``Pillow`` (for GIF
+    assembly): ``pip install rlmflow[image] pillow``.
+    """
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise ImportError("save_gif() requires Pillow: `pip install pillow`.") from exc
+
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if not states:
+        raise ValueError("save_gif() needs at least one state")
+
+    import io
+
+    frames: list[Image.Image] = []
+    total = len(states) - 1
+    for i, state in enumerate(states):
+        title = title_template.format(
+            i=i,
+            total=total,
+            agent_id=state.agent_id,
+            type=state.type,
+        )
+        fig = node_plot(
+            state,
+            "graph",
+            states=states,
+            events=events,
+            step=i,
+            mode=mode,
+            height=height,
+            title=title,
+            session=session,
+            element_mult=element_mult,
+            marker_mult=marker_mult,
+            text_mult=text_mult,
+            normalize_labels=normalize_labels,
+        )
+        fig.update_layout(
+            margin=margin if margin is not None else _DEFAULT_EXPORT_MARGIN
+        )
+        try:
+            png_bytes = fig.to_image(
+                format="png",
+                width=width,
+                height=height,
+                scale=scale,
+            )
+        except (ImportError, ValueError) as exc:
+            raise ImportError(
+                "save_gif() needs `kaleido` for PNG rendering: "
+                "`pip install kaleido`."
+            ) from exc
+        frames.append(
+            Image.open(io.BytesIO(png_bytes)).convert("P", palette=Image.ADAPTIVE)
+        )
+
+    head, *tail = frames
+    head.save(
+        out,
+        format="GIF",
+        save_all=True,
+        append_images=tail,
+        duration=duration,
+        loop=loop,
+        optimize=True,
+        disposal=2,
+    )
+    return out
 
 
 def open_viewer(

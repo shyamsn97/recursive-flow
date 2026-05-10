@@ -26,7 +26,12 @@ from rlmflow.workspace import Workspace
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive coding agent")
-    parser.add_argument("--workspace", type=str, default="workspace")
+    parser.add_argument(
+        "--workspace",
+        type=str,
+        default=str(Path(__file__).parent.parent / "runs" / "coding-agent"),
+        help="workspace dir (default: examples/runs/coding-agent/)",
+    )
     parser.add_argument("--model", default="gpt-5")
     parser.add_argument("--fast-model", default="gpt-5-mini")
     parser.add_argument("--docker-image", default=None,

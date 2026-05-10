@@ -239,6 +239,10 @@ class Node(BaseModel):
         title: str | None = None,
         session: Any | None = None,
         include_results: bool = True,
+        element_mult: float = 1.0,
+        marker_mult: float | None = None,
+        text_mult: float | None = None,
+        normalize_labels: bool = False,
     ) -> Any:
         """Render this node as graph, Mermaid, Gantt, tree, DOT, or D2.
 
@@ -247,6 +251,17 @@ class Node(BaseModel):
             ``node.plot("mermaid")`` returns a Mermaid state diagram.
             ``node.plot("flowchart")`` returns a Mermaid flowchart.
             ``node.plot("gantt", states=history)`` returns an HTML swimlane.
+
+        Scaling knobs (Plotly only):
+
+        - ``element_mult`` scales markers + edges + fonts uniformly.
+          Default ``1.0`` keeps the on-screen layout.
+        - ``marker_mult`` / ``text_mult`` override ``element_mult``
+          when you need different scales (e.g. fat markers, smaller
+          labels to avoid collisions).
+        - ``normalize_labels=True`` forces every label to ``bottom
+          center`` (useful for static exports of dense trees). The
+          on-screen alternation looks fine at small canvases.
         """
         from rlmflow.utils.viewer import node_plot
 
@@ -261,6 +276,95 @@ class Node(BaseModel):
             title=title,
             session=session,
             include_results=include_results,
+            element_mult=element_mult,
+            marker_mult=marker_mult,
+            text_mult=text_mult,
+            normalize_labels=normalize_labels,
+        )
+
+    def save_image(
+        self,
+        path: str | Path,
+        *,
+        states: list[Node] | None = None,
+        events: list[Node] | None = None,
+        step: int | None = None,
+        mode: str = "snapshot",
+        width: int = 1800,
+        height: int = 1350,
+        scale: float = 2.0,
+        element_mult: float = 3.0,
+        marker_mult: float | None = None,
+        text_mult: float | None = None,
+        normalize_labels: bool = True,
+        margin: dict | None = None,
+        title: str | None = None,
+        session: Any | None = None,
+    ) -> Path:
+        """Render this node's graph to an image file (PNG/SVG/PDF).
+
+        Format is inferred from ``path``'s suffix. See
+        :func:`rlmflow.utils.viewer.save_image` for the scaling /
+        label-normalization knobs. Requires the ``kaleido`` package
+        (``pip install kaleido``).
+        """
+        from rlmflow.utils.viewer import save_image
+
+        return save_image(
+            self,
+            path,
+            states=states,
+            events=events,
+            step=step,
+            mode=mode,
+            width=width,
+            height=height,
+            scale=scale,
+            element_mult=element_mult,
+            marker_mult=marker_mult,
+            text_mult=text_mult,
+            normalize_labels=normalize_labels,
+            margin=margin,
+            title=title,
+            session=session,
+        )
+
+    def save_html(
+        self,
+        path: str | Path,
+        *,
+        states: list[Node] | None = None,
+        events: list[Node] | None = None,
+        title: str = "rlmflow trace",
+        height: int = 720,
+        include_plotlyjs: str | bool = "cdn",
+        session: Any | None = None,
+        element_mult: float = 2.0,
+        marker_mult: float | None = None,
+        text_mult: float | None = None,
+        normalize_labels: bool = True,
+    ) -> Path:
+        """Write a self-contained HTML stepper for ``states or [self]``.
+
+        See :func:`rlmflow.utils.viewer.render_html` for the full set of
+        options. Defaults match :func:`rlmflow.utils.viewer.render_html`
+        so the live stepper has the same proportions as a
+        :func:`save_image` PNG.
+        """
+        from rlmflow.utils.viewer import save_html
+
+        return save_html(
+            states or [self],
+            path,
+            title=title,
+            events=events,
+            height=height,
+            include_plotlyjs=include_plotlyjs,
+            session=session,
+            element_mult=element_mult,
+            marker_mult=marker_mult,
+            text_mult=text_mult,
+            normalize_labels=normalize_labels,
         )
 
     def plot_html(

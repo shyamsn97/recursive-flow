@@ -52,7 +52,8 @@ Query(root)
 pip install rlmflow               # core
 pip install rlmflow[openai]       # + OpenAI client
 pip install rlmflow[anthropic]    # + Anthropic client
-pip install rlmflow[viewer]       # + Gradio viewer
+pip install rlmflow[viewer]       # + Gradio viewer (plotly)
+pip install rlmflow[image]        # + static image / GIF export (kaleido)
 pip install rlmflow[all]          # all of the above
 ```
 
@@ -260,6 +261,9 @@ report-md           # full Markdown summary (tree + cost + result + errors)
 code-log            # every code block paired with its observation
 error-summary       # ErrorNode counts grouped by kind
 tokens              # one-line ASCII sparkline of cumulative tokens
+html                # self-contained interactive stepper, one slide per snapshot
+image               # single PNG/SVG/PDF of the topology snapshot
+steps               # one image per snapshot, written as step_NN.{png,svg,pdf}
 ```
 
 ```bash
@@ -307,6 +311,156 @@ gantt_html(states, "run.html")          # standalone HTML swimlane
 json_logs(states, "run.jsonl")          # one node per line
 ```
 
+### Image, GIF, and HTML exports
+
+For blog posts, PR comments, papers, and CI artifacts, render the
+graph straight to a PNG/SVG/PDF, an animated GIF, or a single
+self-contained HTML stepper. Four public functions live in
+`rlmflow.utils`, plus matching CLI verbs:
+
+| Function                                | CLI verb        | Output                                | Use case                                   |
+|-----------------------------------------|-----------------|---------------------------------------|--------------------------------------------|
+| `save_image(node, path)`                | `-f image`      | one PNG/SVG/PDF                       | hero image of a finished run               |
+| `save_steps(states, dir/)`              | `-f steps`      | `step_NN.png` per snapshot            | blog slideshow, paper figure series        |
+| `save_gif(states, path)`                | _(no verb yet)_ | animated GIF                          | quick preview / social posts               |
+| `save_html(states, path)`               | `-f html`       | self-contained stepper (Plotly + CSS) | shareable URL-less artifact, PR comment    |
+
+Quick start:
+
+```python
+from rlmflow.utils.trace import load_trace
+from rlmflow.utils import save_image, save_steps, save_html, save_gif
+
+trace = load_trace("examples/data/notebook-coding-agent/trace")
+states = trace.states
+
+save_image(states[-1], "trace_final.png")        # single snapshot
+save_steps(states, "frames/")                    # one PNG per step
+save_html(states, "trace.html", title="run 1")   # standalone stepper
+save_gif(states, "trace.gif", duration=400)      # animated GIF (~2.5 fps)
+```
+
+Or use the node shorthand (same defaults):
+
+```python
+states[-1].save_image("trace_final.png")
+states[-1].save_html("trace.html", states=states)
+```
+
+#### Why the scaling knobs exist
+
+The on-screen Plotly figure is laid out for ~420 px tall, with 11 px
+markers and 10 px labels — sized to look right on a Jupyter cell. A
+naive 1800 px PNG export keeps those pixel sizes literal, so every
+marker shrinks to a speck and every label to a thread.
+
+The save helpers compensate with three knobs:
+
+| Knob               | Default (image/steps/gif) | Default (html) | Effect                                                                                     |
+|--------------------|---------------------------|----------------|---------------------------------------------------------------------------------------------|
+| `element_mult`     | `3.0`                     | `2.0`          | Uniform multiplier on markers + edges + fonts. The simplest "make it bigger" knob.         |
+| `marker_mult`      | _(inherits)_              | _(inherits)_   | Override just the marker size + edge width. Bump higher than `text_mult` on dense trees.    |
+| `text_mult`        | _(inherits)_              | _(inherits)_   | Override just the label font size. Smaller text = fewer collisions when nodes are close.    |
+| `normalize_labels` | `True`                    | `True`         | Force every label to `bottom center` so adjacent depths can't share a vertical band.        |
+
+The HTML stepper additionally defaults to `height=720` (vs the
+~420 px on-screen default) so its native marker sizes land in the
+same proportion to the canvas as a `save_image` PNG.
+
+`element_mult` is the lazy default; pass `marker_mult` and/or
+`text_mult` to break the symmetry when labels are colliding even at
+3× scale.
+
+#### Recipes
+
+**Hero PNG of a finished run** — defaults are tuned for this:
+
+```python
+states[-1].save_image("hero.png")
+# == save_image(states[-1], "hero.png", width=1800, height=1350,
+#               scale=2.0, element_mult=3.0, normalize_labels=True)
+```
+
+**Blog slideshow with dense subtrees** — fat markers, small labels,
+square-ish canvas (the recipe behind `docs/blog.md`):
+
+```python
+save_steps(
+    states,
+    "blog/frames/",
+    width=1600, height=1200, scale=2.0,
+    marker_mult=3.5,        # fat node dots + edges
+    text_mult=2.2,          # shrink labels so they don't collide
+    normalize_labels=True,  # already the default — explicit for the reader
+)
+```
+
+**Standalone interactive stepper** — drop into a PR comment or
+GitHub gist:
+
+```python
+save_html(states, "stepper.html", title="needle haystack run")
+```
+
+The HTML output embeds Plotly from CDN, includes per-slide
+transcripts, and ships keyboard navigation (← / →) plus dot-style
+slide indicators. Open it in any browser, attach it to an email,
+upload it as a CI artifact — it works offline once the CDN script
+is cached.
+
+**Animated GIF** — needs `pip install rlmflow[image] pillow`:
+
+```python
+save_gif(
+    states,
+    "trace.gif",
+    duration=600,          # ms per frame; lower = faster
+    loop=0,                # 0 = forever; 1 = play once
+    width=1200, height=900,
+    element_mult=2.0,
+)
+```
+
+#### From the CLI
+
+Every knob above maps 1:1 to a CLI flag:
+
+```bash
+# blog slideshow recipe (matches the dense-tree recipe above)
+rlmflow render examples/data/notebook-coding-agent/trace \
+  -f steps -o blog/frames/ \
+  --width 1600 --height 1200 --scale 2.0 \
+  --marker-mult 3.5 --text-mult 2.2
+
+# self-contained interactive stepper
+rlmflow render examples/data/notebook-coding-agent/trace \
+  -f html  -o stepper.html --title "boids walkthrough"
+
+# single hero PNG with default scaling
+rlmflow render examples/data/notebook-coding-agent/trace \
+  -f image -o hero.png
+
+# opt out of label normalization (matches Gradio viewer defaults)
+rlmflow render examples/data/notebook-coding-agent/trace \
+  -f html  -o stepper.html --no-normalize-labels
+```
+
+The CLI auto-picks `element_mult=2.0` for `-f html` (so the live
+stepper's native 14 px markers stay readable) and `element_mult=3.0`
+for `-f image` / `-f steps` (where the much larger PNG canvas would
+otherwise shrink markers to specks). Node sizes are uniform; token
+counts stay in hover/details, not marker size. Override either with
+`--element-mult`.
+
+#### Dependencies
+
+- `save_image` / `save_steps` need `kaleido`. Install with
+  `pip install rlmflow[image]` or just `pip install kaleido`.
+- `save_gif` additionally needs `Pillow`
+  (`pip install rlmflow[image] pillow`).
+- `save_html` and `render_html` have **no static-image dependency** —
+  they emit a single HTML file that embeds Plotly from CDN.
+
 ## Examples
 
 All examples share flags like `--no-viz`, `--docker-image rlmflow:local`,
@@ -348,19 +502,28 @@ flags, scoring details, and ablation scripts.
 rlmflow view traces/run1/
 rlmflow render checkpoint.json -f mermaid
 rlmflow render traces/run1/ -f gantt-html -o run1.html
+rlmflow render traces/run1/ -f html       -o stepper.html
+rlmflow render traces/run1/ -f steps      -o frames/  --marker-mult 3.5 --text-mult 2.2
+rlmflow render traces/run1/ -f image      -o trace.png
 rlmflow version
 ```
 
 `view` and `render` accept a trace directory, `trace.json`, or checkpoint.
 `render -f` accepts: `mermaid`, `mermaid-flowchart`, `mermaid-sequence`,
 `dot`, `d2`, `tree`, `ascii-boxes`, `gantt-html`, `report-md`, `code-log`,
-`error-summary`, `tokens` — see the [Static renders](#static-renders)
-table above for what each produces.
+`error-summary`, `tokens`, `html`, `image`, `steps` — see the
+[Static renders](#static-renders) table and [Image, GIF, and HTML
+exports](#image-gif-and-html-exports) for what each produces and the
+scaling / label-normalization flags (`--marker-mult`, `--text-mult`,
+`--normalize-labels` / `--no-normalize-labels`).
 
 ## Todo
 
 
 ## Docs
+- [Blog post](docs/blog.md): the long-form pitch — why recursive
+  language models, why graphs over flat traces, full needle-in-a-haystack
+  walkthrough with the same exports the CLI ships.
 - [Positioning](docs/positioning.md): when to use rlmflow vs rlm-minimal,
   ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider — decision matrix and
   per-framework comparisons.

@@ -120,7 +120,11 @@ def run_branch(root: Path, name: str, implementation: str, label: str):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare repair branches")
-    parser.add_argument("--root-dir", default="runs_fork_repair")
+    parser.add_argument(
+        "--root-dir",
+        default=str(Path(__file__).parent / "runs" / "fork_repair"),
+        help="where to drop per-branch workspaces (default: examples/runs/fork_repair/)",
+    )
     args = parser.parse_args()
 
     root = Path(args.root_dir).resolve()

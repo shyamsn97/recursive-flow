@@ -80,11 +80,18 @@ def test_default_prompt_emphasizes_done_as_final_answer():
 
 def test_default_prompt_teaches_size_up_strategy():
     prompt = DEFAULT_BUILDER.build(tools="- read_file: ...", status="depth 0")
-    assert "Inline first" in prompt
+    # The strategy section must keep the size-up → search → delegate-or-inline → verify spine.
+    # We do NOT pin "Inline first" anymore — that bias regressed delegation on tasks that
+    # explicitly asked for split files (boids notebook). The current strategy frames the
+    # decision instead: delegate for parallelism / fresh context / split-by-spec, inline
+    # when small or tightly coupled.
     assert "Size up" in prompt or "size up" in prompt.lower()
     assert "Search" in prompt
     assert "Delegate" in prompt
+    assert "Inline" in prompt
     assert "verify" in prompt.lower()
+    # Decide-before-delegate framing must be present.
+    assert "Decide" in prompt or "decide" in prompt.lower()
 
 
 def test_baseline_prompt_documents_context_and_done():

@@ -240,7 +240,7 @@ def main():
         print(result_text or "(no result)")
 
         from rlmflow.utils.trace import save_trace
-        trace_dir = Path("traces/summarizer")
+        trace_dir = Path(__file__).parent / "runs" / "summarizer" / "trace"
         save_trace(trace, trace_dir, metadata={"lines": actual_lines})
         print(f"\nTrace saved to {trace_dir}/")
 

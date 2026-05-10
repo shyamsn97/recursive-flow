@@ -147,7 +147,7 @@ def main():
         print(f"Correct:        {answer in state.get_result()}")
 
         from rlmflow.utils.trace import save_trace
-        trace_dir = Path("traces/needle_haystack")
+        trace_dir = Path(__file__).parent / "runs" / "needle_haystack" / "trace"
         save_trace(states, trace_dir, metadata={"answer": answer})
         print(f"Trace saved to {trace_dir}/")
 

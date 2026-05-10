@@ -6,8 +6,15 @@ Three sub-commands, all operating on paths — no agent construction.
     rlmflow render   <path> --format F   write a static render
     rlmflow version                      print package + environment info
 
+``--format`` accepts text formats (``mermaid`` / ``dot`` / ``d2`` /
+``tree`` / ``report-md`` / ...) and binary/viz formats (``html`` for a
+self-contained stepper, ``image`` for a single PNG/SVG, ``steps`` for
+one image per snapshot under ``--out`` directory).
+
 Dispatch is plain ``argparse``; there are no optional third-party
 dependencies. ``rlmflow view`` still needs ``gradio`` at run-time.
+``--format html`` needs ``plotly``; ``--format image`` /
+``--format steps`` additionally need ``kaleido``.
 
 ``main`` is importable (``from rlmflow.cli import main``) so callers can
 wrap or alias the CLI in their own entry points.
@@ -90,6 +97,11 @@ def cmd_render(args: argparse.Namespace) -> int:
     topo = max(states, key=lambda s: len(s.walk()))
 
     fmt = args.format
+    # ── binary / multi-file formats ──────────────────────────────────
+    if fmt in ("html", "image", "steps"):
+        return _render_viz(args, states, topo, fmt)
+
+    # ── text formats ─────────────────────────────────────────────────
     if fmt == "mermaid":
         out = to_mermaid(topo)
     elif fmt == "mermaid-flowchart":
@@ -125,6 +137,80 @@ def cmd_render(args: argparse.Namespace) -> int:
         if not out.endswith("\n"):
             sys.stdout.write("\n")
     return 0
+
+
+def _render_viz(
+    args: argparse.Namespace,
+    states: list[Node],
+    topo: Node,
+    fmt: str,
+) -> int:
+    """Handle the binary viz formats: html (single file), image, steps."""
+    from rlmflow.utils.viewer import save_html, save_image, save_steps
+
+    # Resolve format-aware default for --element-mult. The on-screen
+    # plot is laid out with 14 px markers; the HTML stepper uses a
+    # taller canvas, so 2.0× keeps every node readable. Image exports
+    # use a much bigger canvas where the same fixed sizes shrink to
+    # specks, so 3.0 is the right baseline for those.
+    element_mult = args.element_mult
+    if element_mult is None:
+        element_mult = 2.0 if fmt == "html" else 3.0
+
+    if fmt == "html":
+        if not args.out:
+            raise SystemExit("rlmflow: --format html requires --out PATH")
+        path = save_html(
+            states,
+            args.out,
+            title=args.title or "rlmflow trace",
+            element_mult=element_mult,
+            marker_mult=args.marker_mult,
+            text_mult=args.text_mult,
+            normalize_labels=args.normalize_labels,
+        )
+        print(f"wrote {path}", file=sys.stderr)
+        return 0
+
+    if fmt == "image":
+        if not args.out:
+            raise SystemExit(
+                "rlmflow: --format image requires --out PATH (e.g. trace.png)"
+            )
+        path = save_image(
+            topo,
+            args.out,
+            states=states,
+            width=args.width,
+            height=args.height,
+            scale=args.scale,
+            element_mult=element_mult,
+            marker_mult=args.marker_mult,
+            text_mult=args.text_mult,
+            normalize_labels=args.normalize_labels,
+        )
+        print(f"wrote {path}", file=sys.stderr)
+        return 0
+
+    if fmt == "steps":
+        if not args.out:
+            raise SystemExit("rlmflow: --format steps requires --out DIR")
+        path = save_steps(
+            states,
+            args.out,
+            fmt=args.image_format,
+            width=args.width,
+            height=args.height,
+            scale=args.scale,
+            element_mult=element_mult,
+            marker_mult=args.marker_mult,
+            text_mult=args.text_mult,
+            normalize_labels=args.normalize_labels,
+        )
+        print(f"wrote {len(states)} images under {path}", file=sys.stderr)
+        return 0
+
+    raise SystemExit(f"rlmflow: unknown viz format {fmt!r}")
 
 
 def cmd_version(_args: argparse.Namespace) -> int:
@@ -195,6 +281,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "code-log",
             "error-summary",
             "tokens",
+            "html",
+            "image",
+            "steps",
         ],
         help="output format",
     )
@@ -202,7 +291,81 @@ def _build_parser() -> argparse.ArgumentParser:
         "--out",
         "-o",
         default=None,
-        help="write to file (default: stdout)",
+        help=(
+            "write to file (default: stdout). Required for 'html', "
+            "'image', and 'steps' formats."
+        ),
+    )
+    # ── viz format knobs (html / image / steps) ─────────────────────
+    r.add_argument(
+        "--title",
+        default=None,
+        help="title for --format html",
+    )
+    r.add_argument(
+        "--width",
+        type=int,
+        default=1800,
+        help="image canvas width in pixels (image / steps)",
+    )
+    r.add_argument(
+        "--height",
+        type=int,
+        default=1350,
+        help="image canvas height in pixels (image / steps)",
+    )
+    r.add_argument(
+        "--scale",
+        type=float,
+        default=2.0,
+        help="kaleido density multiplier for hi-dpi (image / steps)",
+    )
+    r.add_argument(
+        "--element-mult",
+        type=float,
+        default=None,
+        help=(
+            "uniform marker + edge + font multiplier "
+            "(default: 1.0 for html, 3.0 for image/steps; overridden by "
+            "--marker-mult / --text-mult)"
+        ),
+    )
+    r.add_argument(
+        "--marker-mult",
+        type=float,
+        default=None,
+        help=(
+            "marker + edge multiplier; overrides --element-mult. "
+            "Bump higher than --text-mult to avoid label collisions on "
+            "dense trees."
+        ),
+    )
+    r.add_argument(
+        "--text-mult",
+        type=float,
+        default=None,
+        help="font multiplier; overrides --element-mult.",
+    )
+    r.add_argument(
+        "--normalize-labels",
+        dest="normalize_labels",
+        action="store_true",
+        default=True,
+        help=(
+            "force every label to bottom-center so adjacent depths "
+            "don't collide (default for image / steps / html)."
+        ),
+    )
+    r.add_argument(
+        "--no-normalize-labels",
+        dest="normalize_labels",
+        action="store_false",
+        help="keep the alternating top/bottom label layout.",
+    )
+    r.add_argument(
+        "--image-format",
+        default="png",
+        help="image suffix for --format steps (default: png)",
     )
     r.set_defaults(func=cmd_render)
 

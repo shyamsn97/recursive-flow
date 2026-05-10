@@ -88,7 +88,11 @@ def run_branch(root: Path, idx: int) -> tuple[str, int, dict[str, str], int]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, default=8)
-    parser.add_argument("--root-dir", default="runs_best_of_n")
+    parser.add_argument(
+        "--root-dir",
+        default=str(Path(__file__).parent / "runs" / "best_of_n"),
+        help="where to drop per-branch workspaces (default: examples/runs/best_of_n/)",
+    )
     args = parser.parse_args()
 
     root = Path(args.root_dir).resolve()

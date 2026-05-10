@@ -142,6 +142,64 @@ print(message_stream("root.boids_js", workspace.session))
 print(ascii_boxes(states[-1]))
 ```
 
+## Image and HTML snapshots
+
+For blog posts, PR comments, papers, or CI artifacts — render the
+graph straight to a PNG (or SVG/PDF), or to a single self-contained
+HTML stepper.
+
+```python
+from rlmflow.utils import save_image, save_steps, save_html
+
+save_image(states[-1], "trace_final.png")        # one snapshot
+save_steps(states, "frames/")                    # one PNG per step
+save_html(states, "trace.html", title="run 1")   # standalone stepper
+```
+
+Or via the node convenience methods:
+
+```python
+states[-1].save_image("trace_final.png")
+states[-1].save_html("trace.html", states=states)
+```
+
+Markers, edges, and fonts auto-scale (`element_mult=3.0` by default
+for image export) so the tree stays visually balanced on the larger
+export canvas. Tune `width` / `height` / `scale` / `element_mult` to
+taste.
+
+```python
+save_steps(
+    states,
+    "frames/",
+    width=1800,
+    height=1350,
+    scale=2.0,           # kaleido density multiplier (hi-dpi crispness)
+    element_mult=3.0,    # marker / edge / font size multiplier
+)
+```
+
+Image export needs `kaleido`:
+
+```
+pip install rlmflow[image]
+```
+
+For an animated GIF instead of separate frames, add Pillow:
+
+```python
+from rlmflow.utils import save_gif
+
+save_gif(states, "trace.gif", duration=400)   # ~2.5 fps
+```
+
+```
+pip install rlmflow[image] pillow
+```
+
+The HTML stepper has no static-image dependency — it embeds Plotly
+from CDN and runs in any browser.
+
 ## Viewer
 
 ```python

@@ -60,5 +60,6 @@ mlruns/*
 # Example trace logs
 examples/*_log.md
 examples/**/workspace/*
+examples/runs/
 .DS_Store
 */**/needle_trace_images/*

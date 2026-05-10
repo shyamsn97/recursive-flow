@@ -8,6 +8,8 @@ each one is called out under **Breaking** below.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-08
+
 ### Breaking
 
 - `delegate(name, query, context, *, model=...)` — `context` is now
@@ -50,6 +52,47 @@ each one is called out under **Breaking** below.
 - OOLONG benchmark harness under `benchmarks/oolong/` — runnable
   flat-vs-RLM comparison adapted from Prime Intellect's reference
   environment.
+- `rlmflow.utils.save_image(node, path, ...)` — render a node's
+  graph to PNG/SVG/PDF. Markers, edges, and fonts auto-scale via
+  `element_mult` so the tree stays visually balanced on the larger
+  export canvas. Promoted from a one-off notebook helper.
+- `rlmflow.utils.save_steps(states, dir, ...)` — multi-snapshot
+  variant: writes one image per state under `dir`.
+- `rlmflow.utils.render_html(states, ...)` /
+  `rlmflow.utils.save_html(states, path, ...)` — single-file
+  standalone stepper. Each slide pairs the Plotly graph for one
+  snapshot with that snapshot's transcript and a node table; bottom
+  nav has arrows + dots, plus keyboard left/right. Drop the file in
+  a PR comment, attach to a CI artifact, or commit it next to the
+  trace it came from. Promoted from
+  `examples/blog_needle_graph.py:render_html_viewer`.
+- `rlmflow.utils.save_gif(states, path, ...)` — animate a trace as
+  an autoplay GIF. Renders each state to PNG with kaleido, then
+  stitches frames with Pillow. Lazy-imports Pillow (raises a clear
+  ImportError otherwise) so `[image]` stays focused on still
+  exports.
+- `Node.save_image(path, ...)` and `Node.save_html(path, ...)`
+  shorthands for the helpers above.
+- `Node.plot(..., element_mult=)` and
+  `node_plot(..., element_mult=)` — scale markers/edges/fonts on
+  the returned Plotly figure. Default `1.0` keeps the on-screen
+  layout; bump for hi-res rendering.
+- Split scaling on `node.plot()` / `save_image` / `save_steps` /
+  `save_gif`: `marker_mult` and `text_mult` override
+  `element_mult` separately, so labels can stay small (e.g. `2.2`)
+  while marker dots get fat (`3.5`). Fixes label collisions on
+  dense trees.
+- `normalize_labels=` on `node.plot()` and the save helpers —
+  forces every node label to `bottom center` so adjacent depths
+  can't share the same vertical band. Default off for `node.plot`
+  (on-screen alternation still looks fine), default on for
+  `save_image` / `save_steps` / `save_gif` / `Node.save_image`.
+- CLI: `rlmflow render <trace> -f steps -o frames/` gains
+  `--marker-mult`, `--text-mult`, `--normalize-labels` /
+  `--no-normalize-labels` flags (also work with `-f image`). One
+  invocation now replaces the per-blog one-off scripts.
+- `[image]` optional extra (`pip install rlmflow[image]`) — pulls
+  `plotly` and `kaleido` for static image export.
 
 ### Changed
 
@@ -117,7 +160,8 @@ Initial release.
 - Optional extras: `[openai]`, `[anthropic]`, `[viewer]`, `[all]`,
   `[dev]`.
 
-[Unreleased]: https://github.com/shyamsn97/rlmflow/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/shyamsn97/rlmflow/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/shyamsn97/rlmflow/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/shyamsn97/rlmflow/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/shyamsn97/rlmflow/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/shyamsn97/rlmflow/compare/v0.1.0...v0.1.1

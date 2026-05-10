@@ -193,3 +193,206 @@ def test_render_requires_format(tmp_path: Path, run_states: list[Node]):
 
     with pytest.raises(SystemExit):
         main(["render", str(ckpt)])
+
+
+def test_render_html_writes_stepper(tmp_path: Path, run_states: list[Node]):
+    trace_dir = tmp_path / "trace"
+    save_trace(run_states, trace_dir)
+    out_file = tmp_path / "stepper.html"
+
+    rc = main(
+        [
+            "render",
+            str(trace_dir),
+            "-f",
+            "html",
+            "-o",
+            str(out_file),
+            "--title",
+            "cli stepper",
+        ]
+    )
+
+    assert rc == 0
+    text = out_file.read_text()
+    assert text.startswith("<!doctype html>")
+    assert "<title>cli stepper</title>" in text
+    # one slide per state
+    assert text.count('<section class="slide') == len(run_states)
+    # default normalize_labels=True should erase every "top *" position
+    # in the embedded Plotly JSON — same baseline as save_image / save_steps.
+    assert "top center" not in text
+
+
+def test_render_html_no_normalize_labels_keeps_top_positions(
+    tmp_path: Path, run_states: list[Node]
+):
+    """--no-normalize-labels lets the alternating layout through, matching
+    the live Gradio viewer."""
+    trace_dir = tmp_path / "trace"
+    save_trace(run_states, trace_dir)
+    out_file = tmp_path / "stepper.html"
+
+    rc = main(
+        [
+            "render",
+            str(trace_dir),
+            "-f",
+            "html",
+            "-o",
+            str(out_file),
+            "--no-normalize-labels",
+        ]
+    )
+    assert rc == 0
+    text = out_file.read_text()
+    assert "top center" in text
+
+
+def test_render_html_marker_mult_propagates(
+    tmp_path: Path, run_states: list[Node]
+):
+    """--marker-mult should reach the embedded Plotly JSON via render_html."""
+    trace_dir = tmp_path / "trace"
+    save_trace(run_states, trace_dir)
+    out_default = tmp_path / "default.html"
+    out_big = tmp_path / "big.html"
+
+    main(["render", str(trace_dir), "-f", "html", "-o", str(out_default)])
+    main(
+        [
+            "render",
+            str(trace_dir),
+            "-f",
+            "html",
+            "-o",
+            str(out_big),
+            "--marker-mult",
+            "5",
+        ]
+    )
+
+    assert out_default.read_text() != out_big.read_text(), (
+        "--marker-mult should change the rendered HTML; if this fails the "
+        "scaling didn't propagate through node_plot_html → render_html."
+    )
+
+
+def test_render_html_requires_out(tmp_path: Path, run_states: list[Node]):
+    trace_dir = tmp_path / "trace"
+    save_trace(run_states, trace_dir)
+
+    with pytest.raises(SystemExit, match="--out"):
+        main(["render", str(trace_dir), "-f", "html"])
+
+
+def test_render_image_requires_out(tmp_path: Path, run_states: list[Node]):
+    trace_dir = tmp_path / "trace"
+    save_trace(run_states, trace_dir)
+
+    with pytest.raises(SystemExit, match="--out"):
+        main(["render", str(trace_dir), "-f", "image"])
+
+
+def test_render_steps_requires_out(tmp_path: Path, run_states: list[Node]):
+    trace_dir = tmp_path / "trace"
+    save_trace(run_states, trace_dir)
+
+    with pytest.raises(SystemExit, match="--out"):
+        main(["render", str(trace_dir), "-f", "steps"])
+
+
+def test_render_image_writes_png(tmp_path: Path, run_states: list[Node]):
+    pytest.importorskip("kaleido")
+    trace_dir = tmp_path / "trace"
+    save_trace(run_states, trace_dir)
+    out_file = tmp_path / "snap.png"
+
+    rc = main(
+        [
+            "render",
+            str(trace_dir),
+            "-f",
+            "image",
+            "-o",
+            str(out_file),
+            "--width",
+            "300",
+            "--height",
+            "240",
+            "--scale",
+            "1.0",
+            "--element-mult",
+            "1.5",
+        ]
+    )
+
+    assert rc == 0
+    assert out_file.exists()
+    with open(out_file, "rb") as fh:
+        assert fh.read(4) == b"\x89PNG"
+
+
+def test_render_steps_writes_one_per_state(tmp_path: Path, run_states: list[Node]):
+    pytest.importorskip("kaleido")
+    trace_dir = tmp_path / "trace"
+    save_trace(run_states, trace_dir)
+    out_dir = tmp_path / "frames"
+
+    rc = main(
+        [
+            "render",
+            str(trace_dir),
+            "-f",
+            "steps",
+            "-o",
+            str(out_dir),
+            "--width",
+            "300",
+            "--height",
+            "240",
+            "--scale",
+            "1.0",
+            "--element-mult",
+            "1.5",
+        ]
+    )
+
+    assert rc == 0
+    files = sorted(p.name for p in out_dir.glob("step_*.png"))
+    assert len(files) == len(run_states)
+
+
+def test_render_steps_split_mults_and_no_normalize(
+    tmp_path: Path, run_states: list[Node]
+):
+    """Split marker / text mults and --no-normalize-labels both flow through."""
+    pytest.importorskip("kaleido")
+    trace_dir = tmp_path / "trace"
+    save_trace(run_states, trace_dir)
+    out_dir = tmp_path / "frames_split"
+
+    rc = main(
+        [
+            "render",
+            str(trace_dir),
+            "-f",
+            "steps",
+            "-o",
+            str(out_dir),
+            "--width",
+            "320",
+            "--height",
+            "240",
+            "--scale",
+            "1.0",
+            "--marker-mult",
+            "3.5",
+            "--text-mult",
+            "2.2",
+            "--no-normalize-labels",
+        ]
+    )
+
+    assert rc == 0
+    assert len(list(out_dir.glob("step_*.png"))) == len(run_states)

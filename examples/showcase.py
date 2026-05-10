@@ -153,7 +153,7 @@ def main() -> None:
                         new_children.append(child)
                 state2 = state2.update(children=new_children)
                 intervened = True
-        print(f"{GREEN}Intervention result:{RESET} {state2.result}")
+        print(f"{GREEN}Intervention result:{RESET} {state2.get_result()}")
 
         banner("6. Gym-style loop")
         agent3 = make_agent(workspace, max_depth=0, max_iterations=args.max_iterations)
@@ -166,7 +166,7 @@ def main() -> None:
             reward = 1.0 if state3.finished else 0.0
             rewards.append(reward)
             print(f"step {step}: node={state3.type} reward={reward}")
-        print(f"{GREEN}Result:{RESET} {state3.result}")
+        print(f"{GREEN}Result:{RESET} {state3.get_result()}")
         print(f"Total reward: {sum(rewards):.1f}")
 
         banner("Done")
