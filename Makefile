@@ -1,4 +1,4 @@
-.PHONY: clean clean-build clean-pyc clean-test coverage dist docs help install lint lint/flake8 format-md lint-md oolong-paper oolong-rlm oolong-rlm-tips oolong-standard oolong-real oolong-ablations oolong-aggregate animation animation-preview animation-mp4 animation-gif animation-gif-small animation-clean
+.PHONY: clean clean-build clean-pyc clean-test coverage dist docs help install lint lint/flake8 format-md lint-md oolong-paper oolong-rlm oolong-rlm-tips oolong-standard oolong-real oolong-ablations oolong-aggregate animation animation-preview animation-mp4 animation-gif animation-gif-small animation-clean bump-version
 	{%- if cookiecutter.use_black == 'y' %} lint/black{% endif %}
 .DEFAULT_GOAL := help
 
@@ -22,7 +22,39 @@ for line in sys.stdin:
 endef
 export PRINT_HELP_PYSCRIPT
 
+define BUMP_VERSION_PYSCRIPT
+from pathlib import Path
+import re
+import sys
+
+part = sys.argv[1]
+if part not in {"major", "minor", "patch"}:
+    raise SystemExit("BUMP must be one of: major, minor, patch")
+
+path = Path("pyproject.toml")
+text = path.read_text(encoding="utf-8")
+match = re.search(r'(?m)^version = "(\d+)\.(\d+)\.(\d+)"$$', text)
+if not match:
+    raise SystemExit("Could not find [project] version in pyproject.toml")
+
+major, minor, patch = map(int, match.groups())
+if part == "major":
+    major, minor, patch = major + 1, 0, 0
+elif part == "minor":
+    minor, patch = minor + 1, 0
+else:
+    patch += 1
+
+old_version = match.group(0).split('"')[1]
+new_version = f"{major}.{minor}.{patch}"
+text = text[: match.start(1)] + new_version + text[match.end(3) :]
+path.write_text(text, encoding="utf-8")
+print(f"{path}: {old_version} -> {new_version}")
+endef
+export BUMP_VERSION_PYSCRIPT
+
 BROWSER := python -c "$$BROWSER_PYSCRIPT"
+BUMP ?= patch
 
 
 clean: clean-build clean-pyc clean-test ## remove all build, test, coverage and Python artifacts
@@ -153,3 +185,6 @@ animation-gif-small: animation-mp4 ## Share-friendly GIF (ffmpeg, ~5MB) — repl
 
 animation-clean: ## Remove manim render artifacts (media/).
 	rm -rf media/
+
+bump-version: ## Bump pyproject.toml version. Override with BUMP=minor or BUMP=major.
+	python -c "$$BUMP_VERSION_PYSCRIPT" "$(BUMP)"
