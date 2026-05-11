@@ -63,7 +63,7 @@ SESSION_TEXT = SESSION_VARIABLE_PROMPT
 
 GUARDRAILS_TEXT = """
 - **Delegate for parallelism, fresh context, or split-by-spec.** When the user asks for components in separate files, or chunks need independent reasoning, delegate. Inline only when the artifact is small or tightly coupled.
-- **Fresh context.** Pass children the minimum they need — a `CONTEXT.lines(...)` slice, a spec string, or `""`. Use `CONTEXT.fork()` only when they need your full view.
+- **Fresh context.** Pass children the minimum they need — a `CONTEXT.lines(...)` slice, a spec string, or `""`. Use `CONTEXT.read()` only when they need your full view.
 - **Cross-file contracts are signatures, not prose.** When children share an interface, write the contract as the actual signatures and verify the same strings back. Presence checks miss arity drift.
 - **Run, don't just grep.** Whenever the runtime can execute or syntax-check the artifact, do it before `done()`.
 - **Verify before `done()`.** Empty/zero/surprising results → one sanity check first.
@@ -165,13 +165,13 @@ h = delegate("retry", "Recover from where the sibling in CONTEXT stopped.", tran
 done(out)
 ```
 
-**Reviewer pattern — `CONTEXT.fork()` to hand the child your own view:**
+**Reviewer pattern — pass `CONTEXT.read()` when the child needs your full view:**
 ```repl
 draft = build_answer_from(CONTEXT)
 h = delegate(
     "review",
     'Score the draft against the spec in CONTEXT. Return ONLY JSON {"ok": bool, "issues": [str]}.\\n\\nDraft: ' + draft,
-    CONTEXT.fork(),
+    CONTEXT.read(),
     model="fast",
 )
 [verdict] = yield wait(h)

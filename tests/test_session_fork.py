@@ -31,13 +31,15 @@ def test_session_fork_copies_existing_nodes(tmp_path: Path):
 
 
 def test_agent_view_records_depth(tmp_path: Path):
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     session.write(QueryNode(agent_id="root", depth=0))
     session.write(QueryNode(agent_id="root.html", depth=1))
 
-    root_view = json.loads((tmp_path / "session" / "agents" / "root.json").read_text())
+    root_view = json.loads(
+        (tmp_path / "workspace" / "session" / "root" / "latest.json").read_text()
+    )
     child_view = json.loads(
-        (tmp_path / "session" / "agents" / "root.html.json").read_text()
+        (tmp_path / "workspace" / "session" / "root.html" / "latest.json").read_text()
     )
 
     assert root_view["depth"] == 0
@@ -53,7 +55,14 @@ def test_store_backed_session_writes_flat_layout(tmp_path: Path):
     session.write(root)
     session.write(child)
 
-    assert (tmp_path / "workspace" / "graph.jsonl").exists()
+    graph = json.loads((tmp_path / "workspace" / "graph.json").read_text())
+    assert graph["version"] == 1
+    assert graph["nodes"][root.id]["session"] == "session/root/session.jsonl"
+    assert graph["nodes"][child.id]["session"] == "session/root.child/session.jsonl"
+    assert [event["node_id"] for event in graph["event_order"]] == [
+        root.id,
+        child.id,
+    ]
     assert (
         tmp_path / "workspace" / "session" / "root" / "session.jsonl"
     ).exists()
@@ -111,7 +120,7 @@ def test_fork_handles_empty_source(tmp_path: Path):
 
 
 def test_context_variable_read_lines_and_grep(tmp_path: Path):
-    store = FileContext(tmp_path / "context")
+    store = FileContext(tmp_path / "workspace")
     store.write("context", "alpha\nbeta user 123\ngamma user 456\n")
 
     context = ContextVariable(store)
@@ -138,32 +147,12 @@ def test_store_backed_context_writes_flat_layout(tmp_path: Path):
 
 
 def test_context_falls_back_to_root_for_child_agents(tmp_path: Path):
-    store = FileContext(tmp_path / "context")
+    store = FileContext(tmp_path / "workspace")
     store.write("context", "shared root context")
 
     context = ContextVariable(store, agent_id="root.child")
 
     assert context.read(0, 6) == "shared"
-
-
-def test_context_variable_fork_returns_full_snapshot(tmp_path: Path):
-    """``CONTEXT.fork()`` is the explicit hand-off-to-child API.
-
-    It snapshots the parent's payload as a string for use as
-    ``delegate(name, query, CONTEXT.fork())``. It must return the same
-    bytes ``read()`` would, irrespective of the parent's later mutations.
-    """
-    store = FileContext(tmp_path / "context")
-    store.write("context", "parent payload")
-
-    parent = ContextVariable(store, agent_id="root")
-    snapshot = parent.fork()
-
-    assert snapshot == "parent payload"
-    assert snapshot == parent.read()
-
-    store.write("context", "parent mutated", agent_id="root")
-    assert snapshot == "parent payload", "fork() result must be a snapshot"
 
 
 def test_fork_copies_contexts(tmp_path: Path):
@@ -193,6 +182,6 @@ def test_rlm_start_seeds_context_and_injects_context_variable(tmp_path: Path):
     text = engine.runtime.repl.namespace["CONTEXT"].read()
     assert text == "one\ntwo\nthree\n"
     root = tmp_path / "workspace"
-    assert (root / "graph.jsonl").exists()
+    assert (root / "graph.json").exists()
     assert (root / "session" / "root" / "session.jsonl").exists()
     assert (root / "context" / "root" / "context.txt").read_text() == "one\ntwo\nthree\n"

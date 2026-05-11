@@ -80,7 +80,7 @@ inspect a real recursive run end-to-end.
 
 ```text
 workspace/
-  graph.jsonl
+  graph.json
   session/
     root/
       session.jsonl
@@ -103,10 +103,11 @@ not part of the workspace layout — `save_trace(states, path)` writes wherever
 you point it (`workspace.trace_dir` is just a convention path, not an
 engine-managed directory).
 
-`graph.jsonl` is the canonical append-only graph event log. The per-agent
-`session/<agent-id>/` and `context/<agent-id>/` directories are local views for
-inspection and payload access. Messages are derived from `Session.chain_to(node)`,
-not stored as a second source of truth.
+`session/<agent-id>/session.jsonl` stores each recursive call's node/message
+events. `graph.json` is a compact manifest of the whole run: node refs, edges,
+roots, and event order. It lets viewers and trace export load the graph without
+scanning every session file first. Messages are derived from
+`Session.chain_to(node)`, not stored as a second source of truth.
 
 ## Live terminal
 

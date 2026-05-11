@@ -111,9 +111,10 @@ open_viewer(states)
 ```
 
 `Workspace.create("./myproject")` writes a debuggable workspace as it runs:
-`graph.jsonl` is the append-only node event log, `session/<agent-id>/` holds
-per-call session views, and `context/<agent-id>/` holds payloads exposed as
-`CONTEXT`. Saved traces are separate export artifacts and can live anywhere.
+`session/<agent-id>/` holds per-call node events, `graph.json` is the compact
+graph manifest for the whole run, and `context/<agent-id>/` holds payloads
+exposed as `CONTEXT`. Saved traces are separate export artifacts and can live
+anywhere.
 
 ## Drop-in `LLMClient`
 
@@ -535,8 +536,8 @@ scaling / label-normalization flags (`--marker-mult`, `--text-mult`,
 - [Observability](docs/observability.md): node fields and types, save/load
   traces, session/context layout, live tree, gantt, topology exports,
   Gradio viewer, CLI.
-- [Control](docs/control.md): step loop, checkpoint, rewind, fork
-  (`Workspace.fork`, `CONTEXT.fork()`), `delegate(name, query, context)`,
+- [Control](docs/control.md): step loop, checkpoint, rewind, workspace forks,
+  `CONTEXT.read()` / slices, `delegate(name, query, context)`,
   inline-first strategy, intervention, custom prompts, runtimes, tools.
 - [Runtimes](docs/runtimes.md): `Runtime` protocol, shipped runtimes
   (Local / Subprocess / Docker / Modal), writing your own.

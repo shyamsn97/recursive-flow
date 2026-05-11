@@ -24,10 +24,6 @@ each one is called out under **Breaking** below.
 
 ### Added
 
-- `CONTEXT.fork()` on `ContextVariable` — explicit snapshot of the
-  parent's payload for handoff to a child (use only when the child
-  genuinely needs the parent's view: reviewers, auditors, retry).
-  Default delegations should still pass a fresh slice or `""`.
 - "Inline first" strategy bias in the default prompt: when the parent
   can write a known multi-file artifact end-to-end itself, do not
   delegate per-file. Multi-file delegation example replaced with a
@@ -102,7 +98,7 @@ each one is called out under **Breaking** below.
   prose tightened (~20% fewer tokens, zero outbound URLs in the
   shipped prompt). Examples reduced to five canonical patterns: small
   task, chunk-and-aggregate, self-contained multi-file (inline),
-  cross-agent recovery, reviewer (`CONTEXT.fork()`).
+  cross-agent recovery, reviewer (`CONTEXT.read()`).
 - `[viewer]` extra now declares its `plotly` dependency directly. The
   unused `[viz]` extra was removed (`plotly` was previously declared
   there but only imported by the gated `[viewer]` code path).

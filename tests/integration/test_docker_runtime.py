@@ -68,7 +68,7 @@ def runtime(tmp_path: Path):
 def test_object_proxy_round_trips_file_context_methods(runtime, tmp_path: Path):
     """Injected objects expose public methods as callable proxies."""
     rt, _ = runtime
-    context = FileContext(tmp_path / "context")
+    context = FileContext(tmp_path / "workspace")
     rt.inject("STORE", context)
 
     rt.execute("STORE.write('context', 'hello from container')")

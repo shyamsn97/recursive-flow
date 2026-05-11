@@ -137,37 +137,14 @@ class MemoryStore(Store):
         return out
 
 
-def resolve_backend(
-    root: Store | str | Path,
-    *,
-    legacy_dirs: tuple[str, ...] = (),
-) -> tuple[Store, Path | None, bool]:
-    """Resolve a ``Store`` or path into ``(store, root, legacy)``.
-
-    Passing a ``Store`` opts in to the new flat workspace layout; passing a
-    path keeps the legacy standalone layout rooted at that path. ``legacy_dirs``
-    are subdirectories the legacy mode wants pre-created.
-    """
+def resolve_backend(root: Store | str | Path) -> tuple[Store, Path | None]:
+    """Resolve a ``Store`` or workspace root path into ``(store, root)``."""
     if isinstance(root, Store):
-        return root, getattr(root, "root", None), False
+        return root, getattr(root, "root", None)
 
     path = Path(root).resolve()
     path.mkdir(parents=True, exist_ok=True)
-    for rel in legacy_dirs:
-        (path / rel).mkdir(parents=True, exist_ok=True)
-    return FileStore(path), path, True
-
-
-def copy_workspace_root(src_root: Path | None, new_location: object) -> Path:
-    """Copy the legacy standalone root into ``new_location`` (replacing it)."""
-    dst = Path(new_location).resolve()
-    if dst.exists():
-        shutil.rmtree(dst)
-    if src_root is not None and src_root.exists():
-        shutil.copytree(src_root, dst)
-    else:
-        dst.mkdir(parents=True)
-    return dst
+    return FileStore(path), path
 
 
 def copy_workspace_paths(
@@ -206,6 +183,5 @@ __all__ = [
     "MemoryStore",
     "Store",
     "copy_workspace_paths",
-    "copy_workspace_root",
     "resolve_backend",
 ]

@@ -6,7 +6,7 @@ from rlmflow import FileSession, InMemorySession, QueryNode, ResultNode, Supervi
 
 
 def test_file_session_appends_and_loads_typed_nodes(tmp_path):
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     root = QueryNode(agent_id="root", content="start")
     result = ResultNode(agent_id="root", result="done")
 
@@ -19,11 +19,13 @@ def test_file_session_appends_and_loads_typed_nodes(tmp_path):
 
 
 def test_file_session_latest_agent_view_tracks_terminal_result(tmp_path):
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     session.write(QueryNode(agent_id="root.worker", depth=1))
     session.write(ResultNode(agent_id="root.worker", depth=1, result="ok"))
 
-    view = (tmp_path / "session" / "agents" / "root.worker.json").read_text()
+    view = (
+        tmp_path / "workspace" / "session" / "root.worker" / "latest.json"
+    ).read_text()
 
     assert '"depth": 1' in view
     assert '"type": "result"' in view

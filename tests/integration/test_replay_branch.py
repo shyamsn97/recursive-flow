@@ -50,7 +50,7 @@ def test_workspace_fork_copies_user_files_session_and_context(tmp_path: Path):
     assert forked.context.read("context") == "payload"
     assert len(forked.session.load()) == len(source.session.load())
     assert forked.branch_id == "b2"
-    assert (tmp_path / "b2" / "graph.jsonl").exists()
+    assert (tmp_path / "b2" / "graph.json").exists()
     assert (tmp_path / "b2" / "session" / "root" / "session.jsonl").exists()
     assert (tmp_path / "b2" / "context" / "root" / "context.txt").exists()
 

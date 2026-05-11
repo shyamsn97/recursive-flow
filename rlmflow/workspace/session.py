@@ -7,12 +7,10 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-from rlmflow.node import Node, parse_node_json, parse_node_obj
+from rlmflow.node import Node, parse_node_obj
 from rlmflow.workspace.store import (
-    FileStore,
     Store,
     copy_workspace_paths,
-    copy_workspace_root,
     resolve_backend,
 )
 
@@ -98,35 +96,94 @@ class Session(ABC):
 class FileSession(Session):
     """Store-backed session persistence.
 
-    ``FileSession(path)`` preserves the legacy ``nodes.jsonl`` +
-    ``agents/*.json`` layout rooted at ``path``. ``FileSession(store)``
-    uses the new flat workspace layout:
-
-    - ``graph.jsonl``
+    - ``graph.json``
     - ``session/<agent-id>/session.jsonl``
     - ``session/<agent-id>/latest.json``
     """
 
     def __init__(self, root: Store | str | Path) -> None:
-        self.store, self.root, self.legacy = resolve_backend(
-            root, legacy_dirs=("agents",)
-        )
-        self.nodes_path = (
-            self.store.path("nodes.jsonl" if self.legacy else "graph.jsonl")
-            if isinstance(self.store, FileStore)
-            else None
-        )
+        self.store, self.root = resolve_backend(root)
 
     def write(self, node: Node) -> None:
-        if self.legacy:
-            self.store.append_jsonl("nodes.jsonl", node)
-            self.write_agent_view(node)
-            return
-        self.store.append_jsonl("graph.jsonl", node)
-        self.store.append_jsonl(
-            f"session/{_safe_name(node.agent_id)}/session.jsonl", node
-        )
+        session_path = self._session_path(node.agent_id)
+        event_index = len(self.store.read_jsonl(session_path))
+        self.store.append_jsonl(session_path, node)
+        self.write_graph_view(node, session_path=session_path, event_index=event_index)
         self.write_agent_view(node)
+
+    def _session_path(self, agent_id: str) -> str:
+        return f"session/{_safe_name(agent_id)}/session.jsonl"
+
+    def _graph(self) -> dict[str, Any]:
+        if self.store.exists("graph.json"):
+            graph = self.store.read_json("graph.json")
+        else:
+            graph = {}
+        graph.setdefault("version", 1)
+        graph.setdefault("roots", [])
+        graph.setdefault("nodes", {})
+        graph.setdefault("edges", [])
+        graph.setdefault("event_order", [])
+        return graph
+
+    @staticmethod
+    def _child_id(child: Node | object) -> str:
+        return child.id if isinstance(child, Node) else str(child)
+
+    def write_graph_view(
+        self,
+        node: Node,
+        *,
+        session_path: str,
+        event_index: int,
+    ) -> None:
+        graph = self._graph()
+        nodes: dict[str, dict[str, Any]] = graph["nodes"]
+        edges: list[dict[str, str]] = graph["edges"]
+
+        child_ids = [self._child_id(child) for child in node.children]
+        nodes[node.id] = {
+            "id": node.id,
+            "agent_id": node.agent_id,
+            "branch_id": node.branch_id,
+            "type": node.type,
+            "depth": node.depth,
+            "session": session_path,
+            "event_index": event_index,
+            "children": child_ids,
+        }
+
+        edge_keys = {(edge["from"], edge["to"]) for edge in edges}
+        for child in node.children:
+            child_id = self._child_id(child)
+            if (node.id, child_id) in edge_keys:
+                continue
+            child_agent_id = (
+                child.agent_id
+                if isinstance(child, Node)
+                else nodes.get(child_id, {}).get("agent_id")
+            )
+            kind = (
+                "delegate"
+                if child_agent_id and child_agent_id != node.agent_id
+                else "successor"
+            )
+            edges.append({"from": node.id, "to": child_id, "kind": kind})
+            edge_keys.add((node.id, child_id))
+
+        child_targets = {edge["to"] for edge in edges}
+        graph["roots"] = sorted(
+            node_id for node_id in nodes if node_id not in child_targets
+        )
+        graph["event_order"].append(
+            {
+                "node_id": node.id,
+                "agent_id": node.agent_id,
+                "session": session_path,
+                "event_index": event_index,
+            }
+        )
+        self.store.write_json("graph.json", graph)
 
     def write_agent_view(self, node: Node) -> None:
         view = {
@@ -138,64 +195,62 @@ class FileSession(Session):
             "terminal": node.terminal,
             "result": getattr(node, "result", None),
         }
-        if self.legacy:
-            self.store.write_json(f"agents/{_safe_name(node.agent_id)}.json", view)
-        else:
-            self.store.write_json(
-                f"session/{_safe_name(node.agent_id)}/latest.json", view
-            )
+        self.store.write_json(f"session/{_safe_name(node.agent_id)}/latest.json", view)
 
     def load(self) -> dict[str, Node]:
         nodes: dict[str, Node] = {}
-        if self.legacy:
-            lines = (
-                self.store.read_text("nodes.jsonl").splitlines()
-                if self.store.exists("nodes.jsonl")
-                else []
-            )
-            for line in lines:
-                if line.strip():
-                    node = parse_node_json(line)
-                    nodes[node.id] = node
-            return nodes
-
-        for path in self.event_paths():
-            for obj in self.store.read_jsonl(path):
-                node = parse_node_obj(obj)
-                nodes[node.id] = node
+        for node in self.events():
+            nodes[node.id] = node
         return nodes
 
     def event_paths(self) -> list[str]:
-        if self.legacy:
-            return ["nodes.jsonl"] if self.store.exists("nodes.jsonl") else []
+        if self.store.exists("graph.json"):
+            graph = self.store.read_json("graph.json")
+            paths = {
+                event["session"]
+                for event in graph.get("event_order", [])
+                if isinstance(event, dict) and "session" in event
+            }
+            if paths:
+                return sorted(paths)
         paths: list[str] = []
-        if self.store.exists("graph.jsonl"):
-            paths.append("graph.jsonl")
-        if self.store.exists("session/nodes.jsonl"):
-            paths.append("session/nodes.jsonl")
-        return paths
+        paths.extend(
+            path
+            for path in self.store.list("session")
+            if path.endswith("/session.jsonl")
+        )
+        return sorted(dict.fromkeys(paths))
 
     def events(self) -> list[Node]:
         out: list[Node] = []
-        if self.legacy:
-            lines = (
-                self.store.read_text("nodes.jsonl").splitlines()
-                if self.store.exists("nodes.jsonl")
-                else []
-            )
-            for line in lines:
-                if line.strip():
-                    out.append(parse_node_json(line))
-            return out
+        if self.store.exists("graph.json"):
+            graph = self.store.read_json("graph.json")
+            for event in graph.get("event_order", []):
+                if not isinstance(event, dict):
+                    continue
+                session_path = event.get("session")
+                event_index = event.get("event_index")
+                if not isinstance(session_path, str) or not isinstance(
+                    event_index, int
+                ):
+                    continue
+                records = self.store.read_jsonl(session_path)
+                if 0 <= event_index < len(records):
+                    out.append(parse_node_obj(records[event_index]))
+            if out:
+                return out
+
         for path in self.event_paths():
             out.extend(parse_node_obj(obj) for obj in self.store.read_jsonl(path))
         return out
 
     def fork(self, new_location: object) -> Session:
-        if self.legacy:
-            return FileSession(copy_workspace_root(self.root, new_location))
         return FileSession(
-            copy_workspace_paths(self.store, new_location, ("graph.jsonl", "session"))
+            copy_workspace_paths(
+                self.store,
+                new_location,
+                ("graph.json", "session"),
+            )
         )
 
 

@@ -1,7 +1,0 @@
-import { Simulation } from './sim.js';
-
-const canvas = document.getElementById('boids');
-const sim = new Simulation(canvas);
-function onResize() { sim.resize(); }
-window.addEventListener('resize', onResize, { passive: true });
-sim.start();

@@ -55,13 +55,9 @@ def _resolve_session(
         return session
     if isinstance(session, (str, Path)):
         path = Path(session)
-        if (path / "nodes.jsonl").exists():
-            return FileSession(path)
         if path.name == "session" and path.exists():
             return FileSession(FileStore(path.parent))
-        if (path / "graph.jsonl").exists() or (path / "session").exists():
-            return FileSession(FileStore(path))
-        return FileSession(path)
+        return FileSession(FileStore(path))
     if not states:
         return None
     # Best-effort: any node may carry a workspace pointer with a sibling session/.
@@ -71,12 +67,8 @@ def _resolve_session(
         if not root:
             continue
         workspace_root = Path(root)
-        if (workspace_root / "graph.jsonl").exists():
-            return FileSession(FileStore(workspace_root))
         cand = workspace_root / "session"
-        if (cand / "nodes.jsonl").exists():
-            return FileSession(cand)
-        if cand.exists():
+        if (workspace_root / "graph.json").exists() or cand.exists():
             return FileSession(FileStore(workspace_root))
     return None
 

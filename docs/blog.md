@@ -640,9 +640,8 @@ learned from them. The OOLONG authors and Prime Intellect's
 `verifiers` team for the benchmark environments we wrap. Anthropic's
 engineering blog for the harness/session/sandbox vocabulary. And
 early users who filed the boids-simulation regressions, the
-schema-drift confusions, and the "where is `CONTEXT.fork()`
-documented?" issues — those reports are what produced the failure-
-shapes section.
+schema-drift confusions, and the context-handoff issues — those reports
+are what produced the failure-shapes section.
 
 ---
 

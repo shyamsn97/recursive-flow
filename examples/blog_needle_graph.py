@@ -553,11 +553,8 @@ def _session_path(states: list[Node]) -> Path | None:
         root = getattr(ws, "root", None) if ws else None
         if root:
             path = Path(root)
-            if (path / "graph.jsonl").exists():
+            if (path / "graph.json").exists():
                 return path
-            legacy_path = path / "session"
-            if (legacy_path / "nodes.jsonl").exists():
-                return legacy_path
     return None
 
 

@@ -115,12 +115,12 @@ nodes = workspace.session.load()
 chain = workspace.session.chain_to(node)
 ```
 
-On disk, the workspace keeps the append-only graph log at `graph.jsonl` and
-per-call session views under `session/<agent-id>/`:
+On disk, the workspace keeps per-call session logs under `session/<agent-id>/`
+and a compact graph manifest at `graph.json`:
 
 ```text
 workspace/
-  graph.jsonl
+  graph.json
   session/root/session.jsonl
   session/root/latest.json
 ```
@@ -142,14 +142,14 @@ workspace/
 
 Inside the REPL, agents see `CONTEXT` (read-only payload), `SESSION`
 (read-only view of every other agent in the run), and the standard
-filesystem tools. Sample, slice, or fork:
+filesystem tools. Sample, slice, or pass the full payload explicitly:
 
 ```python
 CONTEXT.info()                  # {"chars": int, "lines": int}
 sample  = CONTEXT.read(0, 2000) # char slice
 window  = CONTEXT.lines(0, 50)  # line slice
 hits    = CONTEXT.grep(r"TODO") # lineno:line rows
-snap    = CONTEXT.fork()        # snapshot for handoff to a child
+full    = CONTEXT.read()        # full payload for handoff to a child
 ```
 
 ## Delegation
@@ -165,7 +165,7 @@ delegate(name, query, context, *, model=None)
 - Pass a `CONTEXT.lines(...)` / `CONTEXT.read(...)` slice when each
   child reasons over a different chunk of the parent's payload
   (chunk-and-aggregate).
-- Pass `CONTEXT.fork()` only when the child genuinely needs the
+- Pass `CONTEXT.read()` only when the child genuinely needs the
   parent's full view (reviewers, auditors, deterministic retry).
 
 The default prompt biases toward **inline first**: if you (the parent)

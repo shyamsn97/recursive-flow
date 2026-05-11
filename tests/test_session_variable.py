@@ -61,7 +61,7 @@ def _seed_session(
 
 
 def test_list_agents_excludes_self_and_summarizes_siblings(tmp_path: Path):
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     _seed_session(
         session,
         agent_id="root",
@@ -92,7 +92,7 @@ def test_list_agents_excludes_self_and_summarizes_siblings(tmp_path: Path):
 
 
 def test_read_renders_full_chain_for_a_sibling(tmp_path: Path):
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     _seed_session(
         session,
         agent_id="root.html",
@@ -119,7 +119,7 @@ def test_read_unknown_agent_returns_clear_message(tmp_path: Path):
 
 
 def test_grep_searches_across_agents_but_skips_self(tmp_path: Path):
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     _seed_session(
         session,
         agent_id="root",
@@ -147,7 +147,7 @@ def test_grep_searches_across_agents_but_skips_self(tmp_path: Path):
 
 
 def test_grep_respects_max_results(tmp_path: Path):
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     for i in range(5):
         _seed_session(
             session,
@@ -165,7 +165,7 @@ def test_grep_respects_max_results(tmp_path: Path):
 
 def test_parent_and_ancestors_use_graph_edges_not_dot_parsing(tmp_path: Path):
     """Agent names with dots (``script.js``) must not fool tree navigation."""
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     _seed_session(session, agent_id="root", result="root done")
     _seed_session(
         session, agent_id="root.script.js", result="ok", delegated_by="root"
@@ -185,7 +185,7 @@ def test_parent_and_ancestors_use_graph_edges_not_dot_parsing(tmp_path: Path):
 
 
 def test_children_and_subtree_only_return_real_agents(tmp_path: Path):
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     _seed_session(session, agent_id="root", result="root done")
     _seed_session(
         session, agent_id="root.html", result="html done", delegated_by="root"
@@ -213,7 +213,7 @@ def test_children_and_subtree_only_return_real_agents(tmp_path: Path):
 
 
 def test_tree_renders_full_recursive_hierarchy(tmp_path: Path):
-    session = FileSession(tmp_path / "session")
+    session = FileSession(tmp_path / "workspace")
     _seed_session(session, agent_id="root", result="root done")
     _seed_session(session, agent_id="root.a", result="a", delegated_by="root")
     _seed_session(session, agent_id="root.b", result="b", delegated_by="root")

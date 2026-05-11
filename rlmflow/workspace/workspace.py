@@ -80,7 +80,13 @@ class Workspace:
             shutil.rmtree(new_root)
         new_root.mkdir(parents=True, exist_ok=True)
 
-        reserved = {"session", "context", "graph.jsonl", "trace", "checkpoint.json"}
+        reserved = {
+            "session",
+            "context",
+            "graph.json",
+            "trace",
+            "checkpoint.json",
+        }
         for item in self.root.iterdir():
             if item.name in reserved:
                 continue
@@ -90,18 +96,8 @@ class Workspace:
             else:
                 shutil.copy2(item, dst)
 
-        session_target = (
-            new_root
-            if getattr(self.session, "legacy", True) is False
-            else new_root / "session"
-        )
-        context_target = (
-            new_root
-            if getattr(self.context, "legacy", True) is False
-            else new_root / "context"
-        )
-        new_session = self.session.fork(session_target)
-        new_context = self.context.fork(context_target)
+        new_session = self.session.fork(new_root)
+        new_context = self.context.fork(new_root)
         return Workspace(
             root=new_root,
             session=new_session,

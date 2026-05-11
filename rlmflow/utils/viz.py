@@ -633,27 +633,13 @@ def session_events(session: Session | str | Path | None) -> list[Node]:
         return []
     if isinstance(session, (str, Path)):
         path = Path(session)
-        if (path / "nodes.jsonl").exists():
-            session = FileSession(path)
-        elif path.name == "session" and path.exists():
+        if path.name == "session" and path.exists():
             session = FileSession(FileStore(path.parent))
-        elif (path / "graph.jsonl").exists() or (path / "session").exists():
-            session = FileSession(FileStore(path))
         else:
-            session = FileSession(path)
+            session = FileSession(FileStore(path))
     events = getattr(session, "events", None)
     if callable(events):
         return list(events())
-    nodes_path = getattr(session, "nodes_path", None)
-    if nodes_path is not None:
-        path = Path(nodes_path)
-        if not path.exists():
-            return []
-        return [
-            parse_node_json(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
     return list(session.load().values())
 
 
