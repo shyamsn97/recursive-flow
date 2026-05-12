@@ -19,8 +19,8 @@ import string
 import tempfile
 from pathlib import Path
 
+from rlmflow.graph import Graph
 from rlmflow.llm import AnthropicClient, OpenAIClient
-from rlmflow.node import Node
 from rlmflow.rlm import RLMConfig, RLMFlow
 from rlmflow.runtime.docker import DockerRuntime
 from rlmflow.runtime.local import LocalRuntime
@@ -81,79 +81,81 @@ def main():
     else:
         print(">>> LOCAL RUNTIME")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir).resolve()
-        answer = generate_haystack(workspace, num_files=args.num_files)
-        print(f"Generated {args.num_files} files in {workspace}")
+    workspace = Path("workspaces/needle-haystack").resolve()
+    haystack_path = Path("workspaces/needle-haystack/haystack").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    haystack_path.mkdir(parents=True, exist_ok=True)
+    answer = generate_haystack(haystack_path, num_files=args.num_files)
+    print(f"Generated {args.num_files} files in {haystack_path}")
 
-        def make_runtime():
-            if args.docker_image:
-                rt = DockerRuntime(
-                    args.docker_image,
-                    workspace=workspace,
-                    mounts={str(workspace): "/workspace"},
-                    workdir="/workspace",
-                )
-            else:
-                rt = LocalRuntime(workspace=workspace)
-            rt.register_tools(FILE_TOOLS)
-            return rt
-
-        llm = (
-            AnthropicClient(args.model)
-            if args.model.startswith("claude")
-            else OpenAIClient(args.model)
-        )
-        llm_clients = None
-        if args.fast_model:
-            fast = (
-                AnthropicClient(args.fast_model)
-                if args.fast_model.startswith("claude")
-                else OpenAIClient(args.fast_model)
+    def make_runtime():
+        if args.docker_image:
+            rt = DockerRuntime(
+                args.docker_image,
+                workspace=workspace,
+                mounts={str(workspace): "/workspace"},
+                workdir="/workspace",
             )
-            llm_clients = {
-                "fast": {"model": fast, "description": "Cheaper model for small sub-tasks."},
-            }
-
-        agent = LoggingRLMFlow(
-            llm_client=llm,
-            runtime=make_runtime(),
-            config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
-            llm_clients=llm_clients,
-            runtime_factory=make_runtime,
-        )
-
-        state = agent.start(
-            f"There are {args.num_files} text files in the workspace "
-            f"(file_0000.txt to file_{args.num_files - 1:04d}.txt). "
-            f"Exactly one line across all files says 'The magic number is XXXXXXX'. "
-            f"Find it. There are too many files to grep all at once — "
-            f"split them into batches and delegate each batch to a sub-agent."
-        )
-
-        if args.no_viz:
-            states: list[Node] = [state]
-            while not state.finished:
-                state = agent.step(state)
-                states.append(state)
-                print(state.tree())
         else:
-            from rlmflow.utils.viz import live
-            states = live(agent, state)
-            state = states[-1]
+            rt = LocalRuntime(workspace=workspace)
+        rt.register_tools(FILE_TOOLS)
+        return rt
 
-        print(f"\n{'=' * 40}")
-        print(f"Actual answer:  {answer}")
-        print(f"Correct:        {answer in state.get_result()}")
+    llm = (
+        AnthropicClient(args.model)
+        if args.model.startswith("claude")
+        else OpenAIClient(args.model)
+    )
+    llm_clients = None
+    if args.fast_model:
+        fast = (
+            AnthropicClient(args.fast_model)
+            if args.fast_model.startswith("claude")
+            else OpenAIClient(args.fast_model)
+        )
+        llm_clients = {
+            "fast": {"model": fast, "description": "Cheaper model for small sub-tasks."},
+        }
 
-        from rlmflow.utils.trace import save_trace
-        trace_dir = Path(__file__).parent / "runs" / "needle_haystack" / "trace"
-        save_trace(states, trace_dir, metadata={"answer": answer})
-        print(f"Trace saved to {trace_dir}/")
+    agent = LoggingRLMFlow(
+        llm_client=llm,
+        runtime=make_runtime(),
+        config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
+        llm_clients=llm_clients,
+        runtime_factory=make_runtime,
+    )
 
-        if args.viewer:
-            from rlmflow.utils.viewer import open_viewer
-            open_viewer(states)
+    graph = agent.start(
+        f"There are {args.num_files} text files in the haystack/ directory "
+        f"(haystack/file_0000.txt to haystack/file_{args.num_files - 1:04d}.txt). "
+        f"Exactly one line across all files says 'The magic number is XXXXXXX'. "
+        f"Find it. There are too many files to grep all at once — "
+        f"split them into batches and delegate each batch to a sub-agent."
+    )
+
+    if args.no_viz:
+        graphs: list[Graph] = [graph]
+        while not graph.finished:
+            graph = agent.step(graph)
+            graphs.append(graph)
+            print(graph.tree())
+    else:
+        from rlmflow.utils.viz import live
+        graphs = live(agent, graph)
+        graph = graphs[-1]
+
+    print(f"\n{'=' * 40}")
+    print(f"Actual answer:  {answer}")
+    print(f"Correct:        {answer in graph.result()}")
+
+    from rlmflow.utils.trace import save_trace
+    trace_dir = Path(__file__).parent / "runs" / "needle_haystack" / "trace"
+    save_trace(graphs, trace_dir, metadata={"answer": answer})
+    print(f"Trace saved to {trace_dir}/")
+
+    if args.viewer:
+        from rlmflow.utils.viewer import open_viewer
+        open_viewer(graphs)
 
 
 if __name__ == "__main__":

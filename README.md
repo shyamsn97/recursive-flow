@@ -11,7 +11,10 @@ Recursive Language Models are powerful systems -- capable of handling long-conte
 
 **rlmflow** turns the run into an explicit graph. Every query, action,
 observation, child call, wait, resume, and result is a typed, immutable
-node you can step, inspect, fork, and replay.
+state you can step, inspect, fork, and replay. Each `start` / `step`
+returns a fresh `Graph` snapshot — a recursive structure where every
+`graph[id]` (node *or* agent id) returns a `Graph` rooted at that
+vertex.
 
 <p align="center">
   <img src="docs/rlm_animation.gif" alt="rlmflow animation" />
@@ -19,9 +22,19 @@ node you can step, inspect, fork, and replay.
 
 ## RLMs as Graphs
 
-RLMs delegate subtasks to
-children, those children can delegate to their own children, and their results bubble back up. **rlmflow** represents this representation as a tree directory: every step inside an agent is a typed node and every
-delegation is an edge between agents.
+RLMs delegate subtasks to children, those children can delegate to their
+own children, and results bubble back up. **rlmflow** represents the
+whole run as one recursive type:
+
+- **`Graph`** — one agent, frozen. Carries the agent's run-invariants
+  flat on itself (`agent_id`, `depth`, `query`, `system_prompt`,
+  `config`, `workspace`, `runtime`, `model`, `branch_id`,
+  `parent_agent_id`, `parent_node_id`), plus its `states` trajectory
+  and a `children: dict[str, Graph]` of sub-agents. Cross-agent
+  navigation is `graph[other_aid]`; subtree views are `graph.agents`,
+  `graph.nodes`, `graph.edges`.
+- **`Node`** — one immutable state in an agent's trajectory (query, action,
+  observation, supervising, resume, result, error).
 
 For example, this RLM code:
 
@@ -101,20 +114,20 @@ agent = RLMFlow(
 )
 
 query = "Build a python text-based adventure game with combat and inventory."
-states = [agent.start(query)]
-while not states[-1].finished:
-    states.append(agent.step(states[-1]))
-    print(states[-1].tree())
+graphs = [agent.start(query)]
+while not graphs[-1].finished:
+    graphs.append(agent.step(graphs[-1]))
+    print(graphs[-1].tree())
 
-save_trace(states, "traces/run1")
-open_viewer(states)
+save_trace(graphs, "traces/run1")
+open_viewer(graphs)
 ```
 
 `Workspace.create("./myproject")` writes a debuggable workspace as it runs:
-`session/<agent-id>/` holds per-call node events, `graph.json` is the compact
-graph manifest for the whole run, and `context/<agent-id>/` holds payloads
-exposed as `CONTEXT`. Saved traces are separate export artifacts and can live
-anywhere.
+`session/<agent-id>/` holds the per-agent state log (`session.jsonl`,
+`agent.json`, `latest.json`), `graph.json` is the compact graph manifest
+for the whole run, and `context/<agent-id>/` holds payloads exposed as
+`CONTEXT`. Saved traces are separate export artifacts and can live anywhere.
 
 ## Drop-in `LLMClient`
 
@@ -132,14 +145,14 @@ Nest agents by passing one `RLMFlow` as another's `llm_client`.
 
 ## Step and inspect
 
-`step(node) -> node'` is one atomic graph transition. Every step returns a
-new immutable `Node`, so the live tree is just `state.tree()`:
+`step(graph) -> graph'` is one atomic graph transition. Every step
+returns a new immutable `Graph`, so the live tree is just `graph.tree()`:
 
 ```python
-state = agent.start(query)
-while not state.finished:
-    state = agent.step(state)
-print(state.tree())
+graph = agent.start(query)
+while not graph.finished:
+    graph = agent.step(graph)
+print(graph.tree())
 ```
 
 ```text
@@ -161,34 +174,35 @@ Supervising -> children done -> Resume   -> LLM  -> ...
 ```
 
 `Observation`, `Action`, `Supervising`, `Resume`, and `Result` are all
-typed Pydantic nodes. The graph is queryable in plain Python:
+typed Pydantic states. The graph is queryable in plain Python:
 
 ```python
-state.tree()                                  # ASCII render
-state.find("root.scanner_api")                # one node by id or agent_id
-state.path_to("root.scanner_api.chunk_1")     # root → node ancestor chain
-state.leaves()                                # every node with no children
-state.errors()                                # every ErrorNode in the subtree
-state.results()                               # every ResultNode in the subtree
-state.where(type="action", agent_id="root")   # kwargs match node attrs
-state.where(lambda n: n.depth > 2)            # or pass a predicate
-state.model_dump_json()                       # full serialization
+graph.tree()                                  # ASCII render
+graph["root.scanner_api"]                     # sub-Graph rooted at that agent / node
+graph.agents["root.scanner_api"].states       # state trajectory for one agent
+graph.children                                # list[Graph] for child agents
+graph.nodes.find("n_abc...")                  # bare Node lookup by id
+graph.nodes.errors()                          # every ErrorNode across agents
+graph.nodes.results()                         # every ResultNode across agents
+graph.nodes.where(type="action", agent_id="root")  # kwargs match Node attrs
+graph.nodes.where(lambda n: n.type == "action")    # or pass a predicate
+graph.to_dict()                               # full JSON-serializable payload
 ```
 
 ## Checkpoint, branch, replay
 
-Every node is a frozen Pydantic snapshot, so the whole run is data:
+The whole run is a single `Graph` value — frozen, JSON-serializable:
 
 ```python
-from rlmflow import Node
+from rlmflow import Graph
 
-state.save(workspace.checkpoint_path)
+graph.save(workspace.checkpoint_path)
 
 # resume later, in another process, with a different model
-state = Node.load(workspace.checkpoint_path)
+graph = Graph.load(workspace.checkpoint_path)
 agent = RLMFlow(llm_client=AnotherModel(), workspace=workspace, ...)
-while not state.finished:
-    state = agent.step(state)
+while not graph.finished:
+    graph = agent.step(graph)
 ```
 
 To branch into an isolated workspace with its own session, context, and
@@ -199,9 +213,9 @@ alt = workspace.fork(new_branch_id="repair", new_dir="./runs/repair")
 alt_agent = RLMFlow(llm_client=..., workspace=alt, ...)
 ```
 
-Or intervene mid-run by replacing a child node before the parent resumes —
-see [`examples/showcase.py`](examples/showcase.py) for checkpointing,
-time travel, manual intervention, and gym-style stepping in one file.
+See [`examples/showcase.py`](examples/showcase.py) for checkpointing,
+session reads, time travel through `list[Graph]`, and gym-style
+stepping in one file.
 
 ## Rich visualization
 
@@ -218,23 +232,23 @@ already exercises every option below — its saved trace under
 
 ![](docs/static/gradio_ui.png)
 
-`open_viewer(states)` launches a small browser app for stepping through a
-saved trace — tree, summary, and raw node JSON side by side:
+`open_viewer(graphs)` launches a small browser app for stepping through a
+saved trace — tree, summary, and raw state JSON side by side:
 
 ```python
 from rlmflow.utils.trace import load_trace
 from rlmflow.utils.viewer import open_viewer
 
 trace = load_trace("examples/data/notebook-coding-agent/trace")
-open_viewer(trace.states)
+open_viewer(trace.graphs)
 ```
 
 Or from a checkpoint via the CLI: `rlmflow view examples/data/notebook-coding-agent/trace`.
 
 ### Live terminal tree
 
-`rlmflow.utils.viz.live(agent, state)` drives the step loop and renders a
-Rich tree as nodes are produced. The boids run (`Create a simple boids
+`rlmflow.utils.viz.live(agent, graph)` drives the step loop and renders a
+Rich tree as states are produced. The boids run (`Create a simple boids
 simulation in plain HTML and JavaScript, split each component into
 separate files`) settles to:
 
@@ -248,7 +262,7 @@ root [result] {default:gpt-5} -> Boids simulation written to output/boids-simula
   root.main_js       [result] {fast:gpt-5-mini} -> ok
 ```
 
-The same render is available offline as `state.tree()` on any node.
+The same render is available offline as `graph.tree()` on any snapshot.
 Filename-flavored agent ids (`index.html` → `index_html`) are sanitized
 because `.` is the parent/child delimiter in the agent tree.
 
@@ -280,7 +294,7 @@ rlmflow render examples/data/notebook-coding-agent/trace -f tokens
 ```
 
 GitHub renders mermaid inline, so the output drops straight into a doc.
-The example below is the `to_mermaid_flowchart(state)` projection of the
+The example below is the `to_mermaid_flowchart(graph)` projection of the
 boids run; it renders reliably across the GitHub-supported mermaid
 versions:
 
@@ -309,12 +323,12 @@ from rlmflow.utils.viz import (
 )
 from rlmflow.utils.tracing import json_logs
 
-print(token_sparkline(states))          # ▁▂▅█▂   15820 tok over 7 steps
-print(error_summary(state))             # ErrorNode counts grouped by kind
-print(message_stream("root.boid_js", session))   # rendered transcript for one agent
-print(report_md(states, title="run"))   # full Markdown report
-gantt_html(states, "run.html")          # standalone HTML swimlane
-json_logs(states, "run.jsonl")          # one node per line
+print(token_sparkline(graphs))          # ▁▂▅█▂   15820 tok over 7 steps
+print(error_summary(graph))             # ErrorNode counts grouped by kind
+print(message_stream("root.boid_js", graph))     # rendered transcript for one agent
+print(report_md(graphs, title="run"))   # full Markdown report
+gantt_html(graphs, "run.html")          # standalone HTML swimlane
+json_logs(graph, "run.jsonl")           # one state per line
 ```
 
 ### Image, GIF, and HTML exports
@@ -326,10 +340,10 @@ self-contained HTML stepper. Four public functions live in
 
 | Function                                | CLI verb        | Output                                | Use case                                   |
 |-----------------------------------------|-----------------|---------------------------------------|--------------------------------------------|
-| `save_image(node, path)`                | `-f image`      | one PNG/SVG/PDF                       | hero image of a finished run               |
-| `save_steps(states, dir/)`              | `-f steps`      | `step_NN.png` per snapshot            | blog slideshow, paper figure series        |
-| `save_gif(states, path)`                | _(no verb yet)_ | animated GIF                          | quick preview / social posts               |
-| `save_html(states, path)`               | `-f html`       | self-contained stepper (Plotly + CSS) | shareable URL-less artifact, PR comment    |
+| `save_image(graph, path)`               | `-f image`      | one PNG/SVG/PDF                       | hero image of a finished run               |
+| `save_steps(graphs, dir/)`              | `-f steps`      | `step_NN.png` per snapshot            | blog slideshow, paper figure series        |
+| `save_gif(graphs, path)`                | _(no verb yet)_ | animated GIF                          | quick preview / social posts               |
+| `save_html(graphs, path)`               | `-f html`       | self-contained stepper (Plotly + CSS) | shareable URL-less artifact, PR comment    |
 
 Quick start:
 
@@ -338,19 +352,19 @@ from rlmflow.utils.trace import load_trace
 from rlmflow.utils import save_image, save_steps, save_html, save_gif
 
 trace = load_trace("examples/data/notebook-coding-agent/trace")
-states = trace.states
+graphs = trace.graphs
 
-save_image(states[-1], "trace_final.png")        # single snapshot
-save_steps(states, "frames/")                    # one PNG per step
-save_html(states, "trace.html", title="run 1")   # standalone stepper
-save_gif(states, "trace.gif", duration=400)      # animated GIF (~2.5 fps)
+save_image(graphs[-1], "trace_final.png")        # single snapshot
+save_steps(graphs, "frames/")                    # one PNG per step
+save_html(graphs, "trace.html", title="run 1")   # standalone stepper
+save_gif(graphs, "trace.gif", duration=400)      # animated GIF (~2.5 fps)
 ```
 
-Or use the node shorthand (same defaults):
+Or use the graph shorthand (same defaults):
 
 ```python
-states[-1].save_image("trace_final.png")
-states[-1].save_html("trace.html", states=states)
+graphs[-1].save_image("trace_final.png")
+graphs[-1].save_html("trace.html")
 ```
 
 #### Why the scaling knobs exist
@@ -382,8 +396,8 @@ same proportion to the canvas as a `save_image` PNG.
 **Hero PNG of a finished run** — defaults are tuned for this:
 
 ```python
-states[-1].save_image("hero.png")
-# == save_image(states[-1], "hero.png", width=1800, height=1350,
+graphs[-1].save_image("hero.png")
+# == save_image(graphs[-1], "hero.png", width=1800, height=1350,
 #               scale=2.0, element_mult=3.0, normalize_labels=True)
 ```
 
@@ -392,7 +406,7 @@ square-ish canvas (the recipe behind `docs/blog.md`):
 
 ```python
 save_steps(
-    states,
+    graphs,
     "blog/frames/",
     width=1600, height=1200, scale=2.0,
     marker_mult=3.5,        # fat node dots + edges
@@ -405,7 +419,7 @@ save_steps(
 GitHub gist:
 
 ```python
-save_html(states, "stepper.html", title="needle haystack run")
+save_html(graphs, "stepper.html", title="needle haystack run")
 ```
 
 The HTML output embeds Plotly from CDN, includes per-slide
@@ -418,7 +432,7 @@ is cached.
 
 ```python
 save_gif(
-    states,
+    graphs,
     "trace.gif",
     duration=600,          # ms per frame; lower = faster
     loop=0,                # 0 = forever; 1 = play once
@@ -474,15 +488,15 @@ All examples share flags like `--no-viz`, `--docker-image rlmflow:local`,
 
 | Example | What it shows |
 |---|---|
-| [`showcase.py`](examples/showcase.py) | Typed nodes, checkpoints, session persistence, intervention, gym-style stepping. |
+| [`showcase.py`](examples/showcase.py) | `Graph` snapshots, checkpoints, session persistence, time travel, gym-style stepping. |
 | [`drop_in_llm.py`](examples/drop_in_llm.py) | `RLMFlow` as an `LLMClient`. Nested agents. |
 | [`coding-agent/agent.py`](examples/coding-agent/agent.py) | Interactive coding agent that writes and edits files. |
 | [`needle_haystack.py`](examples/needle_haystack.py) | Needle-in-a-haystack across 500 files with custom tools and `runtime_factory`. |
 | [`summarizer.py`](examples/summarizer.py) | Recursive map-reduce over a long document. |
-| [`view_demo.py`](examples/view_demo.py) | Launch the Gradio viewer on a saved trace. |
-| [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, open the interactive viewer. **Source of `examples/data/notebook-coding-agent/`** — every other notebook reads from here. |
-| [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | All 9 visualizations against the saved boids trace: inline tree, interactive viewer, topology renders (mermaid/dot/d2/sequence), step-indexed timeline, per-node detail (`message_stream`, `diff_system_prompts`), cost & reports, run-vs-run comparison, CLI equivalents. |
-| [`notebooks/node_basics.ipynb`](examples/notebooks/node_basics.ipynb) | `Node` API tour — walk, find, path_to, filter (`leaves`/`results`/`errors`/`where`), diff snapshots, session access (`FileSession.load`, `chain_to`), event streaming with `tee` / `json_logs`. |
+| [`view_demo.py`](examples/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
+| [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, save the trace, open the interactive viewer. Requires a live LLM. |
+| [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | Every visualization against the saved fixture: inline tree, Plotly graph, HTML stepper, topology renders (mermaid/dot/d2/sequence), step-indexed timeline, per-state detail, cost & reports, run-vs-run comparison, CLI equivalents. |
+| [`notebooks/node_basics.ipynb`](examples/notebooks/node_basics.ipynb) | `Graph` query API tour — `graph[aid]`, `graph.nodes`, `graph.nodes.find`, `graph.nodes.where`, `graph.nodes.results`/`errors`, per-agent tokens, `session.load_graph`, state streaming with `tee` / `json_logs`. |
 
 ## Benchmarks
 
@@ -533,12 +547,12 @@ scaling / label-normalization flags (`--marker-mult`, `--text-mult`,
 - [Positioning](docs/positioning.md): when to use rlmflow vs rlm-minimal,
   ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider — decision matrix and
   per-framework comparisons.
-- [Observability](docs/observability.md): node fields and types, save/load
-  traces, session/context layout, live tree, gantt, topology exports,
-  Gradio viewer, CLI.
+- [Observability](docs/observability.md): the `Graph` data model, state
+  fields and types, querying the graph, save/load traces, session /
+  context layout, live tree, gantt, topology exports, Gradio viewer, CLI.
 - [Control](docs/control.md): step loop, checkpoint, rewind, workspace forks,
   `CONTEXT.read()` / slices, `delegate(name, query, context)`,
-  inline-first strategy, intervention, custom prompts, runtimes, tools.
+  inline-first strategy, custom prompts, runtimes, tools.
 - [Runtimes](docs/runtimes.md): `Runtime` protocol, shipped runtimes
   (Local / Subprocess / Docker / Modal), writing your own.
 - [Security](docs/security.md): trust model, Docker isolation knobs,

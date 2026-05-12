@@ -14,7 +14,6 @@ class LLMUsage:
 
 
 class LLMClient(metaclass=abc.ABCMeta):
-
     last_usage: LLMUsage | None = None
 
     @abc.abstractmethod

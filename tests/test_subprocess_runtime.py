@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from rlmflow.graph import ChildHandle, WaitRequest
 from rlmflow.runtime.subprocess import SubprocessRuntime
-from rlmflow.node import ChildHandle, WaitRequest
 
 
 def _argv() -> list[str]:

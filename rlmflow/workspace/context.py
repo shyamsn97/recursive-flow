@@ -7,11 +7,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-from rlmflow.workspace.store import (
-    Store,
-    copy_workspace_paths,
-    resolve_backend,
-)
+from rlmflow.workspace.store import Store, copy_workspace_paths, resolve_backend
 
 CONTEXT_VARIABLE_PROMPT = """
 **Context variable:**
@@ -26,8 +22,8 @@ API:
 - `CONTEXT.lines(start=0, end=None)` — line slice.
 - `CONTEXT.grep(pattern, max_results=50)` — regex; returns `lineno:line` rows.
 
-For long `CONTEXT`, don't `print` it whole (output is truncated). Sample, chunk,
-delegate one sub-agent per chunk with a structured reply, aggregate in the parent.
+For long `CONTEXT`, don't `print` it whole (output is truncated). Sample, chunk, or
+aggregate before passing it anywhere.
 """
 
 

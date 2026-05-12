@@ -23,13 +23,13 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from rlmflow.graph import Graph
 from rlmflow.llm import LLMClient, LLMUsage
-from rlmflow.node import Node
 from rlmflow.rlm import RLMConfig, RLMFlow
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.utils.export import to_mermaid_flowchart
 from rlmflow.utils.trace import save_trace
-from rlmflow.utils.viz import session_events
+from rlmflow.utils.viewer import graph_plot_html
 from rlmflow.workspace import Workspace
 
 ANSWER = "84721"
@@ -125,7 +125,7 @@ def haystack() -> str:
     return "\n".join(lines)
 
 
-def run_demo(workspace_root: Path) -> tuple[list[Node], RLMFlow]:
+def run_demo(workspace_root: Path) -> tuple[list[Graph], RLMFlow]:
     if workspace_root.exists():
         shutil.rmtree(workspace_root)
     workspace = Workspace.create(workspace_root)
@@ -137,31 +137,32 @@ def run_demo(workspace_root: Path) -> tuple[list[Node], RLMFlow]:
         config=RLMConfig(max_depth=3, max_iterations=8),
     )
 
-    state = agent.start(
+    graph = agent.start(
         "What secret code is hidden in the haystack?",
         context=haystack(),
     )
-    states = [state]
-    while not state.finished:
-        state = agent.step(state)
-        states.append(state)
-        if len(states) > 20:
+    graphs = [graph]
+    while not graph.finished:
+        graph = agent.step(graph)
+        graphs.append(graph)
+        if len(graphs) > 20:
             raise RuntimeError("Demo did not terminate within 20 steps")
-    return states, agent
+    return graphs, agent
 
 
-def latest_results(states: list[Node]) -> dict[str, str]:
+def latest_results(graphs: list[Graph]) -> dict[str, str]:
+    """Return the most recent ``result`` string per ``agent_id`` across steps."""
     results: dict[str, str] = {}
-    for state in states:
-        for node in state.walk():
+    for graph in graphs:
+        for node in graph.nodes:
             result = getattr(node, "result", "")
             if node.type == "result" and result:
                 results[node.agent_id] = result
     return results
 
 
-def collapsed_view(states: list[Node]) -> str:
-    results = latest_results(states)
+def collapsed_view(graphs: list[Graph]) -> str:
+    results = latest_results(graphs)
     return "\n".join(
         [
             "root",
@@ -174,41 +175,40 @@ def collapsed_view(states: list[Node]) -> str:
     )
 
 
-def pick_phase_states(states: list[Node]) -> list[tuple[str, Node]]:
+def pick_phase_states(graphs: list[Graph]) -> list[tuple[str, Graph]]:
     """Pick stable snapshots that match the four blog slideshow phases."""
 
-    def has(agent_id: str, node_type: str, state: Node) -> bool:
-        return any(
-            node.agent_id == agent_id and node.type == node_type
-            for node in state.walk()
-        )
+    def has(agent_id: str, node_type: str, graph: Graph) -> bool:
+        if agent_id not in graph:
+            return False
+        return any(state.type == node_type for state in graph[agent_id].states)
 
-    phases: list[tuple[str, Node]] = []
+    phases: list[tuple[str, Graph]] = []
     for title, predicate in [
         (
             "1. Root parks after spawning parallel children",
-            lambda s: has("root", "supervising", s)
-            and has("root.chunk_0", "query", s)
-            and has("root.chunk_2", "query", s),
+            lambda g: has("root", "supervising", g)
+            and has("root.chunk_0", "query", g)
+            and has("root.chunk_2", "query", g),
         ),
         (
             "2. First children finish while chunk_2 keeps working",
-            lambda s: has("root.chunk_0", "result", s)
-            and has("root.chunk_1", "result", s)
-            and has("root.chunk_2", "supervising", s),
+            lambda g: has("root.chunk_0", "result", g)
+            and has("root.chunk_1", "result", g)
+            and has("root.chunk_2", "supervising", g),
         ),
         (
             "3. chunk_2 resumes from candidate readers",
-            lambda s: has("root.chunk_2.candidate_a", "result", s)
-            and has("root.chunk_2.candidate_b", "result", s)
-            and has("root.chunk_2", "result", s),
+            lambda g: has("root.chunk_2.candidate_a", "result", g)
+            and has("root.chunk_2.candidate_b", "result", g)
+            and has("root.chunk_2", "result", g),
         ),
         (
             "4. Root resumes and returns the answer",
-            lambda s: has("root", "result", s),
+            lambda g: has("root", "result", g),
         ),
     ]:
-        match = next((state for state in states if predicate(state)), states[-1])
+        match = next((graph for graph in graphs if predicate(graph)), graphs[-1])
         phases.append((title, match))
     return phases
 
@@ -226,30 +226,35 @@ def truncate(text: str, limit: int = 46) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "..."
 
 
-def sequence_diagram(states: list[Node]) -> str:
-    """Render delegate/return events from the actual recorded node trace."""
+def sequence_diagram(graphs: list[Graph]) -> str:
+    """Render delegate/return transitions from the recorded graph snapshots."""
     participants = ["root"]
     seen_participants = {"root"}
     seen_delegates: set[str] = set()
     seen_results: set[str] = set()
-    events: list[str] = []
+    rows: list[str] = []
 
     def add_participant(agent_id: str) -> None:
         if agent_id not in seen_participants:
             seen_participants.add(agent_id)
             participants.append(agent_id)
 
-    for state in states:
-        for node in state.walk():
+    for graph in graphs:
+        for node in graph.nodes:
             agent_id = node.agent_id
-            if agent_id != "root" and node.type == "query" and agent_id not in seen_delegates:
+            if (
+                agent_id != "root"
+                and node.type == "query"
+                and agent_id not in seen_delegates
+            ):
                 parent = parent_agent(agent_id)
                 add_participant(parent)
                 add_participant(agent_id)
                 seen_delegates.add(agent_id)
-                events.append(
+                query = graph[agent_id].query if agent_id in graph else ""
+                rows.append(
                     f"    {participant_id(parent)}->>+{participant_id(agent_id)}: "
-                    f"delegate {truncate(node.query)}"
+                    f"delegate {truncate(query)}"
                 )
 
             result = getattr(node, "result", "")
@@ -257,13 +262,13 @@ def sequence_diagram(states: list[Node]) -> str:
                 seen_results.add(agent_id)
                 add_participant(agent_id)
                 if agent_id == "root":
-                    events.append(
+                    rows.append(
                         f"    root-->>root: done {truncate(str(result), 34)}"
                     )
                 else:
                     parent = parent_agent(agent_id)
                     add_participant(parent)
-                    events.append(
+                    rows.append(
                         f"    {participant_id(agent_id)}-->>-{participant_id(parent)}: "
                         f"{truncate(str(result), 34)}"
                     )
@@ -271,11 +276,11 @@ def sequence_diagram(states: list[Node]) -> str:
     lines = ["sequenceDiagram"]
     for agent_id in participants:
         lines.append(f"    participant {participant_id(agent_id)} as {agent_id}")
-    lines.extend(events)
+    lines.extend(rows)
     return "\n".join(lines)
 
 
-def render_markdown(states: list[Node]) -> str:
+def render_markdown(graphs: list[Graph]) -> str:
     parts = [
         "# Generated Needle Graph Example",
         "",
@@ -284,7 +289,7 @@ def render_markdown(states: list[Node]) -> str:
         "This is what the run looks like if recursive calls collapse to strings:",
         "",
         "```text",
-        collapsed_view(states),
+        collapsed_view(graphs),
         "```",
         "",
         "## Sequence View",
@@ -292,19 +297,19 @@ def render_markdown(states: list[Node]) -> str:
         "This is the same run as calls and returns:",
         "",
         "```mermaid",
-        sequence_diagram(states),
+        sequence_diagram(graphs),
         "```",
         "",
         "## Steppable Graph Snapshots",
         "",
     ]
-    for title, state in pick_phase_states(states):
+    for title, graph in pick_phase_states(graphs):
         parts.extend(
             [
                 f"### {title}",
                 "",
                 "```mermaid",
-                to_mermaid_flowchart(state),
+                to_mermaid_flowchart(graph),
                 "```",
                 "",
             ]
@@ -321,12 +326,13 @@ def _escape_html(text: str) -> str:
     )
 
 
-def node_table(state: Node) -> str:
+def state_table(graph: Graph) -> str:
     rows = []
-    for node in state.walk():
+    for node in graph.nodes:
         result = getattr(node, "result", "") or ""
         waiting = ", ".join(getattr(node, "waiting_on", []) or [])
-        detail = result or waiting or getattr(node, "query", "") or ""
+        query = graph[node.agent_id].query if node.agent_id in graph else ""
+        detail = result or waiting or query or ""
         rows.append(
             "<tr>"
             f"<td><code>{_escape_html(node.agent_id)}</code></td>"
@@ -337,35 +343,44 @@ def node_table(state: Node) -> str:
     return "\n".join(rows)
 
 
-def render_html_viewer(states: list[Node]) -> str:
+def render_html_viewer(graphs: list[Graph]) -> str:
     slides = []
     buttons = []
-    session_path = _session_path(states)
-    for idx, state in enumerate(states, start=1):
-        title = f"{state.agent_id} · {state.type}"
+    for idx, graph in enumerate(graphs, start=1):
+        current = graph.current()
+        title = (
+            f"{graph.root_agent_id} \u00b7 {current.type if current else 'empty'}"
+        )
         active = " active" if idx == 1 else ""
         buttons.append(
             f"<button class='dot{active}' data-step='{idx}' aria-label='Step {idx}'></button>"
         )
         include_plotly = "cdn" if idx == 1 else False
+        graph_html = graph_plot_html(
+            graph,
+            "graph",
+            height=500,
+            title=f"step {idx} / {len(graphs)}",
+            include_plotlyjs=include_plotly,
+        )
         slides.append(
             f"""
 <section class="slide{active}" data-step="{idx}">
   <div class="slide-head">
-    <span class="step">Step {idx} / {len(states)}</span>
+    <span class="step">Step {idx} / {len(graphs)}</span>
     <h2>{_escape_html(title)}</h2>
   </div>
   <div class="viewer-grid">
     <div class="graph-card">
-      {state.plot_html("graph", states=states, session=session_path, step=idx - 1, mode="events", height=500, title=f"step {idx} / {len(states)}", include_plotlyjs=include_plotly)}
+      {graph_html}
     </div>
     <aside class="detail-card">
-      <h3>Transcript: <code>{_escape_html(state.agent_id)}</code></h3>
-      <pre>{_escape_html(state.transcript(include_system=False))}</pre>
-      <h3>Visible Nodes</h3>
+      <h3>Transcript: <code>{_escape_html(graph.root_agent_id)}</code></h3>
+      <pre>{_escape_html(graph.transcript(include_system=False))}</pre>
+      <h3>Visible States</h3>
       <table>
         <thead><tr><th>Agent</th><th>Type</th><th>Detail</th></tr></thead>
-        <tbody>{node_table(state)}</tbody>
+        <tbody>{state_table(graph)}</tbody>
       </table>
     </aside>
   </div>
@@ -499,17 +514,17 @@ def render_html_viewer(states: list[Node]) -> str:
 <body>
 <main>
   <h1>Needle Graph Stepper</h1>
-  <p>Generated from an actual deterministic rlmflow run using <code>delegate(...)</code> and <code>yield wait(...)</code>. Each slide is one recorded node snapshot rendered with <code>state.plot()</code>.</p>
+  <p>Generated from an actual deterministic rlmflow run using <code>delegate(...)</code> and <code>yield wait(...)</code>. Each slide is one recorded graph snapshot rendered with <code>graph.plot()</code>.</p>
 
   <section class="collapsed">
     <h2>Collapsed RLM View</h2>
     <p>What a normal recursive-call view reduces the run to:</p>
-    <pre>{_escape_html(collapsed_view(states))}</pre>
+    <pre>{_escape_html(collapsed_view(graphs))}</pre>
   </section>
 
   <section class="sequence">
     <h2>Sequence View</h2>
-    <pre class="mermaid">{_escape_html(sequence_diagram(states))}</pre>
+    <pre class="mermaid">{_escape_html(sequence_diagram(graphs))}</pre>
   </section>
 
   {"".join(slides)}
@@ -547,17 +562,6 @@ def render_html_viewer(states: list[Node]) -> str:
 """
 
 
-def _session_path(states: list[Node]) -> Path | None:
-    for state in states:
-        ws = getattr(state, "workspace", None)
-        root = getattr(ws, "root", None) if ws else None
-        if root:
-            path = Path(root)
-            if (path / "graph.json").exists():
-                return path
-    return None
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -589,36 +593,31 @@ def main() -> None:
     if args.workspace is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace_root = Path(tmpdir) / "workspace"
-            states, _ = run_demo(workspace_root)
-            markdown = render_markdown(states)
-            html = render_html_viewer(states)
-            events = session_events(workspace_root)
+            graphs, _ = run_demo(workspace_root)
+            markdown = render_markdown(graphs)
+            html = render_html_viewer(graphs)
     else:
         args.workspace.mkdir(parents=True, exist_ok=True)
-        states, _ = run_demo(args.workspace)
-        markdown = render_markdown(states)
-        html = render_html_viewer(states)
-        events = session_events(args.workspace)
+        graphs, _ = run_demo(args.workspace)
+        markdown = render_markdown(graphs)
+        html = render_html_viewer(graphs)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(markdown, encoding="utf-8")
     args.html_output.parent.mkdir(parents=True, exist_ok=True)
     args.html_output.write_text(html, encoding="utf-8")
-    trace_path = save_trace(
-        states, args.trace_output, metadata={"answer": ANSWER}, events=events
-    )
+    trace_path = save_trace(graphs, args.trace_output, metadata={"answer": ANSWER})
     if args.workspace is not None:
         save_trace(
-            states,
+            graphs,
             args.workspace / "trace",
             metadata={"answer": ANSWER},
-            events=events,
         )
 
     print(f"Wrote {args.output}")
     print(f"Wrote {args.html_output}")
     print(f"Wrote {trace_path}")
-    print(f"Final answer: {latest_results(states).get('root')}")
+    print(f"Final answer: {latest_results(graphs).get('root')}")
 
 
 if __name__ == "__main__":

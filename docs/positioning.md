@@ -34,7 +34,7 @@ It gives an LLM a REPL and recursive delegation tools, then persists every query
 - Step-level control (pause, inspect, resume)
 - Typed graph state with checkpoint/fork/time-travel
 - Parallel child execution with a thread pool
-- `session/` persistence for node/message history
+- `session/` persistence for the agent / state log
 - `context/` payloads exposed as `CONTEXT`
 - Interactive visualization (Gradio viewer)
 - Token tracking and budgets

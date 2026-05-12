@@ -55,6 +55,18 @@ RECURSION_TEXT = """
 - When a wait-block ends *without* `done()`, the runtime starts a new turn whose observation is `Children finished: ... / Generator resumed. Output: ...`. That turn is the verify pass — see the REPL rule. If you `done()` in the wait-block, the agent terminates there with no verify turn.
 - Re-delegating to a finished child resumes it with a new task (same variables, fresh context).
 - `model="fast"` (or any registered key) routes a child to a cheaper/faster LLM.
+
+**What to put in `context`.** The string becomes the child's `CONTEXT` variable — it
+is the child's *input* to reason over, **not** its output. Good payloads:
+- a **spec / contract / schema** the child must implement (signatures, field names, types)
+- a **slice of long input** the child should analyze (`CONTEXT.lines(...)`, file region, transcript)
+- a **prior result / failed sibling's transcript** when retrying or reviewing
+- `""` (empty) when the query is self-contained
+
+Anti-pattern — **do NOT** pre-generate the answer in this REPL and pass it as the
+child's `context` asking the child to `write_file(CONTEXT.read())`. If you already
+produced the bytes, write the file yourself; the "delegation" adds latency and tokens
+without buying any fresh reasoning. Delegate only when the child still has work to do.
 """
 
 CONTEXT_TEXT = CONTEXT_VARIABLE_PROMPT
@@ -63,7 +75,8 @@ SESSION_TEXT = SESSION_VARIABLE_PROMPT
 
 GUARDRAILS_TEXT = """
 - **Delegate for parallelism, fresh context, or split-by-spec.** When the user asks for components in separate files, or chunks need independent reasoning, delegate. Inline only when the artifact is small or tightly coupled.
-- **Fresh context.** Pass children the minimum they need — a `CONTEXT.lines(...)` slice, a spec string, or `""`. Use `CONTEXT.read()` only when they need your full view.
+- **`context` is input, not output.** Pass the child what it must *reason over* — a spec, a contract, a slice of long input, a sibling's transcript. If the answer is already a string in your namespace, don't wrap a child around `write_file(CONTEXT.read())` — write it yourself.
+- **Fresh context, sized down.** Pass children the minimum they need to do their job — a `CONTEXT.lines(...)` slice, a contract string, or `""`. Use `CONTEXT.read()` only when they genuinely need your full view (e.g. reviewer over the same spec).
 - **Cross-file contracts are signatures, not prose.** When children share an interface, write the contract as the actual signatures and verify the same strings back. Presence checks miss arity drift.
 - **Run, don't just grep.** Whenever the runtime can execute or syntax-check the artifact, do it before `done()`.
 - **Verify before `done()`.** Empty/zero/surprising results → one sanity check first.
@@ -108,18 +121,23 @@ done(json.dumps(hits))
 
 **Delegate cross-file work — contract → wait → resume → verify → done:**
 ```repl
-# Block 1: write the contract as literal signatures and end after wait.
+# Block 1: pass each child ONLY the cross-file contract (signatures + import paths).
+# Each child still has to *write* its file's body from scratch — that's the work
+# you're delegating. Do NOT generate the file bodies here and pass them through.
 contract = '''
+// sim.js
 export class Simulation { constructor(ctx, canvas) { ... } update(dt) {} draw() {} }
 export const SPEED = 220
+// boid.js
 export class Boid { constructor(x, y, vx, vy, hue) {} update(dt, boids, w, h) {} draw(ctx) {} }
+// main.js
 import { Simulation } from './sim.js'
 new Simulation(ctx, canvas)
 '''
 handles = [
-    delegate("sim_js",  "Implement output/app/sim.js per the contract.", contract),
-    delegate("boid_js", "Implement output/app/boid.js per the contract.", contract),
-    delegate("main_js", "Wire output/app/main.js per the contract.", contract),
+    delegate("sim_js",  "Implement output/app/sim.js per the contract in CONTEXT.",  contract),
+    delegate("boid_js", "Implement output/app/boid.js per the contract in CONTEXT.", contract),
+    delegate("main_js", "Wire output/app/main.js per the contract in CONTEXT.",      contract),
 ]
 yield wait(*handles)
 ```

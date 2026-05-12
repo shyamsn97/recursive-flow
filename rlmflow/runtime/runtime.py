@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from rlmflow.node import WaitRequest
+from rlmflow.graph import WaitRequest
 from rlmflow.runtime.repl import deserialize, serialize
 from rlmflow.tools import get_tool_metadata
 from rlmflow.tools import tool as tool_decorator

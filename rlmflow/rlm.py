@@ -1,17 +1,26 @@
-"""RLMFlow — one recursive interpreter over typed nodes."""
+"""RLMFlow — one recursive interpreter over typed agent states.
+
+The engine reads and writes through :class:`~rlmflow.workspace.session.Session`
+(per-agent invariants + per-turn states) and returns
+:class:`~rlmflow.graph.Graph` after every step. A :class:`Graph` is one
+agent, frozen, with all its per-run invariants as flat fields plus its
+``states`` trajectory and ``children`` sub-Graphs. The engine itself
+holds no graph state — the session is the source of truth.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from rlmflow.llm import LLMClient, LLMUsage
-from rlmflow.node import (
+from rlmflow.graph import (
     ActionNode,
     ChildHandle,
     ErrorNode,
+    Graph,
     Node,
     ObservationNode,
     QueryNode,
@@ -21,6 +30,7 @@ from rlmflow.node import (
     SupervisingNode,
     WaitRequest,
 )
+from rlmflow.llm import LLMClient, LLMUsage
 from rlmflow.pool import CallablePool, Pool, SequentialPool, ThreadPool
 from rlmflow.prompts.default import BASELINE_BUILDER, DEFAULT_BUILDER
 from rlmflow.prompts.messages import (
@@ -74,9 +84,11 @@ class RLMConfig:
 class ActiveStep:
     """Action-local state captured by done/delegate/wait tool calls."""
 
-    node: ActionNode
+    agent_id: str
+    parent_node_id: str
+    parent: Graph
     done_result: str | None = None
-    delegated: dict[str, QueryNode] = field(default_factory=dict)
+    delegated: dict[str, Graph] = field(default_factory=dict)
 
 
 def create_pool(config: RLMConfig, pool: Pool | Callable | None = None) -> Pool:
@@ -87,83 +99,58 @@ def create_pool(config: RLMConfig, pool: Pool | Callable | None = None) -> Pool:
     return SequentialPool()
 
 
+# ── scheduler ────────────────────────────────────────────────────────
+
+
 class NodeScheduler:
-    """Step runnable supervised descendants as one pool batch."""
+    """Pick the agents that can take a step right now.
+
+    Walks the graph top-down from root. A supervising agent is
+    "runnable" iff all the children it is ``waiting_on`` are terminal;
+    otherwise the scheduler recurses into those still-running children.
+    """
 
     def __init__(self, pool: Pool | None = None) -> None:
         self.pool = pool
 
-    def runnable_nodes(self, root: SupervisingNode) -> list[Node]:
-        runnable: list[Node] = []
+    def runnable_agents(self, graph: Graph) -> list[str]:
+        runnable: list[str] = []
 
-        def visit(node: Node) -> None:
-            latest = node.current()
-            if latest is not node:
-                visit(latest)
+        def visit(aid: str) -> None:
+            agent = graph.agents[aid]
+            if agent.finished:
                 return
-            if node.terminal:
+            cur = agent.current()
+            if cur is None:
                 return
-            if isinstance(node, SupervisingNode):
-                child_nodes = [
-                    child.current()
-                    for child in node.children
-                    if isinstance(child, Node)
+            if isinstance(cur, SupervisingNode):
+                waiting = [
+                    graph.agents[child_aid]
+                    for child_aid in cur.waiting_on
+                    if child_aid in graph.agents
                 ]
-                if all(child.terminal for child in child_nodes):
-                    runnable.append(node)
+                if all(child.finished for child in waiting):
+                    runnable.append(aid)
                     return
-                for child in child_nodes:
-                    visit(child)
+                for child in waiting:
+                    if not child.finished:
+                        visit(child.agent_id)
                 return
-            runnable.append(node)
+            runnable.append(aid)
 
-        for child in root.children:
-            if isinstance(child, Node):
-                visit(child)
+        visit(graph.agent_id)
         return runnable
 
-    def rebuild(
-        self, root: SupervisingNode, updates: dict[str, Node]
-    ) -> SupervisingNode:
-        def replace_node(node: Node) -> Node:
-            updated = updates.get(node.id) or updates.get(node.agent_id)
-            if updated is not None:
-                return updated
-            if isinstance(node, SupervisingNode):
-                return node.update(
-                    children=[
-                        replace_node(child) if isinstance(child, Node) else child
-                        for child in node.children
-                    ]
-                )
-            return node
 
-        return root.update(
-            children=[
-                replace_node(child) if isinstance(child, Node) else child
-                for child in root.children
-            ]
-        )
-
-    def step_runnable_nodes(
-        self,
-        root: SupervisingNode,
-        flow: RLMFlow,
-    ) -> SupervisingNode:
-        runnable = self.runnable_nodes(root)
-        tasks = [
-            (node.id, lambda node=node: flow.step_local(node)) for node in runnable
-        ]
-        pool = self.pool or flow.pool
-        updates = pool.execute(tasks) if tasks else {}
-        return self.rebuild(root, updates)
+# ── engine ───────────────────────────────────────────────────────────
 
 
 class RLMFlow(LLMClient):
     """Recursive language-model flow engine.
 
-    One RLMFlow interprets the recursive node graph. Agent-specific scope lives
-    on each node, and REPL continuity lives in runtime sessions.
+    Holds the prompt builder, runtime sessions, pool, and persistence
+    handles. The execution graph itself lives in the session — every step
+    reloads it through :meth:`~rlmflow.workspace.session.Session.load_graph`.
     """
 
     def __init__(
@@ -183,6 +170,12 @@ class RLMFlow(LLMClient):
             runtime = workspace.materialize_runtime()
         if runtime is None:
             raise ValueError("RLMFlow requires either runtime= or workspace=.")
+        if workspace is None:
+            runtime_workspace = getattr(runtime, "workspace", None)
+            if runtime_workspace is not None:
+                runtime_root = Path(runtime_workspace).resolve()
+                if runtime_root != Path.cwd().resolve():
+                    workspace = Workspace.create(runtime_root)
 
         self.llm_client = llm_client
         self.runtime = runtime
@@ -191,8 +184,6 @@ class RLMFlow(LLMClient):
         self.context: Context = workspace.context if workspace else InMemoryContext()
         self.config = config or RLMConfig()
         self.runtime_factory = runtime_factory
-        # When max_depth == 0 the agent can't delegate, so swap in a baseline
-        # prompt that has zero delegation content. Caller-supplied builders win.
         default_builder = (
             BASELINE_BUILDER if self.config.max_depth == 0 else DEFAULT_BUILDER
         )
@@ -210,7 +201,7 @@ class RLMFlow(LLMClient):
             self.llm_clients["default"] = self.llm_client
 
         self._runtime_sessions: dict[str, Runtime] = {ROOT_RUNTIME_ID: runtime}
-        self._step_update_stack: list[dict[str, Node]] = []
+        self._terminate_requested: set[str] = set()
         self.register_tools(runtime)
 
     # ── lifecycle ────────────────────────────────────────────────────
@@ -223,7 +214,7 @@ class RLMFlow(LLMClient):
         contexts: dict[str, str] | None = None,
         context_metadata: dict[str, Any] | None = None,
         agent_id: str = "root",
-    ) -> QueryNode:
+    ) -> Graph:
         query = query or DEFAULT_QUERY
 
         self.context.write(
@@ -236,29 +227,32 @@ class RLMFlow(LLMClient):
             self.context.write(key, value, agent_id=agent_id)
 
         context_hint = CONTEXT_HINT_PRESENT if context else CONTEXT_HINT_ABSENT
-        root = QueryNode(
+        root = Graph(
             agent_id=agent_id,
+            branch_id=self.workspace.branch_id if self.workspace else "main",
             depth=0,
             query=query,
-            runtime=RuntimeRef(id=ROOT_RUNTIME_ID),
             system_prompt=self.build_system_prompt_for(
-                query=query,
-                agent_id=agent_id,
-                depth=0,
+                query=query, agent_id=agent_id, depth=0
             ),
             config=self.node_config(),
             workspace=self.workspace.ref() if self.workspace else None,
-            branch_id=self.workspace.branch_id if self.workspace else "main",
+            runtime=RuntimeRef(id=ROOT_RUNTIME_ID),
+        )
+        self.session.write_agent(root)
+        first_state = QueryNode(
+            agent_id=agent_id,
+            seq=0,
             content=FIRST_ACTION.format(query=query, context_hint=context_hint),
         )
-        return self.record(root)
+        self.session.write_state(first_state)
+        return self.session.load_graph()
 
     def run(self, query: str | None = None, **kwargs) -> str:
-        node = self.start(query, **kwargs)
-        while not node.finished:
-            node = self.step(node)
-        current = node.current()
-        return current.result if isinstance(current, ResultNode) else ""
+        graph = self.start(query, **kwargs)
+        while not graph.finished:
+            graph = self.step(graph)
+        return graph.result()
 
     def chat(self, messages: list[dict[str, str]], *args, **kwargs) -> str:
         query = next(
@@ -271,319 +265,267 @@ class RLMFlow(LLMClient):
         )
         return self.run(query)
 
-    def step(self, node: Node, *, use_cache: bool = True) -> Node:
-        current = node.current()
-        if current is not node:
-            if current.terminal:
-                return node
-        updates: dict[str, Node] = {}
-        self._step_update_stack.append(updates)
-        try:
-            self._step_one_node(current, use_cache=use_cache)
-        finally:
-            self._step_update_stack.pop()
-        return (
-            node.replace_many(self._materialize_updates(updates)) if updates else node
+    def step(self, graph: Graph, *, use_cache: bool = True) -> Graph:
+        """Advance the run by one synchronized batch.
+
+        All currently-runnable agents are stepped (in parallel if a
+        :class:`Pool` is configured). Returns a freshly-loaded
+        :class:`Graph` snapshot.
+        """
+        del use_cache
+        runnable = self.node_scheduler.runnable_agents(graph)
+        if not runnable:
+            return graph
+        tasks = [(aid, (lambda aid=aid: self._step_agent(aid))) for aid in runnable]
+        self.pool.execute(tasks)
+        return self.session.load_graph()
+
+    def terminate(self, graph: Graph) -> Graph:
+        """Mark every still-running agent for a final-answer turn.
+
+        Equivalent to giving every agent one last chance to emit ``done()``.
+        The engine then drives those agents to terminal states as normal.
+        """
+        for aid in graph.agents:
+            if not graph.agents[aid].finished:
+                self._terminate_requested.add(aid)
+        return self.session.load_graph()
+
+    # ── per-agent step dispatcher ────────────────────────────────────
+
+    def _step_agent(self, agent_id: str) -> None:
+        full = self.session.load_graph()
+        if agent_id not in full.agents:
+            return
+        graph = full.agents[agent_id]
+        if graph.finished:
+            return
+
+        over = self._budget_exceeded(full)
+        if over is not None:
+            self._record_state(
+                graph,
+                ResultNode(result=f"[budget exceeded: {over} tokens]"),
+            )
+            return
+
+        cur = graph.current()
+        if cur is None:
+            return
+        if isinstance(cur, SupervisingNode):
+            self._step_supervising(graph, cur)
+            return
+        if isinstance(cur, ObservationNode):
+            self._step_observation(graph, cur)
+            return
+        raise TypeError(
+            f"Unexpected current state type for agent {agent_id!r}: "
+            f"{type(cur).__name__}"
         )
 
-    def _step_one_node(self, node: Node, *, use_cache: bool = True) -> Node:
-        if node.terminal:
-            return node
-        if isinstance(node, SupervisingNode):
-            return self.step_supervising(node)
-        if isinstance(node, ActionNode):
-            return self.step_action(node)
-        if isinstance(node, ObservationNode):
-            return self.step_observation(node, use_cache=use_cache)
-        raise TypeError(f"Unknown node type: {type(node).__name__}")
+    # ── observation → action → next state ────────────────────────────
 
-    def step_local(self, node: Node) -> Node:
-        return self._step_one_node(node)
+    def _step_observation(self, graph: Graph, last: ObservationNode) -> None:
+        iteration = self._iteration_count(graph)
+        max_iter = graph.config.get("max_iterations", self.config.max_iterations)
+        terminate = iteration >= max_iter or graph.agent_id in self._terminate_requested
 
-    def terminate(self, node: Node) -> Node:
-        if node.terminal:
-            return node
-        max_iter = node.config.get("max_iterations", self.config.max_iterations)
-        iteration = self.iteration_of(node)
-        config = node.config
-        if iteration >= max_iter:
-            config = {**node.config, "max_iterations": iteration + 1}
-        if isinstance(node, SupervisingNode):
-            return node.update(
-                terminate_requested=True,
-                config=config,
-                children=[self.terminate(child) for child in node.children],
-            )
-        return node.update(terminate_requested=True, config=config)
+        action_or_error = self._reply_to(graph, last, force_final=terminate)
+        action_state = self._record_state(graph, action_or_error)
+        if isinstance(action_state, ErrorNode):
+            return
+        # Run the freshly-recorded ActionNode immediately so the agent
+        # observes the result in the same step.
+        full = self.session.load_graph()
+        graph = full.agents[graph.agent_id]
+        self._step_action(graph, action_state)
 
-    # ── stepping ──────────────────────────────────────────────────────
-
-    def step_observation(
-        self, node: ObservationNode, *, use_cache: bool = True
-    ) -> Node:
-        if self.exceeds_budget(node):
-            return self.record_successor(
-                node,
-                node.successor(
-                    ResultNode, result=f"[budget exceeded: {node.tree_tokens} tokens]"
-                ),
-            )
-
-        max_iter = node.config.get("max_iterations", self.config.max_iterations)
-        if self.iteration_of(node) >= max_iter and not node.terminate_requested:
-            node = node.update(terminate_requested=True)
-
-        action = self.reply_to(node, use_cache=use_cache)
-        self.record_successor(node, action)
-        if isinstance(action, ErrorNode):
-            return action
-        return self.step_action(action)
-
-    def reply_to(
+    def _reply_to(
         self,
-        node: ObservationNode,
+        graph: Graph,
+        last: ObservationNode,
         *,
-        use_cache: bool = True,
+        force_final: bool,
     ) -> ActionNode | ErrorNode:
-        del use_cache
-        messages = self.build_messages(node)
-        client = self.llm_client_for(node)
-        raw = self.call_llm(messages, node=node, client=client)
+        messages = self.build_messages(graph, force_final=force_final)
+        client = self.llm_client_for(graph)
+        raw = self.call_llm(messages, client=client)
         usage = client.last_usage or LLMUsage()
         code = self.extract_code(raw)
+        next_seq = last.seq + 1
         if not code:
-            return node.successor(
-                ErrorNode, content=NO_CODE_BLOCK, error="no_code_block"
+            return ErrorNode(
+                agent_id=graph.agent_id,
+                seq=next_seq,
+                content=NO_CODE_BLOCK,
+                error="no_code_block",
             )
-        return node.successor(
-            ActionNode,
+        return ActionNode(
+            agent_id=graph.agent_id,
+            seq=next_seq,
             reply=raw,
             code=code,
             model=getattr(client, "model", None),
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
-            total_input_tokens=node.total_input_tokens + usage.input_tokens,
-            total_output_tokens=node.total_output_tokens + usage.output_tokens,
         )
 
-    def step_action(self, node: ActionNode) -> Node:
-        err = check_yield_errors(node.code)
+    def _step_action(self, graph: Graph, action: ActionNode) -> None:
+        err = check_yield_errors(action.code)
         if err:
-            return self.record_successor(
-                node,
-                node.successor(
-                    ErrorNode, code=node.code, content=err, error="invalid_yield"
+            self._record_state(
+                graph,
+                ErrorNode(
+                    code=action.code,
+                    content=err,
+                    error="invalid_yield",
                 ),
             )
+            return
 
-        with self.active_step(node) as step:
-            suspended, raw = self.run_code(node, node.code)
+        with self.active_step(graph, action) as step:
+            suspended, raw = self._run_code(graph, action.code)
 
         spawned = list(step.delegated)
         if spawned and not suspended and step.done_result is None:
             msg = ORPHANED_DELEGATES.format(names=", ".join(spawned))
             base = raw if isinstance(raw, str) else ""
-            output = self.execute_code(node, f"raise OrphanedDelegatesError({msg!r})")
+            output = self._execute_code(graph, f"raise OrphanedDelegatesError({msg!r})")
             content = (base + "\n\n" + output).strip()
-            return self.record_successor(
-                node,
-                node.successor(
-                    ErrorNode,
-                    code=node.code,
+            self._record_state(
+                graph,
+                ErrorNode(
+                    code=action.code,
                     content=self.format_exec_output(content),
                     error="orphaned_delegates",
                 ),
             )
+            return
 
         if step.done_result is not None:
-            return self.record_successor(
-                node,
-                node.successor(
-                    ResultNode,
-                    result=step.done_result.strip(),
-                ),
-            )
+            self._record_state(graph, ResultNode(result=step.done_result.strip()))
+            return
 
         if suspended:
             request, pre_output = raw
-            new_children = [
-                step.delegated[aid]
-                for aid in request.agent_ids
-                if aid in step.delegated
-            ]
-            return self.record_successor(
-                node,
-                node.successor(
-                    SupervisingNode,
-                    code=node.code,
-                    output=pre_output,
-                    waiting_on=request.agent_ids,
-                    children=[*node.children, *new_children],
-                ),
+            sup = SupervisingNode(
+                agent_id=graph.agent_id,
+                seq=action.seq + 1,
+                code=action.code,
+                output=pre_output,
+                waiting_on=list(request.agent_ids),
             )
+            self._record_state(graph, sup)
+            return
 
         output = raw if isinstance(raw, str) else ""
         if not output.strip():
             output = "(no output)"
-        return self.record_successor(
-            node,
-            node.successor(
-                ObservationNode,
-                code=node.code,
+        self._record_state(
+            graph,
+            ObservationNode(
+                code=action.code,
                 output=output,
                 content=self.format_exec_output(output),
             ),
         )
 
-    def step_supervising(self, node: SupervisingNode) -> Node:
-        if self.can_resume(node):
-            return self.resume_supervisor(node)
-        return self.node_scheduler.step_runnable_nodes(node, self)
+    # ── supervising → resume / step children ─────────────────────────
 
-    def resume_supervisor(self, node: SupervisingNode) -> Node:
-        by_id = {
-            child.agent_id: child.current()
-            for child in node.children
-            if isinstance(child, Node)
-        }
+    def _step_supervising(self, graph: Graph, last: SupervisingNode) -> None:
+        if not self._can_resume(graph, last):
+            # Children still need to advance. The scheduler picks them up
+            # on the next outer step; nothing for this agent to do now.
+            return
+
+        children = [graph.agents[aid] for aid in last.waiting_on if aid in graph.agents]
         results = [
-            (
-                by_id[agent_id].result
-                if isinstance(by_id.get(agent_id), ResultNode)
-                else ""
-            )
-            for agent_id in node.waiting_on
+            child.result() if isinstance(child.current(), ResultNode) else ""
+            for child in children
         ]
 
-        with self.active_step(node) as step:
-            suspended, raw = self.resume_code(node, results)
+        with self.active_step(graph, last) as step:
+            suspended, raw = self._resume_code(graph, results)
 
         if step.done_result is not None:
-            return self.record_successor(
-                node,
-                node.successor(
-                    ResultNode,
-                    result=step.done_result.strip(),
-                ),
-            )
+            self._record_state(graph, ResultNode(result=step.done_result.strip()))
+            return
 
         if suspended:
             request, pre_output = raw
-            new_children = [
-                step.delegated[aid]
-                for aid in request.agent_ids
-                if aid in step.delegated
-            ]
-            return self.record_successor(
-                node,
-                node.successor(
-                    SupervisingNode,
-                    output=pre_output,
-                    waiting_on=request.agent_ids,
-                    children=[*node.children, *new_children],
-                ),
+            sup = SupervisingNode(
+                agent_id=graph.agent_id,
+                seq=last.seq + 1,
+                output=pre_output,
+                waiting_on=list(request.agent_ids),
             )
+            self._record_state(graph, sup)
+            return
 
         output = raw if isinstance(raw, str) else ""
+        by_aid = {child.agent_id: child for child in children}
         child_summary = "\n".join(
-            f"  {agent_id}: {getattr(by_id.get(agent_id), 'result', '') or '(no result)'}"
-            for agent_id in node.waiting_on
+            f"  {aid}: "
+            f"{by_aid[aid].result() if aid in by_aid else '(missing)' or '(no result)'}"
+            for aid in last.waiting_on
         )
         content = (
             f"Children finished:\n{child_summary}\n\n"
             f"Generator resumed. Output:\n{output or '(no output)'}"
         )
-        return self.record_successor(
-            node,
-            node.successor(
-                ResumeNode,
+        self._record_state(
+            graph,
+            ResumeNode(
                 output=output,
                 content=content,
-                resumed_from=list(node.waiting_on),
+                resumed_from=list(last.waiting_on),
             ),
         )
 
-    # ── graph/context bookkeeping ─────────────────────────────────────
+    # ── recording helpers ────────────────────────────────────────────
 
-    def record(self, node: Node) -> Node:
-        self.session.write(node)
-        return node
-
-    def record_successor(self, prev: Node, node: Node) -> Node:
-        self.record(prev.update(children=[*prev.children, node.id]))
-        if self._step_update_stack:
-            self._step_update_stack[-1][prev.id] = prev.update(
-                children=[*prev.children, node]
-            )
-            self._step_update_stack[-1][node.id] = node
-        return self.record(node)
-
-    def _materialize_updates(self, updates: dict[str, Node]) -> dict[str, Node]:
-        materialized: dict[str, Node] = {}
-
-        def hydrate(item: Node, seen: set[str] | None = None) -> Node:
-            seen = set(seen or ())
-            if item.id in seen:
-                return item
-            seen.add(item.id)
-            source = updates.get(item.id, item)
-            children: list[Any] = []
-            child_ids: set[str] = set()
-            changed = source is not item
-            for child in source.children:
-                child_id = child.id if isinstance(child, Node) else str(child)
-                if child_id in child_ids:
-                    changed = True
-                    continue
-                child_ids.add(child_id)
-                if isinstance(child, Node):
-                    hydrated = hydrate(updates.get(child.id, child), seen)
-                    children.append(hydrated)
-                    changed = changed or hydrated is not child
-                elif child in updates:
-                    children.append(hydrate(updates[str(child)], seen))
-                    changed = True
-                else:
-                    children.append(child)
-            return source.update(children=children) if changed else source
-
-        for node_id, node in updates.items():
-            materialized[node_id] = hydrate(node)
-        return materialized
-
-    def chain_to_root(self, node: Node) -> list[Node]:
-        return self.session.chain_to(node)
-
-    def iteration_of(self, node: Node) -> int:
-        return sum(isinstance(item, ActionNode) for item in self.chain_to_root(node))
-
-    def exceeds_budget(self, node: Node) -> bool:
-        return (
-            self.config.max_budget is not None
-            and node.tree_tokens >= self.config.max_budget
+    def _record_state(self, graph: Graph, state: Node) -> Node:
+        trajectory = graph.states
+        next_seq = (trajectory[-1].seq + 1) if trajectory else 0
+        fields = state.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
+        fixed = state.__class__(
+            agent_id=graph.agent_id,
+            seq=next_seq,
+            **fields,
         )
+        self.session.write_state(fixed)
+        return fixed
 
-    def can_resume(self, node: SupervisingNode) -> bool:
-        if not node.waiting_on:
+    def _iteration_count(self, graph: Graph) -> int:
+        return sum(isinstance(s, ActionNode) for s in graph.states)
+
+    def _budget_exceeded(self, graph: Graph) -> int | None:
+        """Return total tokens if the run is over budget, else ``None``."""
+        if self.config.max_budget is None:
+            return None
+        total = graph.total_tokens()
+        return total if total >= self.config.max_budget else None
+
+    def _can_resume(self, graph: Graph, supervising: SupervisingNode) -> bool:
+        """``graph`` is the supervising agent's sub-graph (children are inside)."""
+        if not supervising.waiting_on:
             return False
-        by_id = {
-            child.agent_id: child.current()
-            for child in node.children
-            if isinstance(child, Node)
-        }
-        return all(
-            isinstance(by_id.get(agent_id), ResultNode) for agent_id in node.waiting_on
-        )
+        for aid in supervising.waiting_on:
+            if aid not in graph.agents:
+                return False
+            if not isinstance(graph.agents[aid].current(), ResultNode):
+                return False
+        return True
 
-    # ── runtime sessions ──────────────────────────────────────────────
+    # ── runtime sessions ─────────────────────────────────────────────
 
-    def runtime_for(self, node_or_ref: Node | RuntimeRef | None) -> Runtime:
-        ref = node_or_ref.runtime if isinstance(node_or_ref, Node) else node_or_ref
+    def runtime_for(self, ref: RuntimeRef | None) -> Runtime:
         session_id = ref.id if ref is not None else ROOT_RUNTIME_ID
         return self._runtime_sessions[session_id]
 
-    def create_runtime_session(self, parent: Node, *, agent_id: str) -> RuntimeRef:
-        parent_runtime = self.runtime_for(parent)
+    def create_runtime_session(
+        self, parent_runtime: Runtime, *, agent_id: str
+    ) -> RuntimeRef:
         session_id = f"{agent_id}:{uuid4().hex[:8]}"
         runtime = (
             self.runtime_factory() if self.runtime_factory else parent_runtime.clone()
@@ -592,66 +534,76 @@ class RLMFlow(LLMClient):
         self.register_tools(runtime)
         return RuntimeRef(id=session_id)
 
-    def prepare_runtime(self, node: Node) -> Runtime:
-        runtime = self.runtime_for(node)
+    def prepare_runtime(self, graph: Graph, last_state: Node) -> Runtime:
+        runtime = self.runtime_for(graph.runtime)
         runtime.inject("OrphanedDelegatesError", OrphanedDelegatesError)
-        runtime.inject("AGENT_ID", node.agent_id)
-        runtime.inject("DEPTH", str(node.depth))
+        runtime.inject("AGENT_ID", graph.agent_id)
+        runtime.inject("DEPTH", str(graph.depth))
         runtime.inject("MAX_DEPTH", str(self.config.max_depth))
         runtime.inject(
             "SESSION",
             SessionVariable(
                 self.session,
-                agent_id=node.agent_id,
-                node_id=node.id,
-                branch_id=node.branch_id,
+                agent_id=graph.agent_id,
+                node_id=last_state.id,
+                branch_id=graph.branch_id,
             ),
         )
-        runtime.inject("CONTEXT", ContextVariable(self.context, agent_id=node.agent_id))
+        runtime.inject(
+            "CONTEXT", ContextVariable(self.context, agent_id=graph.agent_id)
+        )
         return runtime
 
-    def run_code(self, node: ActionNode, code: str) -> tuple[bool, object]:
-        runtime = self.prepare_runtime(node)
+    def _run_code(self, graph: Graph, code: str) -> tuple[bool, object]:
+        runtime = self.runtime_for(graph.runtime)
         suspended, raw = runtime.start_code(code)
         if isinstance(raw, str) and len(raw) > self.config.max_output_length:
             raw = raw[: self.config.max_output_length] + "\n...<truncated>"
         return suspended, raw
 
-    def resume_code(
-        self, node: SupervisingNode, results: list[str]
-    ) -> tuple[bool, object]:
-        runtime = self.prepare_runtime(node)
+    def _resume_code(self, graph: Graph, results: list[str]) -> tuple[bool, object]:
+        runtime = self.runtime_for(graph.runtime)
         suspended, raw = runtime.resume_code(results)
         if isinstance(raw, str) and len(raw) > self.config.max_output_length:
             raw = raw[: self.config.max_output_length] + "\n...<truncated>"
         return suspended, raw
 
-    def execute_code(self, node: Node, code: str) -> str:
-        output = self.prepare_runtime(node).execute(code)
+    def _execute_code(self, graph: Graph, code: str) -> str:
+        runtime = self.runtime_for(graph.runtime)
+        output = runtime.execute(code)
         if len(output) > self.config.max_output_length:
             return output[: self.config.max_output_length] + "\n...<truncated>"
         return output
 
-    # ── LLM / messages ────────────────────────────────────────────────
+    # ── LLM / messages ───────────────────────────────────────────────
 
-    def build_messages(self, leaf: Node) -> list[dict[str, str]]:
-        system = {
-            "role": "system",
-            "content": leaf.system_prompt or self.build_system_prompt(leaf),
-        }
+    def build_messages(
+        self,
+        graph: Graph,
+        *,
+        force_final: bool = False,
+    ) -> list[dict[str, str]]:
+        system_content = graph.system_prompt or self.build_system_prompt_for(
+            query=graph.query,
+            agent_id=graph.agent_id,
+            depth=graph.depth,
+        )
+        system = {"role": "system", "content": system_content}
+
         try:
-            payload = self.context.read("context", agent_id=leaf.agent_id)
+            payload = self.context.read("context", agent_id=graph.agent_id)
         except KeyError:
             payload = ""
         context_hint = CONTEXT_HINT_PRESENT if payload else CONTEXT_HINT_ABSENT
+
         msgs: list[dict[str, str]] = []
-        for node in self.chain_to_root(leaf):
-            if isinstance(node, ResultNode):
+        for state in graph.states:
+            if isinstance(state, ResultNode):
                 continue
-            if isinstance(node, ObservationNode):
-                msgs.append({"role": "user", "content": node.content})
-            elif isinstance(node, ActionNode):
-                msgs.append({"role": "assistant", "content": node.reply})
+            if isinstance(state, ObservationNode):
+                msgs.append({"role": "user", "content": state.content})
+            elif isinstance(state, ActionNode):
+                msgs.append({"role": "assistant", "content": state.reply})
 
         cap = self.config.max_messages
         if cap and len(msgs) > cap:
@@ -660,7 +612,7 @@ class RLMFlow(LLMClient):
                 {
                     "role": "user",
                     "content": TRUNCATION_SUMMARY.format(
-                        query=leaf.query,
+                        query=graph.query,
                         total=len(msgs),
                         cap=cap,
                         session_hint=hint,
@@ -668,31 +620,29 @@ class RLMFlow(LLMClient):
                 }
             ] + msgs[-cap:]
 
-        if leaf.terminate_requested:
+        if force_final:
             msgs.append({"role": "user", "content": FINAL_ANSWER_ACTION})
-        elif self.iteration_of(leaf) > 0:
+        elif self._iteration_count(graph) > 0:
             msgs.append(
                 {
                     "role": "user",
                     "content": CONTINUE_ACTION.format(
-                        query=leaf.query, context_hint=context_hint
+                        query=graph.query, context_hint=context_hint
                     ),
                 }
             )
         return [system] + msgs
 
-    def llm_client_for(self, node: Node) -> LLMClient:
-        model = node.config.get("model", "default")
+    def llm_client_for(self, graph: Graph) -> LLMClient:
+        model = graph.config.get("model", "default")
         return self.llm_clients.get(model, self.llm_client)
 
     def call_llm(
         self,
         messages: list[dict[str, str]],
         *,
-        node: Node | None = None,
         client: LLMClient | None = None,
     ) -> str:
-        del node
         active_client = client or self.llm_client
         result = "".join(active_client.stream(messages))
         self.last_usage = active_client.last_usage
@@ -707,21 +657,31 @@ class RLMFlow(LLMClient):
     def format_exec_output(self, output: str) -> str:
         return EXECUTION_OUTPUT.format(output=output or "(no output)")
 
-    def build_system_prompt_for(self, *, query: str, agent_id: str, depth: int) -> str:
-        node = QueryNode(
+    # ── prompt building ──────────────────────────────────────────────
+
+    def build_system_prompt_for(
+        self,
+        *,
+        query: str,
+        agent_id: str,
+        depth: int,
+        config: dict[str, Any] | None = None,
+    ) -> str:
+        stub = Graph(
             agent_id=agent_id,
             depth=depth,
             query=query,
-            config=self.node_config(),
+            config=config or self.node_config(),
         )
-        return self.build_system_prompt(node)
+        return self.build_system_prompt(stub)
 
-    def build_system_prompt(self, node: Node) -> str:
+    def build_system_prompt(self, graph: Graph) -> str:
+        """Render the system prompt for the agent rooted in ``graph``."""
         if self.config.system_prompt:
             return self.config.system_prompt
         return self.prompt_builder.build(
             tools=self.build_tools_section(),
-            status=self.build_status_section(node),
+            status=self.build_status_section(graph),
         )
 
     def build_tools_section(self) -> str:
@@ -743,16 +703,16 @@ class RLMFlow(LLMClient):
             lines.append(f"\nPre-imported: `{'`, `'.join(modules)}`")
         return "\n".join(lines)
 
-    def build_status_section(self, node: Node) -> str:
-        max_depth = node.config.get("max_depth", self.config.max_depth)
+    def build_status_section(self, graph: Graph) -> str:
+        max_depth = graph.config.get("max_depth", self.config.max_depth)
         if max_depth == 0:
             return "Baseline mode: no sub-agents available. Do all work directly in this REPL."
-        note = f"You are at recursion depth **{node.depth}** of max **{max_depth}**."
-        if node.depth == 0:
+        note = f"You are at recursion depth **{graph.depth}** of max **{max_depth}**."
+        if graph.depth == 0:
             note += STATUS_DEPTH_ROOT
-        elif node.depth >= max_depth - 1:
+        elif graph.depth >= max_depth - 1:
             note += STATUS_DEPTH_NEAR_MAX
-        elif node.depth > 0:
+        elif graph.depth > 0:
             note += STATUS_DEPTH_MID
         return note
 
@@ -769,18 +729,21 @@ class RLMFlow(LLMClient):
         }
 
     def child_config(
-        self, parent: ActionNode, max_iterations: int | None
+        self,
+        parent: Graph,
+        max_iterations: int | None,
     ) -> dict[str, Any]:
         child_iters = (
             max_iterations
             or self.config.child_max_iterations
             or max(
-                1, parent.config.get("max_iterations", self.config.max_iterations) // 3
+                1,
+                parent.config.get("max_iterations", self.config.max_iterations) // 3,
             )
         )
         return {**parent.config, "max_iterations": child_iters}
 
-    # ── tools ─────────────────────────────────────────────────────────
+    # ── tools / step scope ───────────────────────────────────────────
 
     def register_tools(self, runtime: Runtime | None = None) -> None:
         runtime = runtime or self.runtime
@@ -789,13 +752,17 @@ class RLMFlow(LLMClient):
         runtime.register_tool(self.delegate, core=True)
         runtime.register_tool(self.wait, core=True)
 
-    def active_step(self, node: ActionNode):
+    def active_step(self, graph: Graph, action: ActionNode):
         flow = self
 
         class ActiveStepScope:
             def __enter__(self) -> ActiveStep:
-                step = ActiveStep(node=node)
-                runtime = flow.prepare_runtime(node)
+                step = ActiveStep(
+                    agent_id=graph.agent_id,
+                    parent_node_id=action.id,
+                    parent=graph,
+                )
+                runtime = flow.prepare_runtime(graph, action)
                 flow.bind_step_tools(runtime, step)
                 return step
 
@@ -865,34 +832,49 @@ class RLMFlow(LLMClient):
         max_iterations: int | None = None,
         model: str = "default",
     ) -> ChildHandle | str:
-        parent = step.node
+        parent = step.parent
         if parent.depth >= self.config.max_depth:
             return f"[refused: max depth {self.config.max_depth}] Do this directly."
         if model not in self.llm_clients:
             keys = ", ".join(sorted(self.llm_clients))
             return f"[error: unknown model {model!r}. available: {keys}]"
 
-        agent_id = self.unique_child_id(parent, name, step.delegated)
-        self.context.write("context", context, agent_id=agent_id)
-        runtime_ref = self.create_runtime_session(parent, agent_id=agent_id)
+        child_aid = self.unique_child_id(parent.agent_id, name, step.delegated)
+        self.context.write("context", context, agent_id=child_aid)
+        runtime_ref = self.create_runtime_session(
+            self.runtime_for(parent.runtime), agent_id=child_aid
+        )
         context_hint = CONTEXT_HINT_PRESENT if context else CONTEXT_HINT_ABSENT
-        child = QueryNode(
-            agent_id=agent_id,
+
+        child_config = {**self.child_config(parent, max_iterations), "model": model}
+        child_graph = Graph(
+            agent_id=child_aid,
+            branch_id=parent.branch_id,
             depth=parent.depth + 1,
             query=query,
-            runtime=runtime_ref,
-            workspace=parent.workspace,
-            branch_id=parent.branch_id,
-            config={**self.child_config(parent, max_iterations), "model": model},
             system_prompt=self.build_system_prompt_for(
                 query=query,
-                agent_id=agent_id,
+                agent_id=child_aid,
                 depth=parent.depth + 1,
+                config=child_config,
             ),
+            config=child_config,
+            workspace=parent.workspace,
+            runtime=runtime_ref,
+            model=None,
+            parent_agent_id=parent.agent_id,
+            parent_node_id=step.parent_node_id,
+        )
+        self.session.write_agent(child_graph)
+
+        first_state = QueryNode(
+            agent_id=child_aid,
+            seq=0,
             content=FIRST_ACTION.format(query=query, context_hint=context_hint),
         )
-        step.delegated[agent_id] = self.record(child)
-        return ChildHandle(agent_id)
+        self.session.write_state(first_state)
+        step.delegated[child_aid] = child_graph
+        return ChildHandle(child_aid)
 
     @tool("Wait for delegated children. Must be called with `yield`.")
     def wait(self, *handles: ChildHandle) -> WaitRequest:
@@ -904,11 +886,11 @@ class RLMFlow(LLMClient):
 
     def unique_child_id(
         self,
-        parent: ActionNode,
+        parent_aid: str,
         name: str,
-        delegated: dict[str, QueryNode],
+        delegated: dict[str, Graph],
     ) -> str:
-        base = f"{parent.agent_id}.{name}"
+        base = f"{parent_aid}.{name}"
         if base not in delegated:
             return base
         i = 1

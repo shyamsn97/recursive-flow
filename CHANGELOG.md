@@ -8,12 +8,35 @@ each one is called out under **Breaking** below.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Data model is now one recursive class.** `AgentMeta` is gone — its
+  fields are flat on `Graph` itself (`graph.query`, `graph.config`,
+  `graph.runtime`, `graph.workspace`, `graph.depth`, `graph.model`,
+  `graph.system_prompt`, `graph.branch_id`, `graph.parent_agent_id`,
+  `graph.parent_node_id`). `Graph` is a frozen `dataclass` with
+  `states: tuple[Node, ...]` and `children: dict[str, Graph]` for
+  sub-agents. Cross-agent navigation is `graph[other_aid]`;
+  subtree views are `graph.agents`, `graph.nodes`, `graph.edges`.
+- `Graph.from_agent_states(...)` is removed. Build `Graph` instances
+  directly (frozen dataclass) or rely on `Session.load_graph()`.
+- `Edge` no longer ships as a stored object on `Graph` — `graph.edges`
+  derives `flows_to` from each agent's state order and `spawns` from
+  each child's `parent_node_id`. The class survives as a `NamedTuple`
+  for viz consumers.
+- `Session.write_agent` now takes a `Graph` (not an `AgentMeta`).
+  `Session.record_spawn` is removed; the parent link is captured on
+  the child's `parent_node_id` field.
+- `Graph.events` is now `Graph.states` — every `Node` represents the
+  agent's *state* at one step in its trajectory, not a discrete event.
+- `latest.json` writes `latest_node_id` instead of `latest_event_id`.
+
 ## [0.2.1] — 2026-05-10
 
 ### Changed
 
 - Workspace persistence now uses per-call `session/<agent-id>/session.jsonl`
-  logs plus a top-level `graph.json` manifest for graph structure and event
+  logs plus a top-level `graph.json` manifest for graph structure and state
   ordering.
 - Removed old workspace compatibility paths; `FileSession(path)` and
   `FileContext(path)` now treat `path` as the current workspace root layout.

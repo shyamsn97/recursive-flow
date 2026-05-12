@@ -1,10 +1,11 @@
 """rlmflow: a small, hackable engine for recursive language-model flows."""
 
-from rlmflow.llm import AnthropicClient, LLMClient, LLMUsage, OpenAIClient
-from rlmflow.node import (
+from rlmflow.graph import (
     ActionNode,
     ChildHandle,
+    Edge,
     ErrorNode,
+    Graph,
     Node,
     ObservationNode,
     QueryNode,
@@ -15,6 +16,7 @@ from rlmflow.node import (
     WaitRequest,
     WorkspaceRef,
 )
+from rlmflow.llm import AnthropicClient, LLMClient, LLMUsage, OpenAIClient
 from rlmflow.rlm import NodeScheduler, RLMConfig, RLMFlow
 from rlmflow.runtime import Runtime
 from rlmflow.workspace import (
@@ -37,14 +39,16 @@ __all__ = [
     "ChildHandle",
     "Context",
     "ContextVariable",
+    "Edge",
     "ErrorNode",
     "FileContext",
     "FileSession",
     "FileStore",
-    "LLMClient",
-    "LLMUsage",
+    "Graph",
     "InMemoryContext",
     "InMemorySession",
+    "LLMClient",
+    "LLMUsage",
     "MemoryStore",
     "Node",
     "NodeScheduler",
@@ -54,9 +58,9 @@ __all__ = [
     "RLMConfig",
     "RLMFlow",
     "ResultNode",
-    "RuntimeRef",
     "ResumeNode",
     "Runtime",
+    "RuntimeRef",
     "Session",
     "Store",
     "SupervisingNode",

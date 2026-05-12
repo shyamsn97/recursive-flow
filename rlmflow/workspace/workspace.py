@@ -12,7 +12,7 @@ from rlmflow.workspace.session import FileSession, Session
 from rlmflow.workspace.store import FileStore
 
 if TYPE_CHECKING:
-    from rlmflow.node import WorkspaceRef
+    from rlmflow.graph import WorkspaceRef
     from rlmflow.runtime.runtime import Runtime
 
 
@@ -60,7 +60,7 @@ class Workspace:
         return cls.create(ref.root, branch_id=ref.branch_id)
 
     def ref(self) -> WorkspaceRef:
-        from rlmflow.node import WorkspaceRef
+        from rlmflow.graph import WorkspaceRef
 
         return WorkspaceRef(root=str(self.root), branch_id=self.branch_id)
 

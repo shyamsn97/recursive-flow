@@ -1,12 +1,23 @@
+"""Iteration-budget exhaustion and explicit ``terminate()`` semantics."""
+
 from __future__ import annotations
 
-from rlmflow import QueryNode, ResultNode, RLMConfig, RLMFlow, SupervisingNode
-from rlmflow.llm import LLMClient, LLMUsage
+from rlmflow import (
+    Graph,
+    LLMClient,
+    LLMUsage,
+    RLMConfig,
+    RLMFlow,
+    ResultNode,
+    SupervisingNode,
+)
 from rlmflow.prompts.messages import FINAL_ANSWER_ACTION
 from rlmflow.runtime.local import LocalRuntime
 
 
 class StallingThenFinalLLM(LLMClient):
+    """Stalls with ``x = 1`` until the engine forces a final-answer turn."""
+
     def __init__(self) -> None:
         self.calls = 0
         self.last_messages: list[dict] = []
@@ -15,21 +26,18 @@ class StallingThenFinalLLM(LLMClient):
     def chat(self, messages, *args, **kwargs):
         self.calls += 1
         self.last_messages = list(messages)
-        if any("full iteration budget" in message.get("content", "") for message in messages):
+        if any("full iteration budget" in m.get("content", "") for m in messages):
             return '```repl\ndone("final answer")\n```'
         return "```repl\nx = 1\n```"
 
 
-def run_to_completion(agent: RLMFlow):
-    node = agent.start("answer the question")
-    states = [node]
-    while not node.finished:
-        node = agent.step(node)
-        states.append(node)
-    return node, states
+def _run(agent: RLMFlow, graph: Graph) -> Graph:
+    while not graph.finished:
+        graph = agent.step(graph)
+    return graph
 
 
-def test_exhaustion_marks_terminate_requested_and_runs_one_more_repl_turn():
+def test_exhaustion_runs_one_more_repl_turn_with_final_answer_message():
     llm = StallingThenFinalLLM()
     agent = RLMFlow(
         llm_client=llm,
@@ -37,36 +45,18 @@ def test_exhaustion_marks_terminate_requested_and_runs_one_more_repl_turn():
         config=RLMConfig(max_iterations=1, max_depth=0),
     )
 
-    node, _states = run_to_completion(agent)
+    final = _run(agent, agent.start("answer the question"))
 
-    assert isinstance(node.current(), ResultNode)
-    assert node.current().result == "final answer"
-    assert node.current().terminate_requested
+    assert isinstance(final.current(), ResultNode)
+    assert final.result() == "final answer"
     assert llm.calls == 2
-    assert any(
-        message.get("content") == FINAL_ANSWER_ACTION
-        for message in llm.last_messages
-        if message.get("role") == "user"
-    )
-
-
-def test_final_message_is_last_user_instruction_on_recovery_turn():
-    llm = StallingThenFinalLLM()
-    agent = RLMFlow(
-        llm_client=llm,
-        runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=1, max_depth=0),
-    )
-
-    run_to_completion(agent)
-
     user_messages = [
-        message["content"] for message in llm.last_messages if message.get("role") == "user"
+        m["content"] for m in llm.last_messages if m.get("role") == "user"
     ]
     assert user_messages[-1] == FINAL_ANSWER_ACTION
 
 
-def test_explicit_terminate_on_query_node_drives_one_final_turn():
+def test_explicit_terminate_marks_agent_and_drives_one_final_turn():
     llm = StallingThenFinalLLM()
     agent = RLMFlow(
         llm_client=llm,
@@ -74,37 +64,48 @@ def test_explicit_terminate_on_query_node_drives_one_final_turn():
         config=RLMConfig(max_iterations=10, max_depth=0),
     )
 
-    node = agent.terminate(agent.start("answer the question"))
-
-    assert node.terminate_requested
+    graph = agent.terminate(agent.start("answer the question"))
+    assert "root" in agent._terminate_requested
     assert llm.calls == 0
 
-    while not node.finished:
-        node = agent.step(node)
-
-    assert node.current().result == "final answer"
-    assert node.current().terminate_requested
+    final = _run(agent, graph)
+    assert final.result() == "final answer"
     assert llm.calls == 1
 
 
-def test_terminate_is_recursive_over_unfinished_children():
+def test_terminate_marks_every_running_agent():
+    """``terminate(graph)`` flips every still-running agent into final-answer mode."""
+
+    class DelegatingThenStallingLLM(LLMClient):
+        def __init__(self) -> None:
+            self.last_usage = LLMUsage(input_tokens=1, output_tokens=1)
+
+        def chat(self, messages, *args, **kwargs):
+            prompt = messages[-1]["content"].lower()
+            if "full iteration budget" in prompt:
+                return '```repl\ndone("forced final")\n```'
+            if "child" in prompt:
+                return "```repl\ny = 2\n```"
+            return (
+                "```repl\n"
+                'h = delegate("child", "child task", "")\n'
+                "r = yield wait(h)\n"
+                "done(r[0])\n"
+                "```"
+            )
+
     agent = RLMFlow(
-        llm_client=StallingThenFinalLLM(),
+        llm_client=DelegatingThenStallingLLM(),
         runtime=LocalRuntime(),
         config=RLMConfig(max_iterations=10, max_depth=2),
     )
-    finished_child = ResultNode(agent_id="root.search_0", depth=1, result="early result")
-    pending_child = QueryNode(agent_id="root.search_1", depth=1)
-    root = SupervisingNode(
-        agent_id="root",
-        waiting_on=["root.search_0", "root.search_1"],
-        children=[finished_child, pending_child],
-    )
+    graph = agent.step(agent.start("kickoff"))
+    assert isinstance(graph.current(), SupervisingNode)
+    assert "root.child" in graph
 
-    out = agent.terminate(root)
+    graph = agent.terminate(graph)
+    assert {"root", "root.child"} <= agent._terminate_requested
 
-    assert out.terminate_requested
-    assert not out.children[0].terminate_requested
-    assert out.children[1].terminate_requested
-    assert isinstance(out.children[0], ResultNode)
-    assert isinstance(out.children[1], QueryNode)
+    final = _run(agent, graph)
+    assert final.finished
+    assert final["root.child"].result() == "forced final"

@@ -22,9 +22,9 @@ from pathlib import Path
 
 import pytest
 
+from rlmflow.graph import ChildHandle, WaitRequest
 from rlmflow.runtime.docker import DockerRuntime
 from rlmflow.workspace import FileContext
-from rlmflow.node import ChildHandle, WaitRequest
 
 
 def _docker_available() -> bool:

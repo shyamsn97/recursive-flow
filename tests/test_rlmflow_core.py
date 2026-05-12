@@ -1,21 +1,20 @@
+"""End-to-end tests for the core RLMFlow engine + Graph data model."""
+
 from __future__ import annotations
 
 from importlib.util import find_spec
 
 from rlmflow import (
-    ActionNode,
     ErrorNode,
-    QueryNode,
+    Graph,
     RLMConfig,
     RLMFlow,
     ResultNode,
-    SupervisingNode,
     Workspace,
 )
 from rlmflow.llm import LLMClient
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.utils.trace import load_trace, save_trace
-from rlmflow.utils.viz import build_viz_graph, node_tree
 
 
 class StaticLLM(LLMClient):
@@ -26,29 +25,64 @@ class StaticLLM(LLMClient):
         return self.reply
 
 
-def test_direct_done_returns_result_node():
-    agent = RLMFlow(
-        StaticLLM('```repl\ndone("ok")\n```'),
+def _agent(reply: str = '```repl\ndone("ok")\n```', **config_kwargs) -> RLMFlow:
+    config_kwargs.setdefault("max_iterations", 3)
+    return RLMFlow(
+        StaticLLM(reply),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=2),
+        config=RLMConfig(**config_kwargs),
     )
 
-    node = agent.step(agent.start("say ok"))
 
-    assert isinstance(node.current(), ResultNode)
-    assert node.current().result == "ok"
-    assert "root [query]" in node.tree()
-    assert "root [action]" in node.tree()
-    assert "root [result] {default} -> ok" in node.tree()
+def _run_full(agent: RLMFlow, graph: Graph) -> Graph:
+    while not graph.finished:
+        graph = agent.step(graph)
+    return graph
 
 
-def test_delegation_resumes_parent():
+# ── basic lifecycle ──────────────────────────────────────────────────
+
+
+def test_start_returns_graph_with_root_agent():
+    agent = _agent()
+    graph = agent.start("say ok")
+
+    assert isinstance(graph, Graph)
+    assert graph.root_agent_id == "root"
+    assert graph.query == "say ok"
+    assert [state.type for state in graph.states] == ["query"]
+
+
+def test_step_drives_observation_to_result_in_one_call():
+    agent = _agent()
+    graph = agent.step(agent.start("say ok"))
+
+    assert isinstance(graph.current(), ResultNode)
+    assert graph.result() == "ok"
+    assert [s.type for s in graph.states] == ["query", "action", "result"]
+
+
+def test_run_returns_result_string():
+    agent = _agent()
+    assert agent.run("say ok") == "ok"
+
+
+def test_tree_contains_per_agent_timeline():
+    agent = _agent()
+    graph = _run_full(agent, agent.start("say ok"))
+    tree = graph.tree()
+
+    assert "root" in tree
+    assert "query" in tree
+    assert "result -> ok" in tree
+
+
+# ── delegation ───────────────────────────────────────────────────────
+
+
+def test_delegation_resumes_parent_with_child_result():
     class ScriptedLLM(LLMClient):
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def chat(self, messages, *args, **kwargs) -> str:
-            self.calls += 1
+        def chat(self, messages, *args, **kwargs):
             prompt = messages[-1]["content"].lower()
             if "child task" in prompt:
                 return '```repl\ndone("child-result")\n```'
@@ -65,24 +99,18 @@ def test_delegation_resumes_parent():
         runtime=LocalRuntime(),
         config=RLMConfig(max_depth=1, max_iterations=5),
     )
+    graph = _run_full(agent, agent.start("parent task"))
 
-    node = agent.step(agent.start("parent task"))
-    assert isinstance(node.current(), SupervisingNode)
-
-    node = agent.step(node)
-    assert isinstance(node.current(), SupervisingNode)
-    child = node.current().children[0]
-    assert child.type == "query"
-    assert child.current().type == "result"
-
-    node = agent.step(node)
-    assert isinstance(node.current(), ResultNode)
-    assert node.current().result == "parent:child-result"
+    assert graph.result() == "parent:child-result"
+    assert "root.child" in graph
+    assert graph["root.child"].depth == 1
+    assert graph["root.child"].result() == "child-result"
+    assert list(graph.children) == ["root.child"]
 
 
-def test_resumed_parent_preserves_prior_children_when_delegating_again():
+def test_resumed_parent_can_delegate_again_after_first_child_completes():
     class ScriptedLLM(LLMClient):
-        def chat(self, messages, *args, **kwargs) -> str:
+        def chat(self, messages, *args, **kwargs):
             prompt = messages[-1]["content"].lower()
             if "child task" in prompt:
                 return '```repl\ndone("child-result")\n```'
@@ -103,28 +131,16 @@ def test_resumed_parent_preserves_prior_children_when_delegating_again():
         runtime=LocalRuntime(),
         config=RLMConfig(max_depth=1, max_iterations=5),
     )
+    graph = _run_full(agent, agent.start("parent task"))
 
-    node = agent.step(agent.start("parent task"))
-    assert isinstance(node.current(), SupervisingNode)
-
-    node = agent.step(node)
-    assert isinstance(node.current(), SupervisingNode)
-    assert [child.agent_id for child in node.current().children] == ["root.child"]
-
-    node = agent.step(node)
-    assert isinstance(node.current(), SupervisingNode)
-    assert {child.agent_id for child in node.current().children} == {
-        "root.child",
-        "root.verify",
-    }
-
-    node = agent.step(node)
-    node = agent.step(node)
-    assert isinstance(node.current(), ResultNode)
-    assert node.current().result == "parent:verified"
+    assert graph.result() == "parent:verified"
+    assert set(graph.children) == {"root.child", "root.verify"}
 
 
-def test_workspace_session_persists_nodes_and_context_payload(tmp_path):
+# ── persistence ──────────────────────────────────────────────────────
+
+
+def test_workspace_session_persists_states_and_context_payload(tmp_path):
     ws = Workspace.create(tmp_path / "workspace")
     agent = RLMFlow(
         StaticLLM('```repl\ndone("ok")\n```'),
@@ -132,284 +148,178 @@ def test_workspace_session_persists_nodes_and_context_payload(tmp_path):
         config=RLMConfig(max_iterations=2),
     )
 
-    node = agent.step(agent.start("say ok", context="hello"))
+    graph = _run_full(agent, agent.start("say ok", context="hello"))
 
-    assert isinstance(node.current(), ResultNode)
+    assert isinstance(graph.current(), ResultNode)
     assert ws.context.read("context") == "hello"
-    assert len(ws.session.load()) == 3
+    reload = ws.session.load_graph()
+    assert [s.type for s in reload.states] == ["query", "action", "result"]
 
 
-def test_tree_displays_model_labels():
-    child = ActionNode(
-        agent_id="root.fast_worker",
-        config={"model": "fast"},
-        model="gpt-5-mini",
-        code="done('ok')",
+# ── tree, transcript, sessions ───────────────────────────────────────
+
+
+def test_agent_transcript_renders_one_agent_chain():
+    agent = _agent()
+    graph = _run_full(agent, agent.start("say ok"))
+
+    transcript = graph.transcript(include_system=False)
+
+    assert "--- query ---\nsay ok" in transcript
+    assert '--- assistant ---\n```repl\ndone("ok")\n```' in transcript
+    assert "--- result ---\nok" in transcript
+
+
+def test_graph_session_flattens_every_agent():
+    class ScriptedLLM(LLMClient):
+        def chat(self, messages, *args, **kwargs):
+            prompt = messages[-1]["content"].lower()
+            if "child" in prompt:
+                return '```repl\ndone("c")\n```'
+            return (
+                "```repl\n"
+                'h = delegate("c", "child", "")\n'
+                "r = yield wait(h)\n"
+                "done(r[0])\n"
+                "```"
+            )
+
+    agent = RLMFlow(
+        ScriptedLLM(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1)
     )
-    root = QueryNode(config={"model": "default"}, children=[child])
+    graph = _run_full(agent, agent.start("parent"))
+    session = graph.session(include_system=False)
 
-    tree = root.tree()
-
-    assert "root [query] {default}" in tree
-    assert "root.fast_worker [action] {fast:gpt-5-mini}" in tree
-
-
-def test_node_transcript_renders_agent_chain():
-    query = QueryNode(agent_id="root.worker", query="find the code")
-    action = query.successor(ActionNode, reply='```repl\ndone("84721")\n```')
-    result = action.successor(ResultNode, result="84721")
-    root = QueryNode(
-        agent_id="root",
-        children=[
-            query.update(children=[action.id]),
-            action.update(children=[result.id]),
-            result,
-        ],
-    )
-
-    transcript = root.transcript("root.worker", include_system=False)
-
-    assert "--- query ---\nfind the code" in transcript
-    assert '--- assistant ---\n```repl\ndone("84721")\n```' in transcript
-    assert "--- result ---\n84721" in transcript
+    assert "[root] query" in session
+    assert "[root.c] query" in session
+    assert "[root.c] result" in session
 
 
-def test_node_plot_returns_plotly_figure():
+# ── plot kinds ───────────────────────────────────────────────────────
+
+
+def test_graph_plot_returns_plotly_figure():
     if find_spec("plotly") is None:
         return
+    agent = _agent()
+    graph = _run_full(agent, agent.start("say ok"))
 
-    fig = _sample_tree().plot(title="sample")
-
+    fig = graph.plot(title="sample")
     assert fig.layout.title.text.startswith("<b>sample</b>")
     assert len(fig.data) >= 2
 
 
-def test_node_plot_supports_static_formats():
-    root = _sample_tree()
+def test_graph_plot_supports_static_formats():
+    agent = _agent()
+    graph = _run_full(agent, agent.start("say ok"))
 
-    assert root.plot("tree").startswith("root [query]")
-    assert root.plot("mermaid").startswith("stateDiagram-v2")
-    assert root.plot("flowchart").startswith("flowchart TD")
-    assert root.plot("dot").startswith("digraph rlmflow")
-    assert 'root.search' in root.plot("d2")
+    assert graph.plot("tree").startswith("● root")
+    assert graph.plot("mermaid").startswith("stateDiagram-v2")
+    assert graph.plot("flowchart").startswith("flowchart TD")
+    assert graph.plot("dot").startswith("digraph rlmflow")
+    assert "root" in graph.plot("d2")
 
 
-def test_node_plot_supports_gantt_html():
-    root = _sample_tree()
-    html = root.plot("gantt", states=[root], title="sample gantt")
+def test_graph_plot_supports_gantt_html():
+    agent = _agent()
+    graph = _run_full(agent, agent.start("say ok"))
+    html = graph.plot("gantt", title="sample gantt")
 
     assert "<html>" in html
     assert "sample gantt" in html
 
 
-def test_viz_graph_events_are_step_local():
-    root_query = QueryNode(agent_id="root", query="parent")
-    root_action = root_query.successor(ActionNode, code="delegate")
-    child_query = QueryNode(agent_id="root.child", depth=1, query="child")
-    root_supervising = root_action.successor(
-        SupervisingNode,
-        code="delegate",
-        waiting_on=["root.child"],
-        children=[child_query],
-    )
-    child_action = child_query.successor(ActionNode, code="done")
-    child_result = child_action.successor(ResultNode, result="ok")
-    events = [
-        root_query.update(children=[root_action.id]),
-        root_action.update(children=[root_supervising.id]),
-        child_query.update(children=[child_action.id]),
-        root_supervising,
-        child_action.update(children=[child_result.id]),
-        child_result,
-    ]
-
-    graph = build_viz_graph(
-        states=[root_supervising],
-        events=events,
-        step=0,
-        mode="events",
-    )
-
-    assert [node.type for node in graph.payloads] == [
-        "query",
-        "action",
-        "query",
-        "supervising",
-    ]
-    assert "result" not in {node.type for node in graph.payloads}
-    assert ("next", "root", "root") in {
-        (edge.kind, graph.nodes_by_id[edge.source].agent_id, graph.nodes_by_id[edge.target].agent_id)
-        for edge in graph.edges
-    }
-    assert ("spawn", "root", "root.child") in {
-        (edge.kind, graph.nodes_by_id[edge.source].agent_id, graph.nodes_by_id[edge.target].agent_id)
-        for edge in graph.edges
-    }
+# ── trace persistence ────────────────────────────────────────────────
 
 
-def test_tree_prefers_workspace_event_tree(tmp_path):
-    workspace = Workspace.create(tmp_path / "workspace")
-    agent = RLMFlow(
-        StaticLLM('```repl\ndone("ok")\n```'),
-        workspace=workspace,
-        config=RLMConfig(max_iterations=2),
-    )
+def test_trace_persists_graph_snapshots(tmp_path):
+    agent = _agent()
+    graphs = [agent.start("say ok")]
+    while not graphs[-1].finished:
+        graphs.append(agent.step(graphs[-1]))
 
-    state = agent.start("say ok")
-    state = agent.step(state)
-    rendered = state.tree()
-
-    assert "root [query]" in rendered
-    assert "root [action]" in rendered
-    assert "root [result]" in rendered
-
-
-def test_node_tree_renders_node_lifecycle_not_agent_snapshot():
-    query = QueryNode(agent_id="root.worker", query="find")
-    action = query.successor(ActionNode, code="done")
-    result = action.successor(ResultNode, result="84721")
-    events = [
-        query.update(children=[action.id]),
-        action.update(children=[result.id]),
-        result,
-    ]
-
-    graph = build_viz_graph(events=events, mode="events")
-    text = node_tree(graph)
-
-    assert "worker [query]" in text
-    assert "next: worker [action]" in text
-    assert "next: worker [result]" in text
-
-
-def test_trace_can_persist_events_without_node_fields(tmp_path):
-    query = QueryNode(agent_id="root", query="q")
-    result = query.successor(ResultNode, result="ok")
-    path = save_trace([result], tmp_path / "trace", events=[query, result])
-
+    path = save_trace(graphs, tmp_path / "trace")
     trace = load_trace(path)
 
-    assert [node.type for node in trace.events] == ["query", "result"]
-    assert not hasattr(trace.states[0], "plot_history")
+    assert len(trace.graphs) == len(graphs)
+    assert trace.graphs[-1].result() == "ok"
+    assert isinstance(trace.graphs[0], Graph)
 
 
-def _sample_tree() -> QueryNode:
-    """root supervising 3 children: one result, one error, one nested supervisor."""
-    leaf_ok = ResultNode(agent_id="root.search.hit", depth=2, result="found it")
-    leaf_err = ErrorNode(agent_id="root.search.miss", depth=2, error="no_code_block")
-    nested = SupervisingNode(
-        agent_id="root.search",
-        depth=1,
-        code="...",
-        children=[leaf_ok, leaf_err],
-    )
-    sibling = ResultNode(agent_id="root.verify", depth=1, result="ok")
-    return QueryNode(agent_id="root", depth=0, children=[nested, sibling])
+# ── filters over states ──────────────────────────────────────────────
 
 
-def test_leaves_returns_every_node_with_no_children():
-    root = _sample_tree()
-    leaves = root.leaves()
-    assert {n.agent_id for n in leaves} == {
-        "root.search.hit",
-        "root.search.miss",
-        "root.verify",
-    }
+def _delegating_graph() -> Graph:
+    """A finished run with one ErrorNode (no_code_block) and one ResultNode."""
 
-
-def test_leaves_on_solo_node_returns_self():
-    solo = ResultNode(agent_id="root", result="ok")
-    assert solo.leaves() == [solo]
-
-
-def test_errors_finds_only_error_nodes():
-    root = _sample_tree()
-    errors = root.errors()
-    assert [n.agent_id for n in errors] == ["root.search.miss"]
-    assert all(n.type == "error" for n in errors)
-
-
-def test_results_finds_only_result_nodes():
-    root = _sample_tree()
-    results = root.results()
-    assert {n.agent_id for n in results} == {"root.search.hit", "root.verify"}
-    assert all(n.type == "result" for n in results)
-
-
-def test_where_filters_by_kwargs():
-    root = _sample_tree()
-    matches = root.where(type="result", depth=1)
-    assert [n.agent_id for n in matches] == ["root.verify"]
-
-
-def test_where_filters_by_predicate():
-    root = _sample_tree()
-    deep = root.where(lambda n: n.depth >= 2)
-    assert {n.agent_id for n in deep} == {"root.search.hit", "root.search.miss"}
-
-
-def test_where_combines_predicate_and_kwargs():
-    root = _sample_tree()
-    matches = root.where(lambda n: n.depth >= 1, type="result")
-    assert {n.agent_id for n in matches} == {"root.search.hit", "root.verify"}
-
-
-def test_where_kwargs_skip_nodes_missing_the_attribute():
-    root = _sample_tree()
-    by_error_kind = root.where(error="no_code_block")
-    assert [n.agent_id for n in by_error_kind] == ["root.search.miss"]
-
-
-def test_path_to_returns_root_to_node_chain():
-    root = _sample_tree()
-    path = root.path_to("root.search.hit")
-    assert [n.agent_id for n in path] == ["root", "root.search", "root.search.hit"]
-
-
-def test_path_to_returns_empty_when_not_found():
-    root = _sample_tree()
-    assert root.path_to("nope") == []
-
-
-def test_diff_finds_added_and_removed_nodes():
-    from rlmflow import ErrorNode, QueryNode, ResultNode
-
-    a = QueryNode(
-        agent_id="root",
-        children=[ResultNode(agent_id="root.x", result="ok")],
-    )
-    b = QueryNode(
-        agent_id="root",
-        id=a.id,
-        children=[
-            *a.child_nodes(),
-            ErrorNode(agent_id="root.y", error="boom"),
-        ],
-    )
-    diff = b.diff(a)
-    assert [n.agent_id for n in diff.added] == ["root.y"]
-    assert diff.removed == []
-
-    inverse = a.diff(b)
-    assert [n.agent_id for n in inverse.removed] == ["root.y"]
-    assert inverse.added == []
-
-
-def test_repr_html_wraps_tree_in_pre():
-    root = _sample_tree()
-    html = root._repr_html_()
-    assert "<pre" in html and "</pre>" in html
-    assert "root" in html
-    assert "&lt;" not in html or "[query]" in html
-
-
-def test_child_scope_lives_on_node_not_child_flow():
-    class ScriptedLLM(LLMClient):
+    class StumblingLLM(LLMClient):
         def __init__(self) -> None:
-            self.prompts: list[str] = []
+            self.calls = 0
 
-        def chat(self, messages, *args, **kwargs) -> str:
-            self.prompts.append(messages[-1]["content"])
+        def chat(self, messages, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                # No code block → engine records an ErrorNode.
+                return "I forgot the code block."
+            return '```repl\ndone("ok")\n```'
+
+    agent = RLMFlow(
+        StumblingLLM(),
+        runtime=LocalRuntime(),
+        config=RLMConfig(max_iterations=5, max_depth=0),
+    )
+    return _run_full(agent, agent.start("kick"))
+
+
+def test_graph_errors_finds_only_error_states():
+    graph = _delegating_graph()
+    errors = graph.nodes.errors()
+    assert errors
+    assert all(isinstance(e, ErrorNode) for e in errors)
+
+
+def test_graph_results_finds_only_result_states():
+    graph = _delegating_graph()
+    results = graph.nodes.results()
+    assert results
+    assert all(isinstance(e, ResultNode) for e in results)
+
+
+def test_graph_where_filters_by_predicate_and_kwargs():
+    graph = _delegating_graph()
+    actions = graph.nodes.where(type="action")
+    assert actions and all(e.type == "action" for e in actions)
+
+    on_root = graph.nodes.where(lambda e: e.agent_id == "root")
+    assert on_root and all(e.agent_id == "root" for e in on_root)
+
+
+def test_graph_indexing_returns_subgraph_rooted_at_agent():
+    graph = _delegating_graph()
+    sub = graph["root"]
+    assert sub.agent_id == "root"
+    assert isinstance(sub, type(graph))
+
+
+# ── model labels ─────────────────────────────────────────────────────
+
+
+def test_graph_model_label_combines_key_and_actual():
+    g = Graph(agent_id="root.fast", config={"model": "fast"}, model="gpt-5-mini")
+    assert g.model_label == "fast:gpt-5-mini"
+
+
+def test_graph_model_label_falls_back_to_key():
+    g = Graph(agent_id="root", config={"model": "default"})
+    assert g.model_label == "default"
+
+
+# ── child runtime + scope ────────────────────────────────────────────
+
+
+def test_child_agent_has_its_own_runtime_session():
+    class ScriptedLLM(LLMClient):
+        def chat(self, messages, *args, **kwargs):
             prompt = messages[-1]["content"].lower()
             if "child task" in prompt:
                 return '```repl\nprint(AGENT_ID, DEPTH)\ndone("child")\n```'
@@ -417,7 +327,7 @@ def test_child_scope_lives_on_node_not_child_flow():
                 "```repl\n"
                 'h = delegate("child", "child task", "")\n'
                 "results = yield wait(h)\n"
-                'done(results[0])\n'
+                "done(results[0])\n"
                 "```"
             )
 
@@ -426,25 +336,18 @@ def test_child_scope_lives_on_node_not_child_flow():
         runtime=LocalRuntime(),
         config=RLMConfig(max_depth=1, max_iterations=5),
     )
+    graph = _run_full(agent, agent.start("parent"))
 
-    node = agent.step(agent.start("parent task"))
-    assert isinstance(node.current(), SupervisingNode)
-    child = node.current().children[0]
-
-    assert child.agent_id == "root.child"
+    child = graph["root.child"]
     assert child.depth == 1
     assert child.runtime is not None
     assert child.runtime.id != "root"
-    assert not hasattr(agent, "child_engines")
-
-    node = agent.step(node)
-    assert isinstance(node.current().children[0].current(), ResultNode)
-    assert node.current().children[0].current().result == "child"
+    assert child.result() == "child"
 
 
-def test_delegate_can_pass_child_context_payload(tmp_path):
+def test_delegate_passes_child_context_payload(tmp_path):
     class ScriptedLLM(LLMClient):
-        def chat(self, messages, *args, **kwargs) -> str:
+        def chat(self, messages, *args, **kwargs):
             prompt = messages[-1]["content"].lower()
             if "child task" in prompt:
                 return '```repl\ndone(CONTEXT.read())\n```'
@@ -452,7 +355,7 @@ def test_delegate_can_pass_child_context_payload(tmp_path):
                 "```repl\n"
                 'h = delegate("child", "child task", "child payload")\n'
                 "results = yield wait(h)\n"
-                'done(results[0])\n'
+                "done(results[0])\n"
                 "```"
             )
 
@@ -462,14 +365,9 @@ def test_delegate_can_pass_child_context_payload(tmp_path):
         workspace=workspace,
         config=RLMConfig(max_depth=1, max_iterations=5),
     )
+    graph = _run_full(agent, agent.start("parent", context="root payload"))
 
-    node = agent.step(agent.start("parent task", context="root payload"))
-    node = agent.step(node)
-    node = agent.step(node)
-
-    assert isinstance(node.current(), ResultNode)
-    assert node.current().result == "child payload"
+    assert graph.result() == "child payload"
     assert (
-        workspace.context.read("context", agent_id="root.child")
-        == "child payload"
+        workspace.context.read("context", agent_id="root.child") == "child payload"
     )
