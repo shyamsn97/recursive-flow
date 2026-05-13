@@ -8,10 +8,11 @@ Mirrors the loop from https://github.com/karpathy/autoresearch:
     repeat
 
 The human authors `program.md` (the agent's operating manual) and a
-target directory holding `train.py` (mutable) and `prepare.py` (fixed).
-This script wires that directory into RLMFlow with two extra tools — a
-timeboxed experiment runner and a small `git` shell — so any RLMFlow
-agent (Anthropic / OpenAI) can drive the loop.
+source target directory holding `train.py` (mutable) and `prepare.py`
+(fixed). This script copies that target into the RLMFlow workspace as
+`target/`, gives children isolated copies under `trials/<name>/`, and
+wires in two extra tools — a timeboxed experiment runner and a small
+`git` shell — so any RLMFlow agent (Anthropic / OpenAI) can drive the loop.
 
 Children are a natural fit: each one tries an independent mutation
 (branch / commit / measure / report `val_bpb`) and the parent keeps the
@@ -30,6 +31,7 @@ import argparse
 import json
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,7 +40,7 @@ from rlmflow import RLMConfig, RLMFlow, Workspace
 from rlmflow.llm import AnthropicClient, OpenAIClient
 from rlmflow.prompts import DEFAULT_BUILDER
 from rlmflow.runtime.local import LocalRuntime
-from rlmflow.tools import tool
+from rlmflow.tools import FILE_TOOLS, tool
 
 
 METRIC_RE = re.compile(r"val_bpb\s*[:=]\s*([0-9]+\.?[0-9]*)", re.IGNORECASE)
@@ -47,149 +49,145 @@ METRIC_RE = re.compile(r"val_bpb\s*[:=]\s*([0-9]+\.?[0-9]*)", re.IGNORECASE)
 AUTORESEARCH_RULES = """\
 **You are running an autoresearch hill-climb on `train.py`.**
 
-- Read `program.md` first — it is the human's operating manual for this
-  research org. Follow whatever protocol it sets.
-- The mutable surface is `train.py`. `prepare.py` and the eval harness
-  are immutable.
-- Every experiment runs through `run_experiment(budget_s=...)` which
-  executes `python train.py` with a wall-clock timeout and returns
+- The live experiment is inside the RLMFlow workspace, not the original
+  `--target` directory:
+  - `target/` is the parent working copy.
+  - `trials/<name>/` are isolated child working copies.
+- File tools are workspace-rooted. Read/edit `target/train.py` in the
+  parent, and `trials/<name>/train.py` inside child tasks.
+- Every experiment runs through `run_experiment(path=..., budget_s=...)`
+  which executes `python train.py` in that path and returns
   `{"val_bpb", "returncode", "stdout_tail", "stderr_tail", "elapsed_s"}`.
   Lower `val_bpb` is better. **If `returncode != 0`, ALWAYS read
   `stderr_tail` — that's where the real error is. Never report a failed
   run without quoting `stderr_tail`.**
-- Use `git_op("status" | "diff" | "commit -am '<msg>'" | "reset --hard")`
-  for memory: commit improvements, reset failures.
-- When you delegate a child to try a mutation, give it the contract
-  "edit train.py, run an experiment, return JSON
-  `{\"val_bpb\": float, \"diff\": str, \"notes\": str}`". The parent
-  keeps the best diff and discards the rest.
+- Use `git_op("status" | "diff" | "commit -am '<msg>'" | "reset --hard", path=...)`
+  for memory inside each working copy.
+- For each delegated child:
+  1. create a trial with `trial = create_trial("<short_name>")`;
+  2. pass the exact `trial` path in the query;
+  3. tell the child to edit only `{trial}/train.py`;
+  4. tell it to run `run_experiment(path=trial, budget_s=...)`;
+  5. require JSON: `{"success": bool, "val_bpb": float|null,
+     "train_py": str, "diff": str, "notes": str, "stderr_tail": str}`.
+- Do not put executable driver code in `CONTEXT`; context is data, not code.
+- The parent applies only the best child by copying its returned `train_py`
+  into `target/train.py` and committing in `target/`.
 - Never invent numbers — every reported val_bpb comes from
   `run_experiment` output.
 """
 
 
-def _safe_join(root: Path, path: str) -> Path:
-    """Resolve ``path`` against ``root``; reject anything that escapes.
-
-    Tools rebound here are meant to operate strictly inside the target
-    repo. ``..`` traversal or absolute paths outside ``root`` raise.
-    """
+def _safe_workspace_path(root: Path, path: str) -> Path:
+    """Resolve a relative workspace path and reject escapes."""
     candidate = (root / path).resolve()
     try:
         candidate.relative_to(root)
     except ValueError as exc:
-        raise PermissionError(f"path escapes target dir: {path}") from exc
+        raise PermissionError(f"path escapes workspace: {path}") from exc
     return candidate
 
 
-def _make_file_tools(target: Path):
-    """File tools rebound to ``target`` (the repo the agent is mutating).
+def _ignore_generated(_: str, names: list[str]) -> set[str]:
+    ignored = {
+        ".git",
+        ".DS_Store",
+        "__pycache__",
+        ".ipynb_checkpoints",
+        "runs",
+        "workspace",
+        "workspaces",
+    }
+    return {name for name in names if name in ignored}
 
-    The default ``FILE_TOOLS`` resolve relative paths against the
-    runtime's *workspace* (the rlmflow run dir), which is the right
-    sandbox for most examples but the wrong cwd for autoresearch — the
-    agent needs to read/edit ``train.py`` in the **target repo**, not in
-    its own state dir. These mirrors keep the same names so prompts and
-    examples don't change.
+
+def _copy_target_tree(source: Path, dest: Path) -> None:
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(source, dest, symlinks=True, ignore=_ignore_generated)
+
+
+def _init_experiment_repo(path: Path) -> None:
+    """Create a tiny local git journal for the mutable experiment copy.
+
+    Only `train.py` is guaranteed tracked. Data and cache files stay present
+    but untracked, so `git reset --hard` is fast and won't delete datasets.
     """
-    target = target.resolve()
-
-    @tool("Read a file from the target repo and return its contents.")
-    def read_file(path: str) -> str:
-        return _safe_join(target, path).read_text()
-
-    @tool("Write content to a file in the target repo, creating directories if needed.")
-    def write_file(path: str, content: str) -> str:
-        p = _safe_join(target, path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        return f"Wrote {len(content)} bytes to {path}"
-
-    @tool("Append content to a file in the target repo.")
-    def append_file(path: str, content: str) -> str:
-        p = _safe_join(target, path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a") as f:
-            f.write(content)
-        return f"Appended {len(content)} bytes to {path}"
-
-    @tool("Find-and-replace edits in a target file. Each edit is (old, new).")
-    def edit_file(path: str, *edits: tuple[str, str]) -> str:
-        p = _safe_join(target, path)
-        text = p.read_text()
-        count = 0
-        for old, new in edits:
-            if old in text:
-                text = text.replace(old, new, 1)
-                count += 1
-        p.write_text(text)
-        return f"Applied {count}/{len(edits)} edits to {path}"
-
-    @tool("List files and directories in the target repo.")
-    def ls(path: str = ".") -> list[str]:
-        p = _safe_join(target, path)
-        if p.is_file():
-            return [p.name]
-        return sorted(entry.name for entry in p.iterdir())
-
-    @tool("Read lines start:end (0-indexed, exclusive) from a target file.")
-    def read_lines(path: str, start: int, end: int) -> str:
-        return "\n".join(_safe_join(target, path).read_text().splitlines()[start:end])
-
-    @tool("Count the number of lines in a target file.")
-    def line_count(path: str) -> int:
-        return len(_safe_join(target, path).read_text().splitlines())
-
-    @tool("List files in the target repo matching a glob pattern.")
-    def list_files(pattern: str = "*.py") -> list[str]:
-        return sorted(str(p.relative_to(target)) for p in target.glob(pattern))
-
-    @tool("Search target files for lines matching a regex pattern.")
-    def grep(pattern: str, path: str = ".", *, max_results: int = 50) -> str:
-        regex = re.compile(pattern)
-        root = _safe_join(target, path)
-        matches: list[str] = []
-        files = [root] if root.is_file() else sorted(root.rglob("*"))
-        for f in files:
-            if not f.is_file():
-                continue
-            try:
-                for i, line in enumerate(f.read_text().splitlines(), 1):
-                    if regex.search(line):
-                        matches.append(f"{f.relative_to(target)}:{i}: {line}")
-                        if len(matches) >= max_results:
-                            return "\n".join(matches)
-            except (UnicodeDecodeError, PermissionError):
-                continue
-        return "\n".join(matches)
-
-    return [
-        read_file,
-        write_file,
-        append_file,
-        edit_file,
-        ls,
-        read_lines,
-        line_count,
-        list_files,
-        grep,
+    subprocess.run(["git", "init"], cwd=path, capture_output=True, text=True)
+    tracked = [
+        name
+        for name in ("train.py", "program.md", "prepare.py")
+        if (path / name).exists()
     ]
+    if tracked:
+        subprocess.run(["git", "add", *tracked], cwd=path, capture_output=True, text=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=rlmflow",
+                "-c",
+                "user.email=rlmflow@example.invalid",
+                "commit",
+                "-m",
+                "baseline",
+            ],
+            cwd=path,
+            capture_output=True,
+            text=True,
+        )
 
 
-def _make_run_experiment(target: Path):
+def prepare_workspace_target(source: Path, workspace_root: Path) -> Path:
+    """Copy the user's target into the RLMFlow workspace as `target/`."""
+    target_copy = workspace_root / "target"
+    trials = workspace_root / "trials"
+    _copy_target_tree(source, target_copy)
+    if trials.exists():
+        shutil.rmtree(trials)
+    trials.mkdir(parents=True, exist_ok=True)
+    _init_experiment_repo(target_copy)
+    return target_copy
+
+
+def _make_create_trial(workspace_root: Path):
     @tool(
-        "Run `python train.py` from the target directory under a wall-clock "
+        "Create an isolated trial copy under `trials/<name>` from a workspace "
+        "source path (default `target`). Returns the relative trial path. "
+        "Use this before delegating a child experiment."
+    )
+    def create_trial(name: str, source: str = "target") -> str:
+        slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._-")
+        if not slug:
+            raise ValueError("trial name must contain at least one safe character")
+        src = _safe_workspace_path(workspace_root, source)
+        if not src.is_dir():
+            raise FileNotFoundError(f"trial source is not a directory: {source}")
+        rel = f"trials/{slug}"
+        dst = _safe_workspace_path(workspace_root, rel)
+        _copy_target_tree(src, dst)
+        _init_experiment_repo(dst)
+        return rel
+
+    return create_trial
+
+
+def _make_run_experiment(workspace_root: Path):
+    @tool(
+        "Run `python train.py` from a workspace path under a wall-clock "
         "timeout. Returns JSON: {val_bpb, elapsed_s, returncode, stdout_tail, "
         "stderr_tail}. val_bpb is parsed from stdout (`val_bpb: <float>`); "
+        "`path` defaults to `target`; children should pass their `trials/<name>` path. "
         "missing if the run crashed or didn't print it. **If returncode != 0, "
         "the real error is almost always in `stderr_tail`, not `stdout_tail`.**"
     )
-    def run_experiment(budget_s: int = 300) -> str:
+    def run_experiment(path: str = "target", budget_s: int = 300) -> str:
         budget_s = max(10, min(int(budget_s), 3600))
+        workdir = _safe_workspace_path(workspace_root, path)
         try:
             proc = subprocess.run(
                 [sys.executable, "train.py"],
-                cwd=str(target),
+                cwd=str(workdir),
                 capture_output=True,
                 text=True,
                 timeout=budget_s,
@@ -216,16 +214,25 @@ def _make_run_experiment(target: Path):
     return run_experiment
 
 
-def _make_git_op(target: Path):
+def _make_git_op(workspace_root: Path):
     @tool(
-        "Run `git <args>` inside the target directory. Returns JSON: "
+        "Run `git <args>` inside a workspace path. Returns JSON: "
         "{returncode, stdout, stderr}. Use this for status / diff / commit / "
-        "reset / log to manage the experiment journal."
+        "reset / log to manage the experiment journal. `path` defaults to `target`; "
+        "children should pass their `trials/<name>` path."
     )
-    def git_op(args: str) -> str:
+    def git_op(args: str, path: str = "target") -> str:
+        workdir = _safe_workspace_path(workspace_root, path)
         proc = subprocess.run(
-            ["git", *shlex.split(args)],
-            cwd=str(target),
+            [
+                "git",
+                "-c",
+                "user.name=rlmflow",
+                "-c",
+                "user.email=rlmflow@example.invalid",
+                *shlex.split(args),
+            ],
+            cwd=str(workdir),
             capture_output=True,
             text=True,
         )
@@ -302,12 +309,14 @@ def main() -> None:
         raise SystemExit(f"autoresearch: {target}/program.md not found")
 
     workspace = Workspace.create(args.workspace)
+    workspace_target = prepare_workspace_target(target, workspace.root)
     runtime = LocalRuntime(workspace=workspace)
     runtime.register_tools(
         [
-            *_make_file_tools(target),
-            _make_run_experiment(target),
-            _make_git_op(target),
+            *FILE_TOOLS,
+            _make_create_trial(workspace.root),
+            _make_run_experiment(workspace.root),
+            _make_git_op(workspace.root),
         ]
     )
 
@@ -333,12 +342,18 @@ def main() -> None:
         prompt_builder=build_prompt_builder(),
     )
 
-    program_md = (target / "program.md").read_text()
+    program_md = (workspace_target / "program.md").read_text()
     query = (
-        "Run an autoresearch hill-climb on `train.py` in the target repo "
-        f"(absolute path: {target}). Target ~{args.branches} parallel mutations per "
-        "round, keep the best diff via `git_op('commit -am ...')`, discard the rest "
-        "via `git_op('reset --hard')`. Iterate until `done(best_val_bpb)`.\n\n"
+        "Run an autoresearch hill-climb inside this RLMFlow workspace. "
+        f"The original source target was copied from {target} into `target/`; "
+        "`target/train.py` is the parent working copy. "
+        f"Target ~{args.branches} parallel mutations per round. For each child, "
+        "first call `create_trial('<short_name>')`, pass the returned "
+        "`trials/<short_name>` path to the child, and have the child edit only "
+        "that trial's `train.py` and run `run_experiment(path=trial_path, ...)`. "
+        "The parent keeps the best child by copying its returned `train_py` into "
+        "`target/train.py` and committing with `git_op(..., path='target')`. "
+        "Discard the rest. Iterate until `done(best_val_bpb)`.\n\n"
         "----- program.md -----\n"
         f"{program_md}"
     )
@@ -352,6 +367,8 @@ def main() -> None:
     print("\n" + "=" * 80)
     print(result or "(no result)")
     print(f"\nWorkspace saved to {workspace.root}")
+    print(f"Parent working copy: {workspace.root / 'target'}")
+    print(f"Trial copies: {workspace.root / 'trials'}")
 
     if not args.no_viewer:
         try:

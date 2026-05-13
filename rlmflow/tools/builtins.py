@@ -22,15 +22,19 @@ if TYPE_CHECKING:
     from rlmflow.rlm import RLMFlow
 
 
+class DoneSignal(Exception):
+    """Internal control-flow signal raised by ``done()`` to stop execution."""
+
+
 def make_done(env: dict[str, Any]):
-    """Closure that records the agent's final answer into ``env``."""
+    """Closure that records the final answer and stops the current block."""
 
     @tool("Mark the current agent as finished.")
     def done(message: str) -> str:
         if env.get("DONE_RESULT") is None:
             env["DONE_RESULT"] = str(message).strip()
             print(f"[done] {env['DONE_RESULT']}")
-        return env["DONE_RESULT"]
+        raise DoneSignal(env["DONE_RESULT"])
 
     return done
 
@@ -74,4 +78,4 @@ def make_delegate(flow: "RLMFlow", env: dict[str, Any]):
     return delegate
 
 
-__all__ = ["make_delegate", "make_done", "make_wait"]
+__all__ = ["DoneSignal", "make_delegate", "make_done", "make_wait"]

@@ -22,6 +22,7 @@ from rlmflow.graph import WaitRequest
 from rlmflow.runtime.repl import deserialize, serialize
 from rlmflow.tools import get_tool_metadata
 from rlmflow.tools import tool as tool_decorator
+from rlmflow.tools.builtins import DoneSignal
 
 DEFAULT_MODULES: list[str] = [
     "re",
@@ -130,6 +131,8 @@ class Runtime(ABC):
             try:
                 with self._in_workspace():
                     result = fn(*args, **kwargs)
+            except DoneSignal:
+                self.send({"done": True})
             except Exception as exc:
                 self.send({"error": f"{type(exc).__name__}: {exc}"})
             else:

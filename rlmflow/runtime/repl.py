@@ -32,6 +32,7 @@ from contextlib import contextmanager
 from typing import Any, TextIO
 
 from rlmflow.graph import ChildHandle, WaitRequest
+from rlmflow.tools.builtins import DoneSignal
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -146,6 +147,10 @@ class REPL:
         _capture.buf = self.buf
         try:
             yield
+        except DoneSignal:
+            # ``done()`` is terminal control flow, not an execution error.
+            # The engine reads DONE_RESULT from runtime.env after this returns.
+            pass
         except Exception as exc:
             self.buf.write(f"\n{type(exc).__name__}: {exc}")
         finally:
@@ -262,6 +267,8 @@ class REPL:
             protocol_out.flush()
             line = sys.stdin.readline()
             resp = json.loads(line)
+            if resp.get("done"):
+                raise DoneSignal()
             if "error" in resp:
                 raise RuntimeError(resp["error"])
             return deserialize(resp["value"])

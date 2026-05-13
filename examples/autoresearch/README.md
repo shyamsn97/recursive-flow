@@ -1,10 +1,11 @@
 # Autoresearch
 
-A Karpathy-style autoresearch hill-climb wired through RLMFlow. The agent
-mutates a `train.py` in a target directory, runs it under a wall-clock
-budget, parses `val_bpb` from stdout, and uses git to commit the wins and
-reset the losses. Children fan out parallel mutations; the parent keeps
-the best diff.
+A Karpathy-style autoresearch hill-climb wired through RLMFlow. The driver
+copies a source target into the RLMFlow workspace as `target/`, the agent
+mutates `target/train.py`, runs it under a wall-clock budget, parses
+`val_bpb` from stdout, and uses git to commit the wins and reset the losses.
+Children fan out into isolated `trials/<name>/` copies; the parent keeps the
+best result.
 
 ```
 edit train.py  →  python train.py (budget_s)  →  read val_bpb  →
@@ -16,8 +17,9 @@ repeat
 This is a faithful port of [karpathy/autoresearch](https://github.com/karpathy/autoresearch)
 to the RLMFlow recursion / multi-agent shape: instead of one agent in a
 single context window, the lead delegates each mutation to a fresh child
-that does the edit + run + measure in isolation. See [Karpathy's tweet](https://x.com/karpathy/status/1953240953555730808)
-for the original motivation.
+that does the edit + run + measure in an isolated workspace trial. See
+[Karpathy's tweet](https://x.com/karpathy/status/1953240953555730808) for
+the original motivation.
 
 ```
 examples/autoresearch/
@@ -40,17 +42,28 @@ that must contain:
   free-form.
 - `program.md` — the human's operating manual for the agent (its
   "skill"). The driver reads this and folds it into the root query.
-- a `git` repo (the driver uses `git commit`/`reset` for memory).
+The target does not need to be a git repo. The driver creates small local git
+journals for the workspace copies so `git reset --hard` and `git commit -am`
+work without touching your source target.
 
-The driver then registers two tools alongside the standard file tools:
+At startup, the driver copies `--target` into `--workspace/target` and creates
+trial copies under `--workspace/trials`. The original `--target` is treated as
+a source template and is not mutated by the agent.
+
+The driver then registers three tools alongside the standard workspace-rooted
+file tools:
 
 | Tool | What it does |
 |---|---|
-| `run_experiment(budget_s=300)` | Runs `python train.py` in the target dir under a wall-clock timeout. Returns JSON: `{val_bpb, elapsed_s, returncode, stdout_tail, stderr_tail}`. `val_bpb` is regex-parsed from stdout (`val_bpb: <float>`); missing if the run crashed or didn't print it. |
-| `git_op(args)` | Runs `git <args>` in the target dir. Used for `status`, `diff`, `commit -am '<msg>'`, `reset --hard`, `log --oneline`. |
+| `create_trial(name, source="target")` | Copies a workspace source dir into `trials/<name>`, initializes a small git journal there, and returns the relative trial path. |
+| `run_experiment(path="target", budget_s=300)` | Runs `python train.py` in `path` under a wall-clock timeout. Returns JSON: `{val_bpb, elapsed_s, returncode, stdout_tail, stderr_tail}`. `val_bpb` is regex-parsed from stdout (`val_bpb: <float>`); missing if the run crashed or didn't print it. |
+| `git_op(args, path="target")` | Runs `git <args>` in `path`. Used for `status`, `diff`, `commit -am '<msg>'`, `reset --hard`, `log --oneline`. |
 
-The agent reads `program.md`, makes a hypothesis, edits `train.py`,
-calls `run_experiment`, decides to keep or revert, and repeats.
+The parent agent reads `target/program.md`, makes a hypothesis, creates trial
+copies for children, and asks each child to edit only its own
+`trials/<name>/train.py`. Children return JSON including `val_bpb` and the
+full mutated `train_py`; the parent copies the best one back into
+`target/train.py`, commits it in `target/`, and repeats.
 
 ### Driver flags
 
@@ -60,7 +73,7 @@ python examples/autoresearch/autoresearch.py [flags]
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--target PATH` | required | Directory containing `train.py` + `program.md` + a git repo. |
+| `--target PATH` | required | Source directory containing `train.py` + `program.md`. It is copied into `--workspace/target`. |
 | `--budget-s N` | `300` | Wall-clock seconds per `run_experiment` call. |
 | `--rounds N` | `6` | Outer LLM-turn budget for the parent agent. |
 | `--branches N` | `4` | Hint to the parent for how many parallel children to fan out per round. |
@@ -114,14 +127,11 @@ export OPENAI_API_KEY="..."        # for the driving agent
 cd examples/autoresearch/tinker
 python prepare.py
 
-# 4. Init a git repo so the driver can commit/reset
-git init && git add . && git commit -m "tinker autoresearch baseline"
-
-# 5. Smoke-test that the contract holds
+# 4. Smoke-test that the contract holds
 python train.py
 # should end with: val_bpb: <float>
 
-# 6. Run the autoresearch driver
+# 5. Run the autoresearch driver
 cd /Users/shyam/Code/rlmkit
 python examples/autoresearch/autoresearch.py \
     --target examples/autoresearch/tinker \
@@ -147,9 +157,9 @@ works. Three things to do:
    measure success, anti-patterns to avoid, the loop the agent should
    follow. Look at [`tinker/program.md`](tinker/program.md) for a
    working example.
-3. **`git init`** the target directory. The driver uses `git commit` /
-   `reset --hard` as the agent's memory; without a repo it can't
-   keep wins.
+3. **Keep mutable state in `train.py`.** The driver creates git journals
+   inside workspace copies and tracks `train.py` by default. Data files and
+   caches can be present but do not need to be tracked.
 
 That's it — point `--target` at your directory and run.
 

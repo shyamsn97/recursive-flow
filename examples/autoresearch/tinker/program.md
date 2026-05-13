@@ -22,10 +22,10 @@ The harness is fixed:
 
 ## Loop
 
-1. Read `train.py`. Form a hypothesis: "X should help because Y."
-2. Edit `train.py`.
-3. `run_experiment(budget_s=300)` — runs `python train.py` under a wall-clock timeout. Returns `{val_bpb, returncode, stdout_tail, stderr_tail}`.
-4. If `val_bpb` improved over the last commit: `git_op("commit -am '<hypothesis>: <delta>'")`. If it got worse or crashed: `git_op("reset --hard")`.
+1. Read the relevant copy's `train.py` (`target/train.py` for the parent, `trials/<name>/train.py` for a child). Form a hypothesis: "X should help because Y."
+2. Edit only that copy's `train.py`.
+3. `run_experiment(path=..., budget_s=300)` — runs `python train.py` in that copy under a wall-clock timeout. Returns `{val_bpb, returncode, stdout_tail, stderr_tail}`.
+4. If `val_bpb` improved over the last commit: `git_op("commit -am '<hypothesis>: <delta>'", path=...)`. If it got worse or crashed: `git_op("reset --hard", path=...)`.
 5. Repeat. Keep a brief journal of what worked.
 
 ## Rules
@@ -34,7 +34,7 @@ The harness is fixed:
 - **Verify the run finished.** If `returncode != 0` or stdout is missing `val_bpb:`, treat the experiment as failed and reset.
 - **On failure, read `stderr_tail`.** When `returncode != 0` the actual error message is in `stderr_tail`, not `stdout_tail`. Always quote `stderr_tail` in your journal / `done()` message — otherwise debugging is impossible.
 - **Tinker calls cost money.** Keep `MAX_STEPS` honest — don't crank it to 10× to brute-force a win.
-- **Parallel children:** if asked to fan out, each child branches in its own checkout (don't fight over `train.py` in one working tree). Use the parent to merge.
+- **Parallel children:** each child works in its own workspace trial copy under `trials/<name>/` (don't fight over one `train.py`). The parent merges the best returned `train_py` into `target/train.py`.
 - **Commit messages = your journal.** Future-you will read `git_op("log --oneline")` to figure out what's been tried.
 
 ## Sanity checklist before delegating
