@@ -13,7 +13,6 @@ markdown artifact with:
 Usage:
     python examples/blog_needle_graph.py
     python examples/blog_needle_graph.py --output docs/generated/needle_graph.md
-    python examples/blog_needle_graph.py --trace-output docs/generated/needle_trace
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ from rlmflow.llm import LLMClient, LLMUsage
 from rlmflow.rlm import RLMConfig, RLMFlow
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.utils.export import to_mermaid_flowchart
-from rlmflow.utils.trace import save_trace
 from rlmflow.utils.viewer import graph_plot_html
 from rlmflow.workspace import Workspace
 
@@ -577,12 +575,6 @@ def main() -> None:
         help="Interactive HTML stepper to write.",
     )
     parser.add_argument(
-        "--trace-output",
-        type=Path,
-        default=Path("docs/generated/needle_trace"),
-        help="Trace directory/file to write with every graph snapshot.",
-    )
-    parser.add_argument(
         "--workspace",
         type=Path,
         default=None,
@@ -606,17 +598,9 @@ def main() -> None:
     args.output.write_text(markdown, encoding="utf-8")
     args.html_output.parent.mkdir(parents=True, exist_ok=True)
     args.html_output.write_text(html, encoding="utf-8")
-    trace_path = save_trace(graphs, args.trace_output, metadata={"answer": ANSWER})
-    if args.workspace is not None:
-        save_trace(
-            graphs,
-            args.workspace / "trace",
-            metadata={"answer": ANSWER},
-        )
 
     print(f"Wrote {args.output}")
     print(f"Wrote {args.html_output}")
-    print(f"Wrote {trace_path}")
     print(f"Final answer: {latest_results(graphs).get('root')}")
 
 

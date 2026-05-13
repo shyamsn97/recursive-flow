@@ -14,13 +14,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from rlmflow.graph import Graph
 from rlmflow.llm import AnthropicClient, OpenAIClient
 from rlmflow.rlm import RLMConfig, RLMFlow
 from rlmflow.runtime.docker import DockerRuntime
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.tools import FILE_TOOLS
-from rlmflow.utils.trace import save_trace
 from rlmflow.workspace import Workspace
 
 
@@ -82,10 +80,6 @@ def main():
         },
     )
 
-    ckpt = workspace.checkpoint_path
-    trace_dir = workspace.trace_dir
-    trace: list[Graph] = []
-
     print("Agent ready. Type a query, or 'quit' to exit.\n")
     while True:
         try:
@@ -97,25 +91,20 @@ def main():
             break
 
         graph = agent.start(query)
-        trace.append(graph)
 
         if args.no_viz:
             while not graph.finished:
                 graph = agent.step(graph)
-                trace.append(graph)
         else:
             from rlmflow.utils.viz import live_view
             with live_view() as view:
                 view(graph)
                 while not graph.finished:
                     graph = agent.step(graph)
-                    trace.append(graph)
                     view(graph)
 
         print(f"\n{graph.result() or '(no result)'}\n")
-        graph.save(ckpt)
-        save_trace(trace, trace_dir)
-        print(f"Saved checkpoint → {ckpt}  |  trace → {trace_dir}/")
+        print(f"Workspace saved to {workspace.root}")
 
 
 if __name__ == "__main__":

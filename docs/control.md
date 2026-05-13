@@ -1,7 +1,7 @@
 # Control
 
 `step(graph) -> graph'` is the core transition. `Graph` snapshots are
-immutable, so checkpoint, rewind, and forking are explicit graph
+immutable, so stepping, rewind, and forking are explicit graph/workspace
 operations.
 
 ## Step loop
@@ -16,17 +16,18 @@ while not graph.finished:
 `agent.chat(messages)` is the `LLMClient` interface — same loop, last
 user message becomes the query.
 
-## Checkpoint / resume
+## Workspace Resume
 
 ```python
-from rlmflow import Graph
+from rlmflow import Workspace
 
-graph.save("ckpt.json")
-
-graph = Graph.load("ckpt.json")
+workspace = Workspace.open_path("runs/deep_research")
+graph = workspace.load_graph()
 while not graph.finished:
     graph = agent.step(graph)
 ```
+
+The workspace session is the saved-run state.
 
 ## Rewind
 
@@ -64,6 +65,12 @@ while not graph.finished:
 The engine reads from `graph.states`, appends new states through the
 session, and produces a fresh snapshot on every `step`. There is no
 in-memory node graph to keep in sync with disk.
+
+For the runtime contract around `yield wait(...)` and `ResumeNode`, see
+[`resume_semantics.md`](resume_semantics.md).
+
+For the proposed user-facing model around workspaces, loading, and viewers, see
+[`workspace_viewer_model.md`](workspace_viewer_model.md).
 
 ## Custom runtime
 
@@ -106,11 +113,12 @@ Or subclass `RLMFlow` and override `build_system_prompt`, `build_messages`,
 
 ## Session And Context
 
-`Workspace.session` stores the per-agent state log and the graph
-manifest:
+`Workspace.session` stores the per-agent state log and the graph manifest.
+The convenience `workspace.load_graph()` is the normal way to reopen the
+current snapshot:
 
 ```python
-graph = workspace.session.load_graph()
+graph = workspace.load_graph()
 sub = graph["root.boid_js"]
 print(sub.transcript())
 ```
@@ -181,10 +189,10 @@ mode; inlining sidesteps it entirely.
 ## Walkthroughs
 
 - [`examples/showcase.py`](../examples/showcase.py) — runnable
-  walkthrough of stepping, checkpointing, session reads, time travel,
+  walkthrough of stepping, workspace persistence, session reads, time travel,
   and gym-style stepping.
 - [`examples/notebooks/coding_agent.ipynb`](../examples/notebooks/coding_agent.ipynb)
-  — live LLM run that produces a real trace.
+  — live LLM run that produces a real workspace.
 - [`examples/notebooks/node_basics.ipynb`](../examples/notebooks/node_basics.ipynb)
   — querying the `Graph` API on the deterministic fixture.
 - [`examples/notebooks/viz_walkthrough.ipynb`](../examples/notebooks/viz_walkthrough.ipynb)

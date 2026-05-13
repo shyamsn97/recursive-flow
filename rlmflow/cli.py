@@ -8,10 +8,9 @@ Three sub-commands, all operating on paths — no agent construction.
 
 ``<path>`` may be:
 
-* a ``trace.json`` (or directory containing one) — a list of saved
-  :class:`Graph` snapshots, viewable step-by-step.
 * a workspace directory (``graph.json`` + ``session/`` + ``context/``)
   — the single live :class:`Graph` reloaded from the session.
+* a standalone ``Graph`` JSON snapshot.
 
 ``--format`` accepts text formats (``mermaid`` / ``dot`` / ``d2`` /
 ``tree`` / ``report-md`` / ...) and binary/viz formats (``html`` for a
@@ -22,7 +21,6 @@ one image per snapshot under ``--out`` directory).
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,35 +29,13 @@ from rlmflow.graph import Graph
 
 
 def _load(path: Path) -> list[Graph]:
-    """Return a list of graph snapshots for ``path`` (trace or workspace)."""
-    if path.is_dir():
-        if (path / "trace.json").exists():
-            return _load(path / "trace.json")
-        if (path / "graph.json").exists():
-            from rlmflow.workspace.session import FileSession
-
-            return [FileSession(path).load_graph()]
-        raise SystemExit(
-            f"rlmflow: directory {path} contains neither trace.json nor graph.json"
-        )
-
-    if not path.is_file():
-        raise SystemExit(f"rlmflow: no such file or directory: {path}")
+    """Return graph snapshots for a workspace or graph dump."""
+    from rlmflow.utils.viewer import resolve_graphs
 
     try:
-        head = json.loads(path.read_text())
-    except json.JSONDecodeError as e:
-        raise SystemExit(f"rlmflow: {path} is not valid JSON: {e}") from None
-
-    if isinstance(head, dict) and "steps" in head:
-        from rlmflow.utils.trace import load_trace
-
-        return load_trace(path).graphs
-    if isinstance(head, dict) and "agent_id" in head and "states" in head:
-        return [Graph.from_dict(head)]
-    raise SystemExit(
-        f"rlmflow: {path} doesn't look like a trace, graph dump, or workspace dir"
-    )
+        return resolve_graphs(path)
+    except (TypeError, ValueError) as exc:
+        raise SystemExit(f"rlmflow: {exc}") from None
 
 
 # ── commands ─────────────────────────────────────────────────────────
@@ -159,7 +135,7 @@ def _render_viz(
         path = save_html(
             graphs,
             args.out,
-            title=args.title or "rlmflow trace",
+            title=args.title or "rlmflow run",
             element_mult=element_mult,
             marker_mult=args.marker_mult,
             text_mult=args.text_mult,
@@ -171,7 +147,7 @@ def _render_viz(
     if fmt == "image":
         if not args.out:
             raise SystemExit(
-                "rlmflow: --format image requires --out PATH (e.g. trace.png)"
+                "rlmflow: --format image requires --out PATH (e.g. graph.png)"
             )
         path = save_image(
             topo,
@@ -240,9 +216,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     v = sub.add_parser(
         "view",
-        help="open the Gradio viewer on a trace or workspace",
+        help="open the Gradio viewer on a workspace",
     )
-    v.add_argument("path", help="trace directory, trace.json, or workspace dir")
+    v.add_argument("path", help="workspace directory")
     v.add_argument("--share", action="store_true", help="create a public URL")
     v.add_argument("--port", type=int, default=None, help="server port")
     v.add_argument("--host", default=None, help="server host / bind address")
@@ -250,9 +226,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser(
         "render",
-        help="render a trace or workspace in any of several formats",
+        help="render a workspace in any of several formats",
     )
-    r.add_argument("path", help="trace directory, trace.json, or workspace dir")
+    r.add_argument("path", help="workspace directory")
     r.add_argument(
         "--format",
         "-f",

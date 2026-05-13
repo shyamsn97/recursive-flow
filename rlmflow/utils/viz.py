@@ -18,31 +18,6 @@ from rlmflow.graph import ErrorNode, Graph
 # ── live tree ────────────────────────────────────────────────────────
 
 
-def _node_label(graph: Graph):
-    from rich.text import Text
-
-    current = graph.current()
-    if current is None:
-        return Text("(empty)", style="dim")
-    active = not graph.finished
-    info = Text()
-    info.append("• " if active else "ok ", style="magenta" if active else "green")
-    info.append(graph.root_agent_id, style="bold")
-    info.append(f" [{current.type}]", style="magenta" if active else "green")
-    info.append(f" {{{graph.model_label}}}", style="cyan")
-    result = getattr(current, "result", None)
-    if result:
-        info.append(f" -> {str(result)[:80].replace(chr(10), ' ')}", style="dim green")
-    return info
-
-
-def _build_tree(graph: Graph):
-    from rich.tree import Tree
-
-    root = Tree(_node_label(graph), guide_style="dim")
-    return root
-
-
 class LiveView:
     """Live-updating Rich tree of an RLMFlow run."""
 

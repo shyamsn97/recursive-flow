@@ -221,12 +221,9 @@ def main():
             f"action items, and themes. The file is too long to read at once — "
             f"chunk it and delegate."
         )
-        graphs = [graph]
-
         if args.no_viz:
             while not graph.finished:
                 graph = agent.step(graph)
-                graphs.append(graph)
                 print(graph.tree())
         else:
             from rlmflow.utils.viz import live
@@ -238,10 +235,7 @@ def main():
         print(f"SUMMARY ({len(result_text.splitlines())} lines):\n")
         print(result_text or "(no result)")
 
-        from rlmflow.utils.trace import save_trace
-        trace_dir = Path(__file__).parent / "runs" / "summarizer" / "trace"
-        save_trace(graphs, trace_dir, metadata={"lines": actual_lines})
-        print(f"\nTrace saved to {trace_dir}/")
+        print(f"\nWorkspace saved to {workspace}")
 
 
 if __name__ == "__main__":

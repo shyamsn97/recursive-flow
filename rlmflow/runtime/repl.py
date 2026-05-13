@@ -10,6 +10,7 @@ Commands:
   - ``{"cmd": "inject",              "name": N, "value": expr}``       bind ``N = eval(expr)``
   - ``{"cmd": "inject_proxy",        "name": N}``                      bind ``N`` as proxy fn
   - ``{"cmd": "inject_object_proxy", "name": N, "methods": [...]}``    bind ``N`` with each method as a proxy fn
+  - ``{"cmd": "read",                "name": N}``                      returns ``{"value": namespace.get(N)}``
   - ``{"cmd": "run",                 "code": src}``                    exec; may suspend
   - ``{"cmd": "resume",              "value": v}``                     resume suspended gen
 
@@ -157,9 +158,9 @@ class REPL:
             exec(code, self.namespace)
         return strip_ansi(self.buf.getvalue().strip())
 
-    def _wrap_generator(self, code: str, tree: ast.Module):
-        """Wrap ``code`` in a generator fn; ``global`` every assigned name so
-        variables persist in ``self.namespace`` across yields.
+    def _wrap_generator(self, tree: ast.Module):
+        """Wrap parsed ``tree`` in a generator fn; ``global`` every assigned
+        name so variables persist in ``self.namespace`` across yields.
 
         ``from X import *`` is illegal inside functions, so any such
         statements are hoisted out and exec'd at module level first;
@@ -221,7 +222,7 @@ class REPL:
                 exec(code, self.namespace)
             return False, strip_ansi(self.buf.getvalue().strip())
 
-        fn = self._wrap_generator(code, tree)
+        fn = self._wrap_generator(tree)
         self.gen = fn()
         return self.advance()
 
@@ -283,6 +284,8 @@ class REPL:
             return self.format_result(*self.start(msg["code"]))
         if cmd == "resume":
             return self.format_result(*self.resume(send_value=msg.get("value")))
+        if cmd == "read":
+            return {"value": serialize(self.namespace.get(msg["name"]))}
         if cmd == "inject":
             self.namespace[msg["name"]] = eval(msg["value"], self.namespace)
         elif cmd == "inject_proxy":

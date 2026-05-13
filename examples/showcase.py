@@ -3,10 +3,10 @@
 This walks through the pieces that matter after the engine refactor:
 
 1. Step-by-step execution returning :class:`~rlmflow.graph.Graph` snapshots.
-2. Checkpoint round-trip with ``Graph.save`` / ``Graph.load``.
-3. Session persistence through ``workspace.session.load_graph()``.
-4. Time travel by keeping a list of graph snapshots.
-5. Trace summary helpers (``graph.tree()``, ``graph.tokens()``).
+2. Workspace persistence through ``workspace.load_graph()``.
+3. Session layout and latest-state inspection.
+4. Optional in-process history by keeping graph snapshots.
+5. Graph summary helpers (``graph.tree()``, ``graph.tokens()``).
 6. Gym-style stepping with a scalar reward.
 
 Usage:
@@ -113,18 +113,16 @@ def main() -> None:
         final = history[-1]
         print(f"\n{GREEN}Result:{RESET} {final.result()}")
 
-        banner("2. Checkpoint round-trip")
-        ckpt = workspace.checkpoint_path
-        final.save(ckpt)
-        loaded = Graph.load(ckpt)
+        banner("2. Workspace persistence")
+        loaded = workspace.load_graph()
         print(
-            f"Loaded graph with {len(loaded.agents)} agents, "
-            f"{len(loaded.nodes)} states"
+            f"Loaded graph with {len(loaded.agents)} agents and "
+            f"{len(loaded.nodes)} states from {workspace.root}"
         )
         print(loaded.tree())
 
-        banner("3. Session persistence")
-        reloaded = workspace.session.load_graph()
+        banner("3. Session layout")
+        reloaded = workspace.load_graph()
         print(
             f"Persisted {len(reloaded.nodes)} states across "
             f"{len(reloaded.agents)} agents in {workspace.root / 'session'}"
@@ -144,7 +142,7 @@ def main() -> None:
                 f"agents={len(snapshot.agents)}"
             )
 
-        banner("5. Trace summary")
+        banner("5. Graph summary")
         inp, out = final.tokens()
         print(f"Agents:  {len(final.agents)}")
         print(f"States:  {len(final.nodes)}")

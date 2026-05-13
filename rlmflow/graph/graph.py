@@ -29,17 +29,7 @@ from typing import Any, Callable, NamedTuple
 
 from pydantic import BaseModel
 
-from rlmflow.graph.node import (
-    ActionNode,
-    ErrorNode,
-    Node,
-    ObservationNode,
-    QueryNode,
-    ResultNode,
-    ResumeNode,
-    SupervisingNode,
-    parse_node_obj,
-)
+from rlmflow.graph.node import Node, parse_node_obj
 
 _MISSING = object()
 
@@ -52,10 +42,6 @@ class WorkspaceRef(BaseModel):
 
     root: str
     branch_id: str = "main"
-
-    @property
-    def context_dir(self) -> Path:
-        return Path(self.root) / "context"
 
 
 class RuntimeRef(BaseModel):
@@ -255,7 +241,13 @@ class Graph:
         i, o = self.tokens()
         return i + o
 
-    # ── editing helpers (mutate in place; return self for chaining) ──
+    # ── editing helpers (mutate in place) ────────────────────────────
+
+    def _index_of(self, node_id: str) -> int:
+        for i, s in enumerate(self.states):
+            if s.id == node_id:
+                return i
+        raise KeyError(node_id)
 
     def add_state(self, node: Node) -> Node:
         """Append a state to this agent's trajectory."""
@@ -263,30 +255,20 @@ class Graph:
         return node
 
     def replace_state(self, node_id: str, new_node: Node) -> Node:
-        """Swap a state on **this** agent by id. Raises ``KeyError`` if absent.
-
-        For subtree-wide replacement, use ``graph.nodes.replace(id, node)``.
-        """
-        for i, s in enumerate(self.states):
-            if s.id == node_id:
-                self.states[i] = new_node
-                return new_node
-        raise KeyError(node_id)
+        """Swap a state on **this** agent by id. For subtree-wide replacement,
+        use ``graph.nodes.replace(id, node)``."""
+        self.states[self._index_of(node_id)] = new_node
+        return new_node
 
     def update_state(self, node_id: str, **changes: Any) -> Node:
         """Replace a state on this agent with a copy carrying ``changes``."""
-        for i, s in enumerate(self.states):
-            if s.id == node_id:
-                self.states[i] = s.update(**changes)
-                return self.states[i]
-        raise KeyError(node_id)
+        i = self._index_of(node_id)
+        self.states[i] = self.states[i].update(**changes)
+        return self.states[i]
 
     def remove_state(self, node_id: str) -> Node:
-        """Drop a state by id and return it. Raises ``KeyError`` if absent."""
-        for i, s in enumerate(self.states):
-            if s.id == node_id:
-                return self.states.pop(i)
-        raise KeyError(node_id)
+        """Drop a state by id and return it."""
+        return self.states.pop(self._index_of(node_id))
 
     def pop_state(self) -> Node:
         """Drop and return the most recent state of this agent."""
@@ -302,9 +284,7 @@ class Graph:
         return child
 
     def remove_child(self, agent_id: str) -> Graph:
-        """Drop a sub-agent and return it. Raises ``KeyError`` if absent."""
-        if agent_id not in self.children:
-            raise KeyError(agent_id)
+        """Drop a sub-agent and return it."""
         return self.children.pop(agent_id)
 
     def update(self, **fields: Any) -> Graph:
@@ -324,7 +304,9 @@ class Graph:
     # ── rendering ────────────────────────────────────────────────────
 
     def tree(self) -> str:
-        return _render_tree(self)
+        from rlmflow.utils.viewer import graph_tree
+
+        return graph_tree(self)
 
     def session(self, *, include_system: bool = False) -> str:
         from rlmflow.utils.viewer import graph_session
@@ -498,33 +480,31 @@ class NodesView:
     def find(self, node_id: str) -> Node | None:
         return self._g.find(node_id)
 
+    def _locate(self, node_id: str) -> tuple[Graph, int]:
+        for g in self._g.walk():
+            for i, s in enumerate(g.states):
+                if s.id == node_id:
+                    return g, i
+        raise KeyError(node_id)
+
     # ── mutations across the subtree ─────────────────────────────────
 
     def replace(self, node_id: str, new_node: Node) -> Node:
         """Find a node anywhere in the subtree and swap it in place."""
-        for g in self._g.walk():
-            for i, s in enumerate(g.states):
-                if s.id == node_id:
-                    g.states[i] = new_node
-                    return new_node
-        raise KeyError(node_id)
+        g, i = self._locate(node_id)
+        g.states[i] = new_node
+        return new_node
 
     def update(self, node_id: str, **changes: Any) -> Node:
         """Apply ``changes`` to the node with ``node_id`` (anywhere in subtree)."""
-        for g in self._g.walk():
-            for i, s in enumerate(g.states):
-                if s.id == node_id:
-                    g.states[i] = s.update(**changes)
-                    return g.states[i]
-        raise KeyError(node_id)
+        g, i = self._locate(node_id)
+        g.states[i] = g.states[i].update(**changes)
+        return g.states[i]
 
     def remove(self, node_id: str) -> Node:
         """Drop a node from the subtree by id and return it."""
-        for g in self._g.walk():
-            for i, s in enumerate(g.states):
-                if s.id == node_id:
-                    return g.states.pop(i)
-        raise KeyError(node_id)
+        g, i = self._locate(node_id)
+        return g.states.pop(i)
 
     # ── filters ──────────────────────────────────────────────────────
 
@@ -537,25 +517,25 @@ class NodesView:
         return _filter(self, predicate, filters)
 
     def queries(self) -> list[Node]:
-        return [n for n in self if isinstance(n, QueryNode)]
+        return self.where(type="query")
 
     def actions(self) -> list[Node]:
-        return [n for n in self if isinstance(n, ActionNode)]
+        return self.where(type="action")
 
     def observations(self) -> list[Node]:
-        return [n for n in self if isinstance(n, ObservationNode)]
+        return self.where(type="observation")
 
     def supervising(self) -> list[Node]:
-        return [n for n in self if isinstance(n, SupervisingNode)]
+        return self.where(type="supervising")
 
     def resumes(self) -> list[Node]:
-        return [n for n in self if isinstance(n, ResumeNode)]
+        return self.where(type="resume")
 
     def results(self) -> list[Node]:
-        return [n for n in self if isinstance(n, ResultNode)]
+        return self.where(type="result")
 
     def errors(self) -> list[Node]:
-        return [n for n in self if isinstance(n, ErrorNode)]
+        return self.where(type="error")
 
 
 class AgentsView(Mapping[str, Graph]):
@@ -638,73 +618,6 @@ def _filter(items, predicate, filters):
         return all(getattr(x, k, _MISSING) == v for k, v in filters.items())
 
     return [x for x in items if matches(x)]
-
-
-# ── tree rendering ──────────────────────────────────────────────────
-
-
-def _render_tree(graph: Graph) -> str:
-    lines: list[str] = []
-
-    def walk(g: Graph, indent: str) -> None:
-        head = f"{indent}● {g.agent_id} ({g.model_label})"
-        if g.query:
-            head += f" — {_short(g.query, 60)}"
-        lines.append(head)
-
-        # Decide where each child attaches visually. Prefer the supervising
-        # state whose ``waiting_on`` lists the child — that's the lifecycle
-        # state during which the child actually runs, so the children block
-        # belongs *under* it. Fall back to ``parent_node_id`` (the action
-        # that physically spawned it) when no supervising state is waiting
-        # on the child (e.g. mid-run, before the wait was committed).
-        state_ids = {s.id for s in g.states}
-        sup_for_agent: dict[str, str] = {}
-        for s in g.states:
-            if isinstance(s, SupervisingNode):
-                for aid in s.waiting_on:
-                    sup_for_agent[aid] = s.id
-
-        attach_at: dict[str, list[Graph]] = {}
-        unplaced: list[Graph] = []
-        for child in g.children.values():
-            key = sup_for_agent.get(child.agent_id) or (
-                child.parent_node_id if child.parent_node_id in state_ids else None
-            )
-            if key:
-                attach_at.setdefault(key, []).append(child)
-            else:
-                unplaced.append(child)
-
-        for s in g.states:
-            lines.append(f"{indent}  - [{s.seq:>2}] {_label(s)}")
-            for child in attach_at.get(s.id, []):
-                walk(child, indent + "    ")
-        for child in unplaced:
-            walk(child, indent + "    ")
-
-    walk(graph, "")
-    return "\n".join(lines)
-
-
-def _label(s: Node) -> str:
-    t = s.type
-    if isinstance(s, SupervisingNode) and s.waiting_on:
-        return f"{t} waiting_on={s.waiting_on}"
-    if isinstance(s, ResultNode) and s.result:
-        return f"{t} -> {_short(s.result, 60)}"
-    if isinstance(s, ErrorNode):
-        return f"{t} ({s.error or 'error'})"
-    if isinstance(s, ActionNode) and s.code:
-        return f"{t} code={_short(s.code, 40)}"
-    if isinstance(s, ObservationNode) and s.content:
-        return f"{t} {_short(s.content, 60)}"
-    return t
-
-
-def _short(text: str, n: int) -> str:
-    t = " ".join(text.split())
-    return t if len(t) <= n else t[: n - 1] + "…"
 
 
 __all__ = [

@@ -11,7 +11,7 @@ holds no graph state — the session is the source of truth.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -28,7 +28,6 @@ from rlmflow.graph import (
     ResumeNode,
     RuntimeRef,
     SupervisingNode,
-    WaitRequest,
 )
 from rlmflow.llm import LLMClient, LLMUsage
 from rlmflow.pool import CallablePool, Pool, SequentialPool, ThreadPool
@@ -50,7 +49,7 @@ from rlmflow.prompts.messages import (
     TRUNCATION_SUMMARY,
 )
 from rlmflow.runtime import Runtime
-from rlmflow.tools import tool
+from rlmflow.tools.builtins import make_delegate, make_done, make_wait
 from rlmflow.utils import OrphanedDelegatesError, check_yield_errors, find_code_blocks
 from rlmflow.workspace import (
     Context,
@@ -80,15 +79,28 @@ class RLMConfig:
     max_budget: int | None = None
 
 
-@dataclass
-class ActiveStep:
-    """Action-local state captured by done/delegate/wait tool calls."""
+def append_node(session: Session, graph: Graph, node: Node) -> Node:
+    """Append ``node`` to ``graph``'s trajectory with the next ``seq``.
 
-    agent_id: str
-    parent_node_id: str
-    parent: Graph
-    done_result: str | None = None
-    delegated: dict[str, Graph] = field(default_factory=dict)
+    Single source of truth for sequence numbering. Call sites never set
+    ``agent_id`` or ``seq`` themselves — pass a node with the payload fields
+    populated and this helper assigns identity.
+    """
+    next_seq = (graph.states[-1].seq + 1) if graph.states else 0
+    fields_dict = node.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
+    fixed = node.__class__(agent_id=graph.agent_id, seq=next_seq, **fields_dict)
+    session.write_state(fixed)
+    return fixed
+
+
+def unique_child_id(parent_aid: str, name: str, existing: set[str]) -> str:
+    base = f"{parent_aid}.{name}"
+    if base not in existing:
+        return base
+    i = 1
+    while f"{base}_{i}" in existing:
+        i += 1
+    return f"{base}_{i}"
 
 
 def create_pool(config: RLMConfig, pool: Pool | Callable | None = None) -> Pool:
@@ -240,12 +252,13 @@ class RLMFlow(LLMClient):
             runtime=RuntimeRef(id=ROOT_RUNTIME_ID),
         )
         self.session.write_agent(root)
-        first_state = QueryNode(
-            agent_id=agent_id,
-            seq=0,
-            content=FIRST_ACTION.format(query=query, context_hint=context_hint),
+        append_node(
+            self.session,
+            root,
+            QueryNode(
+                content=FIRST_ACTION.format(query=query, context_hint=context_hint)
+            ),
         )
-        self.session.write_state(first_state)
         return self.session.load_graph()
 
     def run(self, query: str | None = None, **kwargs) -> str:
@@ -265,14 +278,13 @@ class RLMFlow(LLMClient):
         )
         return self.run(query)
 
-    def step(self, graph: Graph, *, use_cache: bool = True) -> Graph:
+    def step(self, graph: Graph) -> Graph:
         """Advance the run by one synchronized batch.
 
         All currently-runnable agents are stepped (in parallel if a
         :class:`Pool` is configured). Returns a freshly-loaded
         :class:`Graph` snapshot.
         """
-        del use_cache
         runnable = self.node_scheduler.runnable_agents(graph)
         if not runnable:
             return graph
@@ -303,7 +315,8 @@ class RLMFlow(LLMClient):
 
         over = self._budget_exceeded(full)
         if over is not None:
-            self._record_state(
+            append_node(
+                self.session,
                 graph,
                 ResultNode(result=f"[budget exceeded: {over} tokens]"),
             )
@@ -331,7 +344,7 @@ class RLMFlow(LLMClient):
         terminate = iteration >= max_iter or graph.agent_id in self._terminate_requested
 
         action_or_error = self._reply_to(graph, last, force_final=terminate)
-        action_state = self._record_state(graph, action_or_error)
+        action_state = append_node(self.session, graph, action_or_error)
         if isinstance(action_state, ErrorNode):
             return
         # Run the freshly-recorded ActionNode immediately so the agent
@@ -373,26 +386,29 @@ class RLMFlow(LLMClient):
     def _step_action(self, graph: Graph, action: ActionNode) -> None:
         err = check_yield_errors(action.code)
         if err:
-            self._record_state(
+            append_node(
+                self.session,
                 graph,
-                ErrorNode(
-                    code=action.code,
-                    content=err,
-                    error="invalid_yield",
-                ),
+                ErrorNode(code=action.code, content=err, error="invalid_yield"),
             )
             return
 
-        with self.active_step(graph, action) as step:
-            suspended, raw = self._run_code(graph, action.code)
+        runtime = self.inject_env(graph, action)
+        suspended, raw = runtime.start_code(action.code)
+        raw = self._truncate(raw)
+        env = runtime.env
+        delegated = list(env.get("DELEGATED") or [])
+        done_result = env.get("DONE_RESULT")
 
-        spawned = list(step.delegated)
-        if spawned and not suspended and step.done_result is None:
-            msg = ORPHANED_DELEGATES.format(names=", ".join(spawned))
+        if delegated and not suspended and done_result is None:
+            msg = ORPHANED_DELEGATES.format(names=", ".join(delegated))
             base = raw if isinstance(raw, str) else ""
-            output = self._execute_code(graph, f"raise OrphanedDelegatesError({msg!r})")
+            output = self._truncate(
+                runtime.execute(f"raise OrphanedDelegatesError({msg!r})")
+            )
             content = (base + "\n\n" + output).strip()
-            self._record_state(
+            append_node(
+                self.session,
                 graph,
                 ErrorNode(
                     code=action.code,
@@ -402,26 +418,28 @@ class RLMFlow(LLMClient):
             )
             return
 
-        if step.done_result is not None:
-            self._record_state(graph, ResultNode(result=step.done_result.strip()))
+        if done_result is not None:
+            append_node(self.session, graph, ResultNode(result=done_result.strip()))
             return
 
         if suspended:
             request, pre_output = raw
-            sup = SupervisingNode(
-                agent_id=graph.agent_id,
-                seq=action.seq + 1,
-                code=action.code,
-                output=pre_output,
-                waiting_on=list(request.agent_ids),
+            append_node(
+                self.session,
+                graph,
+                SupervisingNode(
+                    code=action.code,
+                    output=pre_output,
+                    waiting_on=list(request.agent_ids),
+                ),
             )
-            self._record_state(graph, sup)
             return
 
         output = raw if isinstance(raw, str) else ""
         if not output.strip():
             output = "(no output)"
-        self._record_state(
+        append_node(
+            self.session,
             graph,
             ObservationNode(
                 code=action.code,
@@ -444,57 +462,48 @@ class RLMFlow(LLMClient):
             for child in children
         ]
 
-        with self.active_step(graph, last) as step:
-            suspended, raw = self._resume_code(graph, results)
-
-        if step.done_result is not None:
-            self._record_state(graph, ResultNode(result=step.done_result.strip()))
-            return
+        runtime = self.inject_env(graph, last)
+        suspended, raw = runtime.resume_code(results)
+        raw = self._truncate(raw)
+        env = runtime.env
+        done_result = env.get("DONE_RESULT")
 
         if suspended:
-            request, pre_output = raw
-            sup = SupervisingNode(
-                agent_id=graph.agent_id,
-                seq=last.seq + 1,
-                output=pre_output,
-                waiting_on=list(request.agent_ids),
-            )
-            self._record_state(graph, sup)
-            return
+            request, output = raw
+        else:
+            output = raw if isinstance(raw, str) else ""
+        if not output.strip():
+            output = "(no output)"
 
-        output = raw if isinstance(raw, str) else ""
-        by_aid = {child.agent_id: child for child in children}
-        child_summary = "\n".join(
-            f"  {aid}: "
-            f"{by_aid[aid].result() if aid in by_aid else '(missing)' or '(no result)'}"
-            for aid in last.waiting_on
-        )
-        content = (
-            f"Children finished:\n{child_summary}\n\n"
-            f"Generator resumed. Output:\n{output or '(no output)'}"
-        )
-        self._record_state(
+        append_node(
+            self.session,
             graph,
             ResumeNode(
+                code=last.code,
                 output=output,
-                content=content,
+                content=self.format_exec_output(output),
                 resumed_from=list(last.waiting_on),
             ),
         )
+        graph = self.session.load_graph().agents[graph.agent_id]
+
+        if done_result is not None:
+            append_node(self.session, graph, ResultNode(result=done_result.strip()))
+            return
+
+        if suspended:
+            append_node(
+                self.session,
+                graph,
+                SupervisingNode(
+                    code=last.code,
+                    output=output,
+                    waiting_on=list(request.agent_ids),
+                ),
+            )
+            return
 
     # ── recording helpers ────────────────────────────────────────────
-
-    def _record_state(self, graph: Graph, state: Node) -> Node:
-        trajectory = graph.states
-        next_seq = (trajectory[-1].seq + 1) if trajectory else 0
-        fields = state.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
-        fixed = state.__class__(
-            agent_id=graph.agent_id,
-            seq=next_seq,
-            **fields,
-        )
-        self.session.write_state(fixed)
-        return fixed
 
     def _iteration_count(self, graph: Graph) -> int:
         return sum(isinstance(s, ActionNode) for s in graph.states)
@@ -534,46 +543,45 @@ class RLMFlow(LLMClient):
         self.register_tools(runtime)
         return RuntimeRef(id=session_id)
 
-    def prepare_runtime(self, graph: Graph, last_state: Node) -> Runtime:
+    def inject_env(self, graph: Graph, node: Node) -> Runtime:
+        """Reset per-execution state on the runtime and inject env-style vars
+        into the REPL namespace before running an action or resume.
+
+        ``runtime.env`` is the host-side dict shared with ``done`` / ``delegate``
+        closures (cleared + seeded each call). The same per-agent facts plus
+        ``CONTEXT`` / ``SESSION`` are also pushed into the REPL namespace so
+        user code can reference them by bare name.
+        """
         runtime = self.runtime_for(graph.runtime)
-        runtime.inject("OrphanedDelegatesError", OrphanedDelegatesError)
-        runtime.inject("AGENT_ID", graph.agent_id)
-        runtime.inject("DEPTH", str(graph.depth))
-        runtime.inject("MAX_DEPTH", str(self.config.max_depth))
-        runtime.inject(
-            "SESSION",
-            SessionVariable(
+        facts = {
+            "AGENT_ID": graph.agent_id,
+            "DEPTH": graph.depth,
+            "MAX_DEPTH": self.config.max_depth,
+            "PARENT_NODE_ID": node.id,
+        }
+        runtime.env.clear()
+        runtime.env.update({**facts, "DONE_RESULT": None, "DELEGATED": []})
+
+        repl_vars = {
+            **facts,
+            "OrphanedDelegatesError": OrphanedDelegatesError,
+            "SESSION": SessionVariable(
                 self.session,
                 agent_id=graph.agent_id,
-                node_id=last_state.id,
+                node_id=node.id,
                 branch_id=graph.branch_id,
             ),
-        )
-        runtime.inject(
-            "CONTEXT", ContextVariable(self.context, agent_id=graph.agent_id)
-        )
+            "CONTEXT": ContextVariable(self.context, agent_id=graph.agent_id),
+        }
+        for name, value in repl_vars.items():
+            runtime.inject(name, value)
         return runtime
 
-    def _run_code(self, graph: Graph, code: str) -> tuple[bool, object]:
-        runtime = self.runtime_for(graph.runtime)
-        suspended, raw = runtime.start_code(code)
+    def _truncate(self, raw: object) -> object:
+        """Cap REPL output at ``max_output_length`` chars; passthrough non-strings."""
         if isinstance(raw, str) and len(raw) > self.config.max_output_length:
-            raw = raw[: self.config.max_output_length] + "\n...<truncated>"
-        return suspended, raw
-
-    def _resume_code(self, graph: Graph, results: list[str]) -> tuple[bool, object]:
-        runtime = self.runtime_for(graph.runtime)
-        suspended, raw = runtime.resume_code(results)
-        if isinstance(raw, str) and len(raw) > self.config.max_output_length:
-            raw = raw[: self.config.max_output_length] + "\n...<truncated>"
-        return suspended, raw
-
-    def _execute_code(self, graph: Graph, code: str) -> str:
-        runtime = self.runtime_for(graph.runtime)
-        output = runtime.execute(code)
-        if len(output) > self.config.max_output_length:
-            return output[: self.config.max_output_length] + "\n...<truncated>"
-        return output
+            return raw[: self.config.max_output_length] + "\n...<truncated>"
+        return raw
 
     # ── LLM / messages ───────────────────────────────────────────────
 
@@ -598,7 +606,7 @@ class RLMFlow(LLMClient):
 
         msgs: list[dict[str, str]] = []
         for state in graph.states:
-            if isinstance(state, ResultNode):
+            if isinstance(state, (ResultNode, SupervisingNode)):
                 continue
             if isinstance(state, ObservationNode):
                 msgs.append({"role": "user", "content": state.content})
@@ -607,7 +615,6 @@ class RLMFlow(LLMClient):
 
         cap = self.config.max_messages
         if cap and len(msgs) > cap:
-            hint = TRUNCATION_SESSION_HINT if self.workspace else ""
             msgs = [
                 {
                     "role": "user",
@@ -615,7 +622,7 @@ class RLMFlow(LLMClient):
                         query=graph.query,
                         total=len(msgs),
                         cap=cap,
-                        session_hint=hint,
+                        session_hint=TRUNCATION_SESSION_HINT,
                     ),
                 }
             ] + msgs[-cap:]
@@ -743,76 +750,25 @@ class RLMFlow(LLMClient):
         )
         return {**parent.config, "max_iterations": child_iters}
 
-    # ── tools / step scope ───────────────────────────────────────────
+    # ── core tools ───────────────────────────────────────────────────
 
     def register_tools(self, runtime: Runtime | None = None) -> None:
+        """Bind ``done`` / ``wait`` / ``delegate`` closures to ``runtime.env``.
+
+        Closures live in :mod:`rlmflow.tools.builtins` and capture the
+        same ``env`` dict the engine reads back after each execution
+        (so ``DONE_RESULT`` / ``DELEGATED`` round-trip cleanly).
+        """
         runtime = runtime or self.runtime
         runtime.inject("OrphanedDelegatesError", OrphanedDelegatesError)
-        runtime.register_tool(self.done, core=True)
-        runtime.register_tool(self.delegate, core=True)
-        runtime.register_tool(self.wait, core=True)
+        runtime.register_tool(make_done(runtime.env), core=True)
+        runtime.register_tool(make_wait(), core=True)
+        runtime.register_tool(make_delegate(self, runtime.env), core=True)
 
-    def active_step(self, graph: Graph, action: ActionNode):
-        flow = self
-
-        class ActiveStepScope:
-            def __enter__(self) -> ActiveStep:
-                step = ActiveStep(
-                    agent_id=graph.agent_id,
-                    parent_node_id=action.id,
-                    parent=graph,
-                )
-                runtime = flow.prepare_runtime(graph, action)
-                flow.bind_step_tools(runtime, step)
-                return step
-
-            def __exit__(self, exc_type, exc, tb) -> None:
-                return None
-
-        return ActiveStepScope()
-
-    def bind_step_tools(self, runtime: Runtime, step: ActiveStep) -> None:
-        def done(message: str) -> str:
-            return self.done_for_step(step, message)
-
-        def delegate(
-            name: str,
-            query: str,
-            context: str,
-            *,
-            max_iterations: int | None = None,
-            model: str = "default",
-        ) -> ChildHandle | str:
-            return self.delegate_for_step(
-                step,
-                name,
-                query,
-                context,
-                max_iterations=max_iterations,
-                model=model,
-            )
-
-        def wait(*handles: ChildHandle) -> WaitRequest:
-            return self.wait_for_step(step, *handles)
-
-        runtime.inject("done", done)
-        runtime.inject("delegate", delegate)
-        runtime.inject("wait", wait)
-
-    @tool("Mark the current agent as finished.")
-    def done(self, message: str) -> str:
-        raise RuntimeError("done() is bound to the active runtime step")
-
-    def done_for_step(self, step: ActiveStep, message: str) -> str:
-        if step.done_result is not None:
-            return step.done_result
-        step.done_result = message.strip()
-        print(f"[done] {step.done_result}")
-        return step.done_result
-
-    @tool("Delegate a subtask to a named child agent.")
-    def delegate(
+    def spawn_child(
         self,
+        parent_agent_id: str,
+        parent_node_id: str,
         name: str,
         query: str,
         context: str,
@@ -820,26 +776,23 @@ class RLMFlow(LLMClient):
         max_iterations: int | None = None,
         model: str = "default",
     ) -> ChildHandle | str:
-        raise RuntimeError("delegate() is bound to the active runtime step")
+        """Spawn a child agent under ``parent_agent_id`` and return its handle.
 
-    def delegate_for_step(
-        self,
-        step: ActiveStep,
-        name: str,
-        query: str,
-        context: str,
-        *,
-        max_iterations: int | None = None,
-        model: str = "default",
-    ) -> ChildHandle | str:
-        parent = step.parent
+        Public, overridable seam: subclass :class:`RLMFlow` and override this
+        method to customize how delegation creates child agents. The default
+        creates a child :class:`Graph`, allocates a new runtime session,
+        writes the initial :class:`QueryNode`, and returns a
+        :class:`ChildHandle`. Returns a refusal string instead of a handle if
+        the child cannot be created (max depth reached, unknown model, …).
+        """
+        parent = self.session.load_graph().agents[parent_agent_id]
         if parent.depth >= self.config.max_depth:
             return f"[refused: max depth {self.config.max_depth}] Do this directly."
         if model not in self.llm_clients:
             keys = ", ".join(sorted(self.llm_clients))
             return f"[error: unknown model {model!r}. available: {keys}]"
 
-        child_aid = self.unique_child_id(parent.agent_id, name, step.delegated)
+        child_aid = unique_child_id(parent_agent_id, name, set(parent.children))
         self.context.write("context", context, agent_id=child_aid)
         runtime_ref = self.create_runtime_session(
             self.runtime_for(parent.runtime), agent_id=child_aid
@@ -863,40 +816,17 @@ class RLMFlow(LLMClient):
             runtime=runtime_ref,
             model=None,
             parent_agent_id=parent.agent_id,
-            parent_node_id=step.parent_node_id,
+            parent_node_id=parent_node_id,
         )
         self.session.write_agent(child_graph)
-
-        first_state = QueryNode(
-            agent_id=child_aid,
-            seq=0,
-            content=FIRST_ACTION.format(query=query, context_hint=context_hint),
+        append_node(
+            self.session,
+            child_graph,
+            QueryNode(
+                content=FIRST_ACTION.format(query=query, context_hint=context_hint)
+            ),
         )
-        self.session.write_state(first_state)
-        step.delegated[child_aid] = child_graph
         return ChildHandle(child_aid)
-
-    @tool("Wait for delegated children. Must be called with `yield`.")
-    def wait(self, *handles: ChildHandle) -> WaitRequest:
-        raise RuntimeError("wait() is bound to the active runtime step")
-
-    def wait_for_step(self, step: ActiveStep, *handles: ChildHandle) -> WaitRequest:
-        del step
-        return WaitRequest(agent_ids=[handle.agent_id for handle in handles])
-
-    def unique_child_id(
-        self,
-        parent_aid: str,
-        name: str,
-        delegated: dict[str, Graph],
-    ) -> str:
-        base = f"{parent_aid}.{name}"
-        if base not in delegated:
-            return base
-        i = 1
-        while f"{base}_{i}" in delegated:
-            i += 1
-        return f"{base}_{i}"
 
 
 __all__ = ["NodeScheduler", "RLMConfig", "RLMFlow"]

@@ -19,7 +19,6 @@ import string
 import tempfile
 from pathlib import Path
 
-from rlmflow.graph import Graph
 from rlmflow.llm import AnthropicClient, OpenAIClient
 from rlmflow.rlm import RLMConfig, RLMFlow
 from rlmflow.runtime.docker import DockerRuntime
@@ -134,10 +133,8 @@ def main():
     )
 
     if args.no_viz:
-        graphs: list[Graph] = [graph]
         while not graph.finished:
             graph = agent.step(graph)
-            graphs.append(graph)
             print(graph.tree())
     else:
         from rlmflow.utils.viz import live
@@ -148,14 +145,11 @@ def main():
     print(f"Actual answer:  {answer}")
     print(f"Correct:        {answer in graph.result()}")
 
-    from rlmflow.utils.trace import save_trace
-    trace_dir = Path(__file__).parent / "runs" / "needle_haystack" / "trace"
-    save_trace(graphs, trace_dir, metadata={"answer": answer})
-    print(f"Trace saved to {trace_dir}/")
+    print(f"Workspace saved to {workspace}")
 
     if args.viewer:
         from rlmflow.utils.viewer import open_viewer
-        open_viewer(graphs)
+        open_viewer(workspace)
 
 
 if __name__ == "__main__":

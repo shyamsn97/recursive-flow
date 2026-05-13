@@ -15,9 +15,9 @@ pip install rlmflow
 
 **rlmflow** turns [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) into inspectable execution graphs. It's a Python library for writing RLM agents where every query, action, observation, delegation, wait, resume, and result is a typed, immutable Pydantic state, and a run is the `Graph` of those states plus the agents and edges that connect them.
 
-The whole engine is one transition: `step(graph) → graph'`. The trace and the execution are the same data structure — there is no separate "tracing mode" to enable — so the same run renders as a Rich live tree, a Mermaid diagram, a Gantt swimlane, or a Gradio step-through viewer, all from one-line projections of the graph.
+The whole engine is one transition: `step(graph) → graph'`. The graph and the execution are the same data structure — there is no separate "tracing mode" to enable — so the same run renders as a Rich live tree, a Mermaid diagram, a Gantt swimlane, or a Gradio viewer, all from one-line projections of the workspace graph.
 
-That graph allows you to **inspect** each subagent, **replay** from a checkpoint, **fork** from any agent, and **resume** from a saved snapshot. We'll walk through those moves on a real coding-agent run shipped with the repo.
+That graph allows you to **inspect** each subagent, **reopen** a workspace, **fork** from any agent, and **resume** from saved session state. We'll walk through those moves on a real coding-agent run shipped with the repo.
 
 ## Introduction
 
@@ -580,7 +580,7 @@ can `root` resume and verify the final code.
 
 That is the step-by-step execution. You can pause after any
 state, inspect exactly what one child saw, fork the workspace, or
-resume from a saved checkpoint with a different model or prompt. The
+resume from saved workspace state with a different model or prompt. The
 flat recursive-call view tells you what returned. The graph tells you
 how the answer moved through the run.
 
@@ -600,14 +600,14 @@ while not graph.finished:
     graph = agent.step(graph)
 ```
 
-That loop works because a `Graph` snapshot is a complete checkpoint.
-It contains enough information to continue the run from that point,
+That loop works because a workspace session is a durable saved run.
+It contains enough information to continue the run from the latest state,
 inspect what led there, or compare it with another branch.
 
 That gives rlmflow its main operations:
 
 - **Inspect** one agent without rereading every sibling's messages.
-- **Replay** from a saved `Graph` instead of starting the run over.
+- **Resume** from a saved workspace instead of starting the run over.
 - **Fork** the workspace and try a different model, prompt, or
   starting point.
 - **Resume** from a persisted session and continue the run.

@@ -256,7 +256,7 @@ def test_tree_renders_full_recursive_hierarchy(tmp_path: Path):
     assert "root.b.deep" in rendered
 
 
-def test_session_variable_injected_via_prepare_runtime(tmp_path: Path):
+def test_session_variable_injected_via_inject_env(tmp_path: Path):
     """End-to-end: SessionVariable lands in the REPL namespace, not a dict."""
     from rlmflow import RLMConfig, RLMFlow, Workspace
     from rlmflow.llm import LLMClient
@@ -272,7 +272,7 @@ def test_session_variable_injected_via_prepare_runtime(tmp_path: Path):
         workspace=workspace,
     )
     graph = flow.start("hi")
-    runtime = flow.prepare_runtime(graph, graph.states[0])
+    runtime = flow.inject_env(graph, graph.states[0])
 
     ns = runtime.repl.namespace
     assert "SESSION" in ns

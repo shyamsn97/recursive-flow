@@ -33,7 +33,7 @@ REPL_TEXT = """
 - Variables persist across turns within one agent.
 - `AGENT_ID`, `DEPTH`, `MAX_DEPTH` are set; cannot `delegate` when `DEPTH == MAX_DEPTH`.
 - **Final answer:** call `done(answer)` exactly once when complete — that string is what the parent/user sees. No `done`, no result.
-- **End the block after `wait`. Verify on the next turn.** The runtime won't stop you — if you call `done()` in the same block, it ends the agent right there with no verify turn. Instead, after `yield wait(...)` resumes, *return without calling `done()`*. The runtime then gives you a fresh turn (observation: `Children finished: ... / Generator resumed. Output: ...`) where you read files back / run / grep the artifact, and only then `done()`.
+- **End the block at `yield wait(...)`. Verify on the next turn.** When children finish, the runtime resumes the same generator at that line and passes child results back as the value of `yield wait(...)`. If the resumed generator then reaches the end without `done()` or another `yield wait(...)`, the next LLM turn runs in the same stateful REPL. Put only lightweight assignment after `yield wait(...)`; do reasoning, validation, and `done()` on that next turn using the assigned variables.
 - **Execute, don't narrate.** Every turn runs code that makes progress.
 - Output is truncated (~12k chars). Slice, summarize, or delegate — don't `print` huge values.
 """
@@ -52,7 +52,8 @@ RECURSION_TEXT = """
 - `delegate(name, query, context) -> handle` — spawns a child with a fresh REPL and the same tools. `context` is mandatory (use `""` for code-only tasks).
 - `results = yield wait(*handles)` — collect child results. **Always `yield`** before `wait`.
 - Every handle MUST appear in a `wait()` before the block ends, or you get `OrphanedDelegatesError`.
-- When a wait-block ends *without* `done()`, the runtime starts a new turn whose observation is `Children finished: ... / Generator resumed. Output: ...`. That turn is the verify pass — see the REPL rule. If you `done()` in the wait-block, the agent terminates there with no verify turn.
+- Treat `yield wait(...)` as the last meaningful line of the block. Child results are passed back inline as the value of the `yield wait(...)` expression when the generator resumes.
+- Let the resumed generator end without `done()` to create the next LLM turn in the same stateful REPL. That turn is the verify pass: inspect assigned child-result variables, run checks, and only then `done()`.
 - Re-delegating to a finished child resumes it with a new task (same variables, fresh context).
 - `model="fast"` (or any registered key) routes a child to a cheaper/faster LLM.
 
@@ -109,15 +110,26 @@ handles = [
     for start in range(0, n, 200)
 ]
 results = yield wait(*handles)
-hits = [item for r in results for item in json.loads(r)]
-print(f"got {len(hits)} hits across {len(handles)} chunks")
 ```
 ```repl
-# Block 2 — runtime resumed you here ("Children finished... Generator resumed. Output: ...").
-# `hits` is still in scope. Verify, then done.
+# Block 2 — same stateful REPL; `results` was assigned by `yield wait(...)`.
+# `results` is still in scope. Aggregate, verify, then done.
+import json
+hits = [item for r in results for item in json.loads(r)]
 assert all(isinstance(h, str) for h in hits), "non-string in aggregated hits"
 done(json.dumps(hits))
 ```
+
+**Anti-pattern — `done()` in the same block as `yield wait` skips the verify turn:**
+```repl
+handles = [delegate(name, q, ctx, model="fast") for name, q, ctx in jobs]
+results = yield wait(*handles)
+report = "\n".join(parse(r) for r in results)  # WRONG: synthesis after wait
+done(report)                                   # WRONG: no verify turn
+```
+Fix: end the block right after `yield wait(...)`. The next turn runs in the
+same stateful REPL, where the assigned child-result variables are still in
+scope; reason there, then `done()`.
 
 **Delegate cross-file work — contract → wait → resume → verify → done:**
 ```repl
@@ -174,17 +186,23 @@ done("Wrote output/app/script.py (fib(10) -> 55)")
 
 **Cross-agent recovery — pass the failed sibling's transcript as the retry's `CONTEXT`:**
 ```repl
+# Block 1: find a failed sibling and retry it. End at wait.
 failed = [a for a in SESSION.list_agents() if a["type"] == "error"]
-if not failed:
-    done("No failed siblings.")
+assert failed, "No failed siblings to retry"
 transcript = SESSION.read(failed[0]["agent_id"])
 h = delegate("retry", "Recover from where the sibling in CONTEXT stopped.", transcript[-4000:])
-[out] = yield wait(h)
+retry_results = yield wait(h)
+```
+```repl
+# Block 2 — resumed turn. Sanity check, then done.
+[out] = retry_results
+assert out and "Traceback" not in out[:400], f"retry still looks broken: {out[:400]}"
 done(out)
 ```
 
 **Reviewer pattern — pass `CONTEXT.read()` when the child needs your full view:**
 ```repl
+# Block 1: build draft, ask reviewer, end after wait.
 draft = build_answer_from(CONTEXT)
 h = delegate(
     "review",
@@ -192,8 +210,13 @@ h = delegate(
     CONTEXT.read(),
     model="fast",
 )
-[verdict] = yield wait(h)
-import json; v = json.loads(verdict)
+review_results = yield wait(h)
+```
+```repl
+# Block 2 — resumed turn. `draft` and `review_results` still in scope.
+import json
+[verdict] = review_results
+v = json.loads(verdict)
 done(draft if v["ok"] else f"REJECTED: {v['issues']}")
 ```
 """

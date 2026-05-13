@@ -13,9 +13,9 @@ Search provider:
 
 Usage:
     python examples/deep_research.py
-    python examples/deep_research.py --query "Should we bet on geothermal by 2035?"
+    python examples/deep_research.py --query "Will NVDA hit $5T market cap in 2026?"
     python examples/deep_research.py --model gpt-4o --fast-model gpt-4o-mini
-    python examples/deep_research.py --workspace examples/runs/deep_research/smr
+    python examples/deep_research.py --workspace examples/runs/deep_research/sdsk
 """
 
 from __future__ import annotations
@@ -35,37 +35,56 @@ from rlmflow.prompts import DEFAULT_BUILDER
 from rlmflow.prompts.default import ROLE_TEXT
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.tools import FILE_TOOLS, tool
-from rlmflow.utils.trace import save_trace
 
 
 DEFAULT_QUERY = """\
-Research whether small modular reactors are likely to be commercially viable
-in the US by 2035.
+Research whether SDSK (the stock) is likely to reach $2000 per share by the
+end of 2026.
 
 Build a deep research report with:
-- market drivers
-- regulatory blockers
-- technical risks
-- cost comparisons
-- strongest bull case
-- strongest bear case
-- open questions
+- current price, recent price action, and key valuation multiples
+- business fundamentals and growth drivers
+- competitive landscape and moat
+- macro / sector tailwinds and headwinds
+- analyst price targets and consensus
+- strongest bull case (path to $2000)
+- strongest bear case (why it doesn't get there)
+- open questions and what to watch
 
 For every major claim, include citations or source snippets. Separate evidence
-from speculation, and call out contradictions between sources.
+from speculation, and call out contradictions between sources. This is research,
+not investment advice.
 """
 
 
 DEEP_RESEARCH_RULES = """\
-When doing deep research:
-- Start broad, then split into independent research angles.
-- Use `web_search(query)` to find sources and `fetch_url(url)` to inspect them.
-- Ask child calls for structured JSON: claims, evidence, sources, contradictions,
-  uncertainty, and suggested followups.
-- On the resume turn, parse child outputs, identify weak claims or contradictions,
-  and delegate targeted verification before `done(...)`.
-- Every major final claim needs a source URL or quoted snippet.
-- Do not present search snippets as certainty; fetch source pages when possible.
+**Deep research is a delegation problem, not a single-thread crawl.**
+
+Root plans and synthesizes; children search and read sources. Doing your own
+`web_search` / `fetch_url` loop in the root blows the context window, serializes
+work that should run in parallel, and produces a thin report. Trust your
+children, then verify them.
+
+Principles:
+- **Decompose then delegate.** Break the question into independent research
+  angles and spawn one child per angle. How many angles, and how to slice them,
+  is your call — pick what makes the report strong.
+- **Children fetch, root synthesizes.** Calling `web_search` / `fetch_url` from
+  the root is a smell. Push that work down so each child gets a fresh context
+  window for its slice.
+- **Specify a return contract per child.** Tell each child exactly what shape
+  to return (claims + evidence + sources + contradictions + confidence is a
+  good default, but the contract is yours to design for the question). Keep
+  the shape consistent across siblings so you can merge them.
+- **Verify before synthesizing.** On resume, scan child outputs for weak
+  claims, missing citations, and contradictions between siblings — and
+  delegate targeted follow-ups to close those gaps before `done()`.
+- **Cite, don't invent.** Every major final claim needs a source URL or quoted
+  snippet pulled from a child's evidence, not paraphrased from memory.
+- **Separate evidence from speculation.** Mark interpretation as
+  interpretation. Call out contradictions explicitly rather than papering
+  over them.
+- **Use `model="fast"` for children when a fast model is registered.**
 """
 
 
@@ -112,7 +131,11 @@ def _duckduckgo_search(query: str, max_results: int) -> list[dict[str, str]]:
     return results
 
 
-@tool("Search the web. Returns JSON list of {title, url, snippet}.")
+@tool(
+    "Search the web. Returns a JSON object: "
+    '{"provider": str, "query": str, "results": [{"title", "url", "snippet"}]}. '
+    "Use the 'results' field to iterate."
+)
 def web_search(query: str, max_results: int = 5) -> str:
     max_results = max(1, min(int(max_results), 10))
     try:
@@ -166,11 +189,17 @@ def make_llm(model: str):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a recursive deep research example.")
     parser.add_argument("--query", default=DEFAULT_QUERY)
-    parser.add_argument("--model", default="gpt-4o")
-    parser.add_argument("--fast-model", default=None)
+    parser.add_argument("--model", default="gpt-5")
+    parser.add_argument("--fast-model", default="gpt-5-mini")
     parser.add_argument("--workspace", type=Path, default=Path("examples/runs/deep_research"))
     parser.add_argument("--max-depth", type=int, default=2)
     parser.add_argument("--max-iterations", type=int, default=18)
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=8,
+        help="Max sibling agents stepped in parallel (1 = sequential).",
+    )
     parser.add_argument("--no-viewer", action="store_true")
     args = parser.parse_args()
 
@@ -192,30 +221,30 @@ def main() -> None:
         runtime=runtime,
         workspace=workspace,
         llm_clients=llm_clients,
-        config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
+        config=RLMConfig(
+            max_depth=args.max_depth,
+            max_iterations=args.max_iterations,
+            max_concurrency=args.max_concurrency,
+        ),
         prompt_builder=build_prompt_builder(),
     )
 
     graph = agent.start(args.query)
-    graphs = [graph]
     while not graph.finished:
         graph = agent.step(graph)
-        graphs.append(graph)
         print(graph.tree())
 
     result = graph.result()
     print("\n" + "=" * 80)
     print(result or "(no result)")
 
-    trace_dir = args.workspace / "trace"
-    save_trace(graphs, trace_dir, metadata={"query": args.query})
-    print(f"\nTrace saved to {trace_dir}")
+    print(f"\nWorkspace saved to {workspace.root}")
 
     if not args.no_viewer:
         try:
             from rlmflow.utils.viewer import save_html
 
-            save_html(graphs, args.workspace / "viewer.html")
+            save_html(workspace, args.workspace / "viewer.html")
             print(f"Viewer saved to {args.workspace / 'viewer.html'}")
         except ImportError as exc:
             print(f"Viewer not saved: {exc}")

@@ -1,13 +1,14 @@
 """Visualization, transcripts, and the Gradio viewer for RLMFlow graphs.
 
-Everything in this module takes :class:`~rlmflow.graph.Graph` instances.
-A trace is a ``list[Graph]`` — one snapshot per step. The viewer + HTML
-stepper + image / GIF / step-image exporters all share the same Plotly
-figure builder so the on-screen and offline renders match pixel-for-pixel.
+Public viewer/export functions accept a workspace, workspace path, graph, or
+graph list. The viewer + HTML stepper + image / GIF / step-image exporters all
+share the same Plotly figure builder so the on-screen and offline renders match
+pixel-for-pixel.
 """
 
 from __future__ import annotations
 
+import json
 from html import escape as _esc_html
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,63 @@ try:  # pragma: no cover - optional dep
     import gradio  # noqa: F401  (re-exported for type-hint resolution)
 except ImportError:  # pragma: no cover - optional dep
     gradio = None  # type: ignore[assignment]
+
+ViewSource = "Any | str | Path | Graph | list[Graph] | tuple[Graph, ...]"
+
+
+def _is_workspace_path(path: Path) -> bool:
+    return (
+        path.is_dir() and (path / "graph.json").exists() and (path / "session").exists()
+    )
+
+
+def _load_graphs_from_path(path: str | Path) -> list[Graph]:
+    p = Path(path)
+    if p.is_dir():
+        if _is_workspace_path(p):
+            from rlmflow.workspace import Workspace
+
+            return [Workspace.open_path(p).load_graph()]
+        raise ValueError(f"{p} is not a workspace directory")
+
+    if not p.is_file():
+        raise ValueError(f"no such file or directory: {p}")
+
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{p} is not valid JSON: {exc}") from exc
+
+    if isinstance(data, dict) and "agent_id" in data and "states" in data:
+        return [Graph.from_dict(data)]
+    raise ValueError(f"{p} does not look like a workspace or graph dump")
+
+
+def resolve_graphs(source: ViewSource) -> list[Graph]:
+    """Resolve a viewer/export source into graph snapshots.
+
+    ``source`` can be a workspace, workspace path, standalone graph, graph list,
+    or standalone graph JSON path.
+    """
+    from rlmflow.workspace import Workspace
+
+    if isinstance(source, Workspace):
+        return [source.load_graph()]
+    if isinstance(source, Graph):
+        return [source]
+    if isinstance(source, (str, Path)):
+        return _load_graphs_from_path(source)
+    graphs = list(source)
+    if not all(isinstance(graph, Graph) for graph in graphs):
+        raise TypeError("expected a Graph, Workspace, path, or iterable of Graphs")
+    return graphs
+
+
+def _resolve_latest_graph(source: ViewSource) -> Graph:
+    graphs = resolve_graphs(source)
+    if not graphs:
+        raise ValueError("expected at least one Graph")
+    return graphs[-1]
 
 
 # ── transcripts ──────────────────────────────────────────────────────
@@ -92,12 +150,82 @@ def _render_state_transcript(state: Node, *, agent_id: str | None = None) -> str
         body = (state.content or "").strip()
         return f"--- {prefix}error ({state.error}) ---\n{body}"
     if isinstance(state, ResumeNode):
-        body = (state.content or "").strip()
-        return f"--- {prefix}resume ---\n{body}" if body else None
+        resumed_from = ", ".join(state.resumed_from or [])
+        body = f"resumed from: {resumed_from or '(none)'}"
+        output = (state.output or "").strip()
+        if output:
+            body += f"\noutput:\n{output}"
+        return f"--- {prefix}resume ---\n{body}"
     if isinstance(state, ObservationNode):
         body = (state.content or "").strip()
         return f"--- {prefix}observation ---\n{body}" if body else None
     return None
+
+
+# ── tree rendering (text) ────────────────────────────────────────────
+
+
+def _short(text: str, n: int) -> str:
+    t = " ".join(text.split())
+    return t if len(t) <= n else t[: n - 1] + "…"
+
+
+def _label(s: Node) -> str:
+    t = s.type
+    if isinstance(s, SupervisingNode) and s.waiting_on:
+        return f"{t} waiting_on={s.waiting_on}"
+    if isinstance(s, ResultNode) and s.result:
+        return f"{t} -> {_short(s.result, 60)}"
+    if isinstance(s, ErrorNode):
+        return f"{t} ({s.error or 'error'})"
+    if isinstance(s, ActionNode) and s.code:
+        return f"{t} code={_short(s.code, 40)}"
+    if isinstance(s, ObservationNode) and s.content:
+        return f"{t} {_short(s.content, 60)}"
+    return t
+
+
+def graph_tree(graph: Graph) -> str:
+    """Render a :class:`Graph` as a nested text tree.
+
+    Children are attached visually under the supervising state that
+    awaited them when possible, falling back to ``parent_node_id``.
+    """
+    lines: list[str] = []
+
+    def walk(g: Graph, indent: str) -> None:
+        head = f"{indent}● {g.agent_id} ({g.model_label})"
+        if g.query:
+            head += f" — {_short(g.query, 60)}"
+        lines.append(head)
+
+        state_ids = {s.id for s in g.states}
+        sup_for_agent: dict[str, str] = {}
+        for s in g.states:
+            if isinstance(s, SupervisingNode):
+                for aid in s.waiting_on:
+                    sup_for_agent[aid] = s.id
+
+        attach_at: dict[str, list[Graph]] = {}
+        unplaced: list[Graph] = []
+        for child in g.children.values():
+            key = sup_for_agent.get(child.agent_id) or (
+                child.parent_node_id if child.parent_node_id in state_ids else None
+            )
+            if key:
+                attach_at.setdefault(key, []).append(child)
+            else:
+                unplaced.append(child)
+
+        for s in g.states:
+            lines.append(f"{indent}  - [{s.seq:>2}] {_label(s)}")
+            for child in attach_at.get(s.id, []):
+                walk(child, indent + "    ")
+        for child in unplaced:
+            walk(child, indent + "    ")
+
+    walk(graph, "")
+    return "\n".join(lines)
 
 
 # ── plot palette ─────────────────────────────────────────────────────
@@ -622,7 +750,7 @@ _DEFAULT_EXPORT_MARGIN = {"l": 24, "r": 24, "t": 80, "b": 120}
 
 
 def save_image(
-    graph: Graph,
+    graph: ViewSource,
     path: str | Path,
     *,
     width: int = 1800,
@@ -636,6 +764,7 @@ def save_image(
     title: str | None = None,
 ) -> Path:
     """Render ``graph`` to a PNG/SVG/PDF file. Requires ``kaleido``."""
+    graph = _resolve_latest_graph(graph)
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig = graph_plot(
@@ -659,7 +788,7 @@ def save_image(
 
 
 def save_steps(
-    graphs: list[Graph],
+    graphs: ViewSource,
     out_dir: str | Path,
     *,
     fmt: str = "png",
@@ -674,6 +803,7 @@ def save_steps(
     title_template: str = "step {i} / {total}: {agent_id} [{type}]",
 ) -> Path:
     """Save one image per snapshot in ``graphs`` under ``out_dir``."""
+    graphs = resolve_graphs(graphs)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     if not graphs:
@@ -848,9 +978,9 @@ def _state_table_html(graph: Graph) -> str:
 
 
 def render_html(
-    graphs: list[Graph],
+    graphs: ViewSource,
     *,
-    title: str = "rlmflow trace",
+    title: str = "rlmflow run",
     height: int = 720,
     include_plotlyjs: str | bool = "cdn",
     element_mult: float = 2.0,
@@ -859,6 +989,7 @@ def render_html(
     normalize_labels: bool = True,
 ) -> str:
     """Render ``graphs`` as a single self-contained HTML stepper."""
+    graphs = resolve_graphs(graphs)
     if not graphs:
         raise ValueError("render_html() needs at least one graph")
 
@@ -933,7 +1064,7 @@ def render_html(
 
 
 def save_html(
-    graphs: list[Graph],
+    graphs: ViewSource,
     path: str | Path,
     **kwargs: Any,
 ) -> Path:
@@ -945,7 +1076,7 @@ def save_html(
 
 
 def save_gif(
-    graphs: list[Graph],
+    graphs: ViewSource,
     path: str | Path,
     *,
     duration: int = 600,
@@ -961,6 +1092,7 @@ def save_gif(
     title_template: str = "step {i} / {total}: {agent_id} [{type}]",
 ) -> Path:
     """Stitch every graph snapshot into an animated GIF."""
+    graphs = resolve_graphs(graphs)
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     if not graphs:
@@ -1029,12 +1161,11 @@ def save_gif(
 # ── Gradio viewer ────────────────────────────────────────────────────
 
 
-def open_viewer(graphs: list[Graph] | Graph, **launch_kwargs: Any):
-    """Open the Gradio stepper over ``graphs`` (list) or one ``graph``."""
+def open_viewer(graphs: ViewSource, **launch_kwargs: Any):
+    """Open the Gradio stepper over a workspace, path, graph, or graph list."""
     import gradio as gr
 
-    if isinstance(graphs, Graph):
-        graphs = [graphs]
+    graphs = resolve_graphs(graphs)
     if not graphs:
         raise ValueError("open_viewer needs at least one Graph")
 
@@ -1315,6 +1446,7 @@ __all__ = [
     "graph_session",
     "open_viewer",
     "render_html",
+    "resolve_graphs",
     "save_gif",
     "save_html",
     "save_image",

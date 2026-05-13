@@ -55,7 +55,7 @@ Query(root)
       -> Result(root.search)
       -> Query(root.verify)
       -> Result(root.verify)
-  -> Resume(root: search + verify results)
+  -> Resume(root: parent resumed after waiting)
   -> Result(root)
 ```
 
@@ -85,7 +85,6 @@ This example is all you need for a simple and interpretable recursive coding age
 from rlmflow import OpenAIClient, RLMConfig, RLMFlow, Workspace
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.tools import FILE_TOOLS
-from rlmflow.utils.trace import save_trace
 from rlmflow.utils.viewer import open_viewer
 
 workspace = Workspace.create("./myproject")
@@ -114,20 +113,21 @@ agent = RLMFlow(
 )
 
 query = "Build a python text-based adventure game with combat and inventory."
-graphs = [agent.start(query)]
-while not graphs[-1].finished:
-    graphs.append(agent.step(graphs[-1]))
-    print(graphs[-1].tree())
+graph = agent.start(query)
+while not graph.finished:
+    graph = agent.step(graph)
+    print(graph.tree())
 
-save_trace(graphs, "traces/run1")
-open_viewer(graphs)
+print(graph.result())
+open_viewer(workspace)
 ```
 
 `Workspace.create("./myproject")` writes a debuggable workspace as it runs:
 `session/<agent-id>/` holds the per-agent state log (`session.jsonl`,
 `agent.json`, `latest.json`), `graph.json` is the compact graph manifest
 for the whole run, and `context/<agent-id>/` holds payloads exposed as
-`CONTEXT`. Saved traces are separate export artifacts and can live anywhere.
+`CONTEXT`. The workspace is the saved run: reopen it later with
+`Workspace.open_path("./myproject").load_graph()` or `open_viewer("./myproject")`.
 
 ## Drop-in `LLMClient`
 
@@ -189,17 +189,13 @@ graph.nodes.where(lambda n: n.type == "action")    # or pass a predicate
 graph.to_dict()                               # full JSON-serializable payload
 ```
 
-## Checkpoint, branch, replay
+## Workspace, Branch, Replay
 
-The whole run is a single `Graph` value — frozen, JSON-serializable:
+When you run with a `Workspace`, the workspace directory is the durable run:
 
 ```python
-from rlmflow import Graph
-
-graph.save(workspace.checkpoint_path)
-
-# resume later, in another process, with a different model
-graph = Graph.load(workspace.checkpoint_path)
+workspace = Workspace.open_path("./myproject")
+graph = workspace.load_graph()
 agent = RLMFlow(llm_client=AnotherModel(), workspace=workspace, ...)
 while not graph.finished:
     graph = agent.step(graph)
@@ -213,37 +209,32 @@ alt = workspace.fork(new_branch_id="repair", new_dir="./runs/repair")
 alt_agent = RLMFlow(llm_client=..., workspace=alt, ...)
 ```
 
-See [`examples/showcase.py`](examples/showcase.py) for checkpointing,
-session reads, time travel through `list[Graph]`, and gym-style
-stepping in one file.
+See [`examples/showcase.py`](examples/showcase.py) for workspace persistence,
+session reads, time travel through `list[Graph]`, and gym-style stepping in one
+file.
 
 ## Rich visualization
 
 See [notebook](./examples/notebooks/viz_walkthrough.ipynb) for a full showcase of vizualization utilities.
 
 Because the run is a typed graph, every visualization is just a render of
-that graph. The coding agent example
-([`examples/coding-agent/agent.py`](examples/coding-agent/agent.py))
-already exercises every option below — its saved trace under
-`examples/data/notebook-coding-agent/` is the source for the renders here.
+that graph. Normal runs are viewed from their workspace.
 
 
 ### Gradio viewer
 
 ![](docs/static/gradio_ui.png)
 
-`open_viewer(graphs)` launches a small browser app for stepping through a
-saved trace — tree, summary, and raw state JSON side by side:
+`open_viewer(workspace)` launches a small browser app for inspecting a
+saved workspace — tree, summary, and raw state JSON side by side:
 
 ```python
-from rlmflow.utils.trace import load_trace
 from rlmflow.utils.viewer import open_viewer
 
-trace = load_trace("examples/data/notebook-coding-agent/trace")
-open_viewer(trace.graphs)
+open_viewer("./myproject")
 ```
 
-Or from a checkpoint via the CLI: `rlmflow view examples/data/notebook-coding-agent/trace`.
+From the CLI: `rlmflow view ./myproject --port 7861`.
 
 ### Live terminal tree
 
@@ -287,10 +278,10 @@ steps               # one image per snapshot, written as step_NN.{png,svg,pdf}
 ```
 
 ```bash
-rlmflow render examples/data/notebook-coding-agent/trace -f mermaid-flowchart
-rlmflow render examples/data/notebook-coding-agent/trace -f gantt-html -o run.html
-rlmflow render examples/data/notebook-coding-agent/trace -f report-md  -o run.md
-rlmflow render examples/data/notebook-coding-agent/trace -f tokens
+rlmflow render ./myproject -f mermaid-flowchart
+rlmflow render ./myproject -f gantt-html -o run.html
+rlmflow render ./myproject -f report-md  -o run.md
+rlmflow render ./myproject -f tokens
 ```
 
 GitHub renders mermaid inline, so the output drops straight into a doc.
@@ -348,23 +339,25 @@ self-contained HTML stepper. Four public functions live in
 Quick start:
 
 ```python
-from rlmflow.utils.trace import load_trace
+from rlmflow import Workspace
 from rlmflow.utils import save_image, save_steps, save_html, save_gif
 
-trace = load_trace("examples/data/notebook-coding-agent/trace")
-graphs = trace.graphs
+workspace = "./myproject"
+graph = Workspace.open_path(workspace).load_graph()
 
-save_image(graphs[-1], "trace_final.png")        # single snapshot
+save_image(workspace, "run_final.png")           # latest workspace snapshot
+save_html(workspace, "viewer.html", title="run") # standalone viewer
+
+# If you kept an in-memory history list, playback exports still work:
 save_steps(graphs, "frames/")                    # one PNG per step
-save_html(graphs, "trace.html", title="run 1")   # standalone stepper
 save_gif(graphs, "trace.gif", duration=400)      # animated GIF (~2.5 fps)
 ```
 
 Or use the graph shorthand (same defaults):
 
 ```python
-graphs[-1].save_image("trace_final.png")
-graphs[-1].save_html("trace.html")
+graph.save_image("run_final.png")
+graph.save_html("viewer.html")
 ```
 
 #### Why the scaling knobs exist
@@ -396,8 +389,8 @@ same proportion to the canvas as a `save_image` PNG.
 **Hero PNG of a finished run** — defaults are tuned for this:
 
 ```python
-graphs[-1].save_image("hero.png")
-# == save_image(graphs[-1], "hero.png", width=1800, height=1350,
+graph.save_image("hero.png")
+# == save_image(graph, "hero.png", width=1800, height=1350,
 #               scale=2.0, element_mult=3.0, normalize_labels=True)
 ```
 
@@ -419,7 +412,7 @@ save_steps(
 GitHub gist:
 
 ```python
-save_html(graphs, "stepper.html", title="needle haystack run")
+save_html(workspace, "viewer.html", title="needle haystack run")
 ```
 
 The HTML output embeds Plotly from CDN, includes per-slide
@@ -447,21 +440,21 @@ Every knob above maps 1:1 to a CLI flag:
 
 ```bash
 # blog slideshow recipe (matches the dense-tree recipe above)
-rlmflow render examples/data/notebook-coding-agent/trace \
+rlmflow render ./myproject \
   -f steps -o blog/frames/ \
   --width 1600 --height 1200 --scale 2.0 \
   --marker-mult 3.5 --text-mult 2.2
 
 # self-contained interactive stepper
-rlmflow render examples/data/notebook-coding-agent/trace \
+rlmflow render ./myproject \
   -f html  -o stepper.html --title "boids walkthrough"
 
 # single hero PNG with default scaling
-rlmflow render examples/data/notebook-coding-agent/trace \
+rlmflow render ./myproject \
   -f image -o hero.png
 
 # opt out of label normalization (matches Gradio viewer defaults)
-rlmflow render examples/data/notebook-coding-agent/trace \
+rlmflow render ./myproject \
   -f html  -o stepper.html --no-normalize-labels
 ```
 
@@ -488,13 +481,13 @@ All examples share flags like `--no-viz`, `--docker-image rlmflow:local`,
 
 | Example | What it shows |
 |---|---|
-| [`showcase.py`](examples/showcase.py) | `Graph` snapshots, checkpoints, session persistence, time travel, gym-style stepping. |
+| [`showcase.py`](examples/showcase.py) | `Graph` snapshots, workspace persistence, session reads, time travel, gym-style stepping. |
 | [`drop_in_llm.py`](examples/drop_in_llm.py) | `RLMFlow` as an `LLMClient`. Nested agents. |
 | [`coding-agent/agent.py`](examples/coding-agent/agent.py) | Interactive coding agent that writes and edits files. |
 | [`needle_haystack.py`](examples/needle_haystack.py) | Needle-in-a-haystack across 500 files with custom tools and `runtime_factory`. |
 | [`summarizer.py`](examples/summarizer.py) | Recursive map-reduce over a long document. |
 | [`view_demo.py`](examples/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
-| [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, save the trace, open the interactive viewer. Requires a live LLM. |
+| [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, and inspect the workspace/viewer. Requires a live LLM. |
 | [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | Every visualization against the saved fixture: inline tree, Plotly graph, HTML stepper, topology renders (mermaid/dot/d2/sequence), step-indexed timeline, per-state detail, cost & reports, run-vs-run comparison, CLI equivalents. |
 | [`notebooks/node_basics.ipynb`](examples/notebooks/node_basics.ipynb) | `Graph` query API tour — `graph[aid]`, `graph.nodes`, `graph.nodes.find`, `graph.nodes.where`, `graph.nodes.results`/`errors`, per-agent tokens, `session.load_graph`, state streaming with `tee` / `json_logs`. |
 
@@ -519,16 +512,16 @@ flags, scoring details, and ablation scripts.
 ## CLI
 
 ```
-rlmflow view traces/run1/
-rlmflow render checkpoint.json -f mermaid
-rlmflow render traces/run1/ -f gantt-html -o run1.html
-rlmflow render traces/run1/ -f html       -o stepper.html
-rlmflow render traces/run1/ -f steps      -o frames/  --marker-mult 3.5 --text-mult 2.2
-rlmflow render traces/run1/ -f image      -o trace.png
+rlmflow view ./myproject
+rlmflow render ./myproject -f mermaid
+rlmflow render ./myproject -f gantt-html -o run1.html
+rlmflow render ./myproject -f html       -o stepper.html
+rlmflow render ./myproject -f steps      -o frames/  --marker-mult 3.5 --text-mult 2.2
+rlmflow render ./myproject -f image      -o graph.png
 rlmflow version
 ```
 
-`view` and `render` accept a trace directory, `trace.json`, or checkpoint.
+`view` and `render` accept a workspace directory.
 `render -f` accepts: `mermaid`, `mermaid-flowchart`, `mermaid-sequence`,
 `dot`, `d2`, `tree`, `ascii-boxes`, `gantt-html`, `report-md`, `code-log`,
 `error-summary`, `tokens`, `html`, `image`, `steps` — see the
@@ -548,9 +541,9 @@ scaling / label-normalization flags (`--marker-mult`, `--text-mult`,
   ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider — decision matrix and
   per-framework comparisons.
 - [Observability](docs/observability.md): the `Graph` data model, state
-  fields and types, querying the graph, save/load traces, session /
-  context layout, live tree, gantt, topology exports, Gradio viewer, CLI.
-- [Control](docs/control.md): step loop, checkpoint, rewind, workspace forks,
+  fields and types, querying the graph, workspace persistence, export
+  helpers, live tree, gantt, topology exports, Gradio viewer, CLI.
+- [Control](docs/control.md): step loop, workspace resume, rewind, workspace forks,
   `CONTEXT.read()` / slices, `delegate(name, query, context)`,
   inline-first strategy, custom prompts, runtimes, tools.
 - [Runtimes](docs/runtimes.md): `Runtime` protocol, shipped runtimes

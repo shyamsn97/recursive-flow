@@ -92,6 +92,10 @@ class Runtime(ABC):
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.tools: dict[str, ToolDef] = {}
         self.proxied: dict[str, Callable] = {}
+        # Per-runtime mutable state shared between the engine and any
+        # core tool closures (``done``, ``delegate``) the engine binds to
+        # this runtime. The engine resets this between executions.
+        self.env: dict[str, Any] = {}
 
     # ── subclasses implement these two ────────────────────────────────
 
@@ -141,7 +145,7 @@ class Runtime(ABC):
         finally:
             os.chdir(prev)
 
-    def execute(self, code: str, timeout: float | None = None) -> str:
+    def execute(self, code: str) -> str:
         """Run ``code`` and return captured stdout."""
         return self.call({"cmd": "run", "code": code}).get("output", "")
 
@@ -156,6 +160,17 @@ class Runtime(ABC):
     def resume_code(self, send_value=None) -> tuple[bool, object]:
         """Resume a suspended generator. Same return shape as :meth:`start_code`."""
         return parse_response(self.call({"cmd": "resume", "value": send_value}))
+
+    def read(self, name: str) -> Any:
+        """Return the REPL-namespace value bound to ``name`` (``None`` if missing).
+
+        Symmetric to :meth:`inject`. Used by the engine to read back per-execution
+        state (``env``) after running agent code. ``LocalRuntime`` overrides
+        this with a direct dict lookup.
+        """
+        from rlmflow.runtime.repl import deserialize
+
+        return deserialize(self.call({"cmd": "read", "name": name}).get("value"))
 
     def inject(self, name: str, value: Any) -> None:
         """Bind ``name`` to ``value`` in the REPL's namespace.
@@ -213,7 +228,8 @@ class Runtime(ABC):
         new = self.__class__(workspace=workspace or self.workspace)
         for name, td in self.tools.items():
             new.tools[name] = td
-            new.inject(name, td.fn)
+            if td.fn is not None:
+                new.inject(name, td.fn)
         return new
 
     def fork(self, new_workspace: str | Path) -> Runtime:
