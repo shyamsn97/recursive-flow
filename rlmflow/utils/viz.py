@@ -1,8 +1,9 @@
 """Live tree view, Gantt swimlanes, message logs, and webhook helpers.
 
-Every public surface here takes :class:`~rlmflow.graph.Graph` instances.
-A trace is a ``list[Graph]`` (one per step); a single-snapshot operation
-takes one ``Graph``.
+Public visualization helpers accept the same source shapes as the HTML viewer:
+a :class:`~rlmflow.workspace.Workspace`, workspace path, standalone graph path,
+in-memory :class:`~rlmflow.graph.Graph`, or graph list. Trace operations use all
+snapshots; single-snapshot operations use the latest graph.
 """
 
 from __future__ import annotations
@@ -11,10 +12,24 @@ import difflib
 import json
 from collections import Counter
 from collections.abc import Iterable, Iterator
+from pathlib import Path
 from typing import Any, Callable
 
 from rlmflow.graph import Graph, is_done, is_errored
 from rlmflow.utils.export import _kind
+from rlmflow.utils.viewer import ViewSource, resolve_graphs
+
+
+def _resolve_graphs(source: ViewSource) -> list[Graph]:
+    return resolve_graphs(source)
+
+
+def _resolve_latest_graph(source: ViewSource) -> Graph:
+    graphs = _resolve_graphs(source)
+    if not graphs:
+        raise ValueError("expected at least one Graph")
+    return graphs[-1]
+
 
 # ── live tree ────────────────────────────────────────────────────────
 
@@ -44,10 +59,10 @@ class LiveView:
             self._live.__exit__(*exc)
             self._live = None
 
-    def __call__(self, graph: Graph | Iterable[Graph]) -> None:
+    def __call__(self, source: ViewSource) -> None:
         if self._live is None:
             raise RuntimeError("live_view used outside of context")
-        latest = graph if isinstance(graph, Graph) else list(graph)[-1]
+        latest = _resolve_latest_graph(source)
         self._live.update(_render_rich_tree(latest), refresh=True)
 
 
@@ -79,8 +94,9 @@ def live_view(**kwargs: Any) -> LiveView:
     return LiveView(**kwargs)
 
 
-def live(agent: Any, graph: Graph) -> list[Graph]:
+def live(agent: Any, source: ViewSource) -> list[Graph]:
     """Run ``agent``'s step loop while streaming a live tree."""
+    graph = _resolve_latest_graph(source)
     graphs = [graph]
     with LiveView() as live:
         live(graph)
@@ -139,11 +155,12 @@ _TYPE_HTML = {
 }
 
 
-def gantt(graphs: list[Graph]) -> None:
+def gantt(source: ViewSource) -> None:
     from rich.console import Console
     from rich.table import Table
     from rich.text import Text
 
+    graphs = _resolve_graphs(source)
     agents, rows = _gantt_per_step(graphs)
     table = Table(
         show_header=True,
@@ -168,7 +185,8 @@ def gantt(graphs: list[Graph]) -> None:
     Console().print(table)
 
 
-def gantt_html(graphs: list[Graph], *, title: str = "rlmflow gantt") -> str:
+def gantt_html(source: ViewSource, *, title: str = "rlmflow gantt") -> str:
+    graphs = _resolve_graphs(source)
     agents, rows = _gantt_per_step(graphs)
     n_steps = len(graphs)
     cells_html: list[str] = []
@@ -211,8 +229,9 @@ h1 {{ font-size: 14px; color: #8b949e; font-weight: 500; margin: 0 0 12px; }}
 # ── error / code log ─────────────────────────────────────────────────
 
 
-def error_summary(graph: Graph) -> str:
-    """Group every :class:`ErrorOutput` in ``graph`` by ``error`` kind."""
+def error_summary(source: ViewSource) -> str:
+    """Group every :class:`ErrorOutput` in ``source`` by ``error`` kind."""
+    graph = _resolve_latest_graph(source)
     errors = [e for e in graph.nodes if is_errored(e)]
     if not errors:
         return "(no errors)"
@@ -233,17 +252,14 @@ def error_summary(graph: Graph) -> str:
 
 
 def code_log(
-    source: Graph | list[Graph],
+    source: ViewSource,
     agent_id: str | None = None,
 ) -> str:
     """Render every code block executed in the run, paired with its output."""
-    if isinstance(source, Graph):
-        graph = source
-    else:
-        items = list(source)
-        if not items:
-            return "(no code blocks)"
-        graph = items[-1]
+    graphs = _resolve_graphs(source)
+    if not graphs:
+        return "(no code blocks)"
+    graph = graphs[-1]
 
     nodes = list(graph.nodes)
     if agent_id:
@@ -280,15 +296,22 @@ def code_log(
     return "\n".join(out).rstrip() or "(no code blocks)"
 
 
-def message_stream(agent_id: str, graph: Graph) -> str:
+def message_stream(agent_id: str, source: ViewSource) -> str:
     """Render the chat-log transcript for one agent of a :class:`Graph`."""
+    graph = _resolve_latest_graph(source)
     if agent_id not in graph.agents:
         return f"(no nodes for agent {agent_id!r})"
     return graph.agents[agent_id].transcript(include_system=True)
 
 
-def diff_system_prompts(graph_a: Graph, graph_b: Graph, aid: str = "root") -> str:
+def diff_system_prompts(
+    source_a: ViewSource,
+    source_b: ViewSource,
+    aid: str = "root",
+) -> str:
     """Unified diff of two ``system_prompt`` strings for agent ``aid``."""
+    graph_a = _resolve_latest_graph(source_a)
+    graph_b = _resolve_latest_graph(source_b)
     a = (graph_a.agents[aid].system_prompt if aid in graph_a.agents else "").splitlines(
         keepends=True
     )
@@ -302,8 +325,9 @@ def diff_system_prompts(graph_a: Graph, graph_b: Graph, aid: str = "root") -> st
 # ── cost & tokens ────────────────────────────────────────────────────
 
 
-def token_sparkline(graphs: list[Graph], width: int = 40) -> str:
+def token_sparkline(source: ViewSource, width: int = 40) -> str:
     """One-line ASCII sparkline of cumulative tokens across steps."""
+    graphs = _resolve_graphs(source)
     if not graphs:
         return ""
     blocks = " ▁▂▃▄▅▆▇█"
@@ -322,12 +346,13 @@ def token_sparkline(graphs: list[Graph], width: int = 40) -> str:
 
 
 def budget_burndown(
-    graphs: list[Graph],
+    source: ViewSource,
     max_budget: int | None = None,
     *,
     width: int = 40,
 ) -> str:
     """Cumulative tokens vs ``max_budget``. Falls back to peak if no budget."""
+    graphs = _resolve_graphs(source)
     if not graphs:
         return ""
     cum = [g.total_tokens() for g in graphs]
@@ -344,12 +369,13 @@ def budget_burndown(
 
 
 def report_md(
-    graphs: list[Graph],
+    source: ViewSource,
     *,
     title: str = "rlmflow run",
     max_budget: int | None = None,
 ) -> str:
     """Render a Markdown summary of a run: tree + cost + final result."""
+    graphs = _resolve_graphs(source)
     if not graphs:
         return f"# {title}\n\n(empty trace)\n"
 
@@ -387,19 +413,20 @@ def report_md(
 
 
 def bench_table(
-    traces: dict[str, list[Graph]],
+    sources: dict[str, ViewSource],
     *,
     pricing: Callable[[Graph], float] | None = None,
 ) -> str:
-    """One row per labeled trace: outcome, steps, agents, tokens, errors."""
-    if not traces:
-        return "(no traces)"
+    """One row per labeled source: outcome, steps, agents, tokens, errors."""
+    if not sources:
+        return "(no sources)"
     header = ["label", "steps", "agents", "outcome", "tokens", "errors"]
     if pricing is not None:
         header.append("cost")
     rows: list[list[str]] = [header]
 
-    for label, graphs in traces.items():
+    for label, source in sources.items():
+        graphs = _resolve_graphs(source)
         if not graphs:
             rows.append([label, "0", "0", "(empty)", "0", "0"])
             continue
@@ -437,9 +464,16 @@ def bench_table(
 # ── streaming utilities ──────────────────────────────────────────────
 
 
-def tee(stream: Iterable[Graph], *sinks: Callable[[Graph], Any]) -> Iterator[Graph]:
+def tee(
+    source: Iterable[Graph] | Graph | str | Path,
+    *sinks: Callable[[Graph], Any],
+) -> Iterator[Graph]:
     """Fan a step iterator out to multiple sinks while still yielding each graph."""
-    for graph in stream:
+    if isinstance(source, (Graph, str, Path)) or hasattr(source, "load_steps"):
+        graph_source: Iterable[Graph] = _resolve_graphs(source)
+    else:
+        graph_source = source
+    for graph in graph_source:
         for sink in sinks:
             try:
                 sink(graph)
@@ -461,11 +495,13 @@ def _webhook_payload(graph: Graph, *, title: str) -> dict[str, str]:
     return {"text": body}
 
 
-def slack_webhook(url: str, graph: Graph, *, title: str = "rlmflow run") -> int:
+def slack_webhook(url: str, source: ViewSource, *, title: str = "rlmflow run") -> int:
+    graph = _resolve_latest_graph(source)
     return _post_json(url, _webhook_payload(graph, title=title))
 
 
-def discord_webhook(url: str, graph: Graph, *, title: str = "rlmflow run") -> int:
+def discord_webhook(url: str, source: ViewSource, *, title: str = "rlmflow run") -> int:
+    graph = _resolve_latest_graph(source)
     payload = _webhook_payload(graph, title=title)
     return _post_json(url, {"content": payload["text"]})
 
@@ -486,12 +522,14 @@ def _post_json(url: str, payload: dict) -> int:
 # ── ascii boxes ──────────────────────────────────────────────────────
 
 
-def ascii_boxes(graph: Graph) -> str:
+def ascii_boxes(source: ViewSource) -> str:
     """Boxed-tree variant of :meth:`Graph.tree` using Rich panels."""
     from rich.console import Console
     from rich.panel import Panel
     from rich.text import Text
     from rich.tree import Tree
+
+    graph = _resolve_latest_graph(source)
 
     def _agent_label(aid: str) -> Panel:
         sub = graph.agents[aid]

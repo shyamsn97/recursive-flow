@@ -9,9 +9,10 @@ pixel-for-pixel.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from html import escape as _esc_html
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
 from rlmflow.graph import (
     Graph,
@@ -25,6 +26,7 @@ from rlmflow.graph import (
     is_user_query,
 )
 from rlmflow.utils.export import _kind as _display_kind  # re-use one mapping
+from rlmflow.workspace import Workspace
 
 try:  # pragma: no cover - optional dep
     import gradio  # noqa: F401  (re-exported for type-hint resolution)
@@ -83,23 +85,37 @@ def is_bookkeeping(state: Node, successor: Node | None) -> bool:
     return successor.type in paired
 
 
-ViewSource = "Any | str | Path | Graph | list[Graph] | tuple[Graph, ...]"
+ViewSource: TypeAlias = Workspace | str | Path | Graph | Iterable[Graph]
 
 
-def _is_workspace_path(path: Path) -> bool:
-    return (
-        path.is_dir() and (path / "graph.json").exists() and (path / "session").exists()
-    )
+def _looks_like_graph_dump(data: Any) -> bool:
+    return isinstance(data, dict) and "agent_id" in data and "states" in data
 
 
 def _load_graphs_from_path(path: str | Path) -> list[Graph]:
     p = Path(path)
     if p.is_dir():
-        if _is_workspace_path(p):
-            from rlmflow.workspace import Workspace
-
+        if Workspace.check_path(p):
             return Workspace.open_path(p).load_steps()
-        raise ValueError(f"{p} is not a workspace directory")
+
+        graph_json = p / "graph.json"
+        if not graph_json.exists():
+            raise ValueError(
+                f"{p} is not a workspace or graph directory (missing graph.json)"
+            )
+
+        try:
+            data = json.loads(graph_json.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{graph_json} is not valid JSON: {exc}") from exc
+
+        if _looks_like_graph_dump(data):
+            return [Graph.from_dict(data)]
+
+        raise ValueError(
+            f"{p} has graph.json, but it is not a workspace manifest "
+            "or standalone Graph dump"
+        )
 
     if not p.is_file():
         raise ValueError(f"no such file or directory: {p}")
@@ -109,8 +125,10 @@ def _load_graphs_from_path(path: str | Path) -> list[Graph]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"{p} is not valid JSON: {exc}") from exc
 
-    if isinstance(data, dict) and "agent_id" in data and "states" in data:
+    if _looks_like_graph_dump(data):
         return [Graph.from_dict(data)]
+    if isinstance(data, list) and all(_looks_like_graph_dump(item) for item in data):
+        return [Graph.from_dict(item) for item in data]
     raise ValueError(f"{p} does not look like a workspace or graph dump")
 
 
@@ -157,8 +175,6 @@ def resolve_graphs(source: ViewSource) -> list[Graph]:
     ``source`` can be a workspace, workspace path, standalone graph, graph list,
     or standalone graph JSON path.
     """
-    from rlmflow.workspace import Workspace
-
     if isinstance(source, Workspace):
         return source.load_steps()
     if isinstance(source, Graph):
@@ -181,7 +197,7 @@ def _resolve_latest_graph(source: ViewSource) -> Graph:
 # ── transcripts ──────────────────────────────────────────────────────
 
 
-def agent_transcript(graph: Graph, *, include_system: bool = True) -> str:
+def agent_transcript(source: ViewSource, *, include_system: bool = True) -> str:
     """Render one agent's sub-:class:`Graph` as a chat-log transcript.
 
     Pulls the system prompt + original query off the :class:`Graph`,
@@ -189,6 +205,7 @@ def agent_transcript(graph: Graph, *, include_system: bool = True) -> str:
     API (``graph[aid].transcript()``) and
     :class:`~rlmflow.workspace.session.SessionVariable`.
     """
+    graph = _resolve_latest_graph(source)
     parts: list[str] = []
     if include_system and graph.system_prompt:
         parts.append(f"--- system ---\n{graph.system_prompt.strip()}")
@@ -201,13 +218,14 @@ def agent_transcript(graph: Graph, *, include_system: bool = True) -> str:
     return "\n\n".join(parts)
 
 
-def graph_session(graph: Graph, *, include_system: bool = False) -> str:
+def graph_session(source: ViewSource, *, include_system: bool = False) -> str:
     """Render every agent's trajectory in graph order — flat chat-log view.
 
     Agents appear in spawn order; each agent's states render in their
     own block. ``include_system`` emits the agent's system prompt once
     on first appearance.
     """
+    graph = _resolve_latest_graph(source)
     parts: list[str] = []
     for aid in graph.agents:
         sub = graph.agents[aid]
@@ -277,12 +295,13 @@ def _label(s: Node) -> str:
     return t
 
 
-def graph_tree(graph: Graph) -> str:
+def graph_tree(source: ViewSource) -> str:
     """Render a :class:`Graph` as a nested text tree.
 
     Children are attached visually under the supervising state that
     awaited them when possible, falling back to ``parent_node_id``.
     """
+    graph = _resolve_latest_graph(source)
     lines: list[str] = []
 
     def walk(g: Graph, indent: str) -> None:
@@ -776,7 +795,7 @@ def _normalize_label_positions(fig: Any) -> None:
 
 
 def graph_plot(
-    graph: Graph,
+    source: ViewSource,
     kind: str = "graph",
     *,
     height: int = 420,
@@ -787,13 +806,19 @@ def graph_plot(
     text_mult: float | None = None,
     normalize_labels: bool = False,
 ):
-    """Render ``graph`` in one of several formats.
+    """Render a workspace, path, graph, or graph list in one of several formats.
 
     ``kind`` may be ``"graph"`` / ``"plotly"`` (Plotly figure),
     ``"mermaid"`` / ``"flowchart"`` / ``"sequence"`` / ``"dot"`` / ``"d2"``
     (string formats), ``"tree"`` (plain text), or ``"gantt"`` (HTML).
     """
     fmt = kind.lower().replace("-", "_")
+    if fmt in {"gantt", "swimlane", "swimlanes"}:
+        from rlmflow.utils.viz import gantt_html
+
+        return gantt_html(resolve_graphs(source), title=title or "rlmflow gantt")
+
+    graph = _resolve_latest_graph(source)
     if fmt in {"mermaid", "state", "state_diagram"}:
         from rlmflow.utils.export import to_mermaid
 
@@ -816,10 +841,6 @@ def graph_plot(
         return to_d2(graph, include_results=include_results)
     if fmt in {"tree", "ascii"}:
         return graph.tree()
-    if fmt in {"gantt", "swimlane", "swimlanes"}:
-        from rlmflow.utils.viz import gantt_html
-
-        return gantt_html([graph], title=title or "rlmflow gantt")
     if fmt not in {"graph", "plotly", "viewer"}:
         raise ValueError(
             f"Unknown plot kind {kind!r}. Supported: "
@@ -845,7 +866,7 @@ def graph_plot(
 
 
 def graph_plot_html(
-    graph: Graph,
+    source: ViewSource,
     kind: str = "graph",
     *,
     height: int = 420,
@@ -858,7 +879,7 @@ def graph_plot_html(
     normalize_labels: bool = False,
 ) -> str:
     rendered = graph_plot(
-        graph,
+        source,
         kind,
         height=height,
         title=title,
@@ -886,7 +907,7 @@ _DEFAULT_EXPORT_MARGIN = {"l": 24, "r": 24, "t": 80, "b": 120}
 
 
 def save_image(
-    graph: ViewSource,
+    source: ViewSource,
     path: str | Path,
     *,
     width: int = 1800,
@@ -899,8 +920,8 @@ def save_image(
     margin: dict | None = None,
     title: str | None = None,
 ) -> Path:
-    """Render ``graph`` to a PNG/SVG/PDF file. Requires ``kaleido``."""
-    graph = _resolve_latest_graph(graph)
+    """Render ``source`` to a PNG/SVG/PDF file. Requires ``kaleido``."""
+    graph = _resolve_latest_graph(source)
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig = graph_plot(
@@ -924,7 +945,7 @@ def save_image(
 
 
 def save_steps(
-    graphs: ViewSource,
+    source: ViewSource,
     out_dir: str | Path,
     *,
     fmt: str = "png",
@@ -938,14 +959,14 @@ def save_steps(
     margin: dict | None = None,
     title_template: str = "step {i} / {total}: {agent_id} [{type}]",
 ) -> Path:
-    """Save one image per snapshot in ``graphs`` under ``out_dir``.
+    """Save one image per snapshot in ``source`` under ``out_dir``.
 
     Consecutive snapshots that produce an identical visible figure
     (same set of non-bookkeeping nodes after the action-collapse rule)
     are deduplicated — only the first is written. This keeps the
     frame count tied to *visible* progress, not raw state-appends.
     """
-    graphs = resolve_graphs(graphs)
+    graphs = resolve_graphs(source)
     graphs = _dedupe_by_visible_signature(graphs)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -1129,7 +1150,7 @@ def _state_table_html(graph: Graph) -> str:
 
 
 def render_html(
-    graphs: ViewSource,
+    source: ViewSource,
     *,
     title: str = "rlmflow run",
     height: int = 720,
@@ -1139,8 +1160,8 @@ def render_html(
     text_mult: float | None = None,
     normalize_labels: bool = True,
 ) -> str:
-    """Render ``graphs`` as a single self-contained HTML stepper."""
-    graphs = _dedupe_by_visible_signature(resolve_graphs(graphs))
+    """Render ``source`` as a single self-contained HTML stepper."""
+    graphs = _dedupe_by_visible_signature(resolve_graphs(source))
     if not graphs:
         raise ValueError("render_html() needs at least one graph")
 
@@ -1215,19 +1236,19 @@ def render_html(
 
 
 def save_html(
-    graphs: ViewSource,
+    source: ViewSource,
     path: str | Path,
     **kwargs: Any,
 ) -> Path:
     """Write :func:`render_html` output to ``path``."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_html(graphs, **kwargs), encoding="utf-8")
+    out.write_text(render_html(source, **kwargs), encoding="utf-8")
     return out
 
 
 def save_gif(
-    graphs: ViewSource,
+    source: ViewSource,
     path: str | Path,
     *,
     duration: int = 600,
@@ -1243,7 +1264,7 @@ def save_gif(
     title_template: str = "step {i} / {total}: {agent_id} [{type}]",
 ) -> Path:
     """Stitch every graph snapshot into an animated GIF."""
-    graphs = _dedupe_by_visible_signature(resolve_graphs(graphs))
+    graphs = _dedupe_by_visible_signature(resolve_graphs(source))
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     if not graphs:
@@ -1312,11 +1333,11 @@ def save_gif(
 # ── Gradio viewer ────────────────────────────────────────────────────
 
 
-def open_viewer(graphs: ViewSource, **launch_kwargs: Any):
+def open_viewer(source: ViewSource, **launch_kwargs: Any):
     """Open the Gradio stepper over a workspace, path, graph, or graph list."""
     import gradio as gr
 
-    graphs = _dedupe_by_visible_signature(resolve_graphs(graphs))
+    graphs = _dedupe_by_visible_signature(resolve_graphs(source))
     if not graphs:
         raise ValueError("open_viewer needs at least one Graph")
 

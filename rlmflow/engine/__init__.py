@@ -1,27 +1,21 @@
-"""Engine internals.
+"""Pure helpers the engine builds on.
 
-The :class:`~rlmflow.rlm.RLMFlow` class in ``rlmflow/rlm.py`` is the
-public orchestrator. The modules in this package implement its
-mechanics:
+:class:`~rlmflow.rlm.RLMFlow` is the engine — it owns state and the
+loop, and every overridable seam lives there as a method. This
+package is its toolbox: free functions and pure data with no engine
+state of their own.
 
-- ``transitions`` — the ``Action`` union, the pure ``act`` /
-  ``act_one`` projection (``Graph -> ActionPlan``), the
-  side-effectful ``apply_one`` dispatcher, and the three
-  obs-to-obs handlers (``step_llm`` / ``step_exec`` /
-  ``step_after_supervising``). See
-  :doc:`docs/internal/act_apply.md`.
-- ``code`` — calling the LLM, extracting code, recording an
-  :class:`~rlmflow.graph.ActionNode`, and running / resuming code.
-- ``replay`` — replay-of-one for cold-starting a suspended generator
-  after a fork or process restart.
-- ``sessions`` — per-agent runtime sessions: ``runtime_for``,
-  ``create_runtime_session``, ``inject_env``, ``register_tools``.
+- :mod:`~rlmflow.engine.actions` — :class:`Action` types
+  (:class:`CallLLM` / :class:`Exec` / :class:`Resume`) and the pure
+  projection ``Graph -> ActionPlan`` (:func:`act_one` / :func:`act`).
+- :mod:`~rlmflow.engine.replay` — cold-start replay-of-one for
+  rebuilding a suspended generator after a fork or process restart.
+- :mod:`~rlmflow.engine.seq` — tiny pure helpers (sequence numbers,
+  iteration counts, budget checks, output truncation/formatting, the
+  pool factory).
+- :mod:`~rlmflow.engine.config` — :class:`RLMConfig`. Pure data.
 
-Child spawning lives directly on :class:`~rlmflow.rlm.RLMFlow` as
-``spawn_child`` — it touches enough engine state that splitting it
-out would just mean passing ``self`` to it as the first argument.
-- ``messages`` — building LLM message lists and the system prompt
-  (tools section, status section, etc.).
-- ``seq`` — small shared helpers (``append_node``, ``unique_child_id``,
-  iteration counts, budget checks, output truncation, formatting).
+If something needs engine state to do its job, it's a method on
+:class:`~rlmflow.rlm.RLMFlow`. If it's a pure function of its
+arguments, it lives here. No middle category.
 """

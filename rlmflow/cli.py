@@ -9,7 +9,7 @@ Three sub-commands, all operating on paths — no agent construction.
 ``<path>`` may be:
 
 * a workspace directory (``graph.json`` + ``session/`` + ``context/``)
-  — the single live :class:`Graph` reloaded from the session.
+  — retraced into graph snapshots from the persisted session.
 * a standalone ``Graph`` JSON snapshot.
 
 ``--format`` accepts text formats (``mermaid`` / ``dot`` / ``d2`` /
@@ -29,7 +29,7 @@ from rlmflow.graph import Graph
 
 
 def _load(path: Path) -> list[Graph]:
-    """Return graph snapshots for a workspace or graph dump."""
+    """Return graph snapshots for a workspace, graph dir, or graph dump."""
     from rlmflow.utils.viewer import resolve_graphs
 
     try:

@@ -20,6 +20,7 @@ from rlmflow.utils import (
     save_image,
     save_steps,
 )
+from rlmflow.utils.viz import code_log, report_md, token_sparkline
 from rlmflow.utils.viewer import _scale_figure_elements
 
 KALEIDO_INSTALLED = importlib.util.find_spec("kaleido") is not None
@@ -190,6 +191,35 @@ def test_render_html_accepts_workspace(tmp_path):
     html = render_html(workspace, title="workspace")
     assert "<title>workspace</title>" in html
     assert html.count('<section class="slide') >= 1
+
+
+def test_resolve_graphs_accepts_workspace_path_with_graph_json(tmp_path):
+    workspace = _run_workspace(tmp_path)
+    assert Workspace.check_path(workspace.root)
+
+    graphs = resolve_graphs(workspace.root)
+
+    assert graphs
+    assert graphs[-1].result() == "root:child-answer"
+
+
+def test_resolve_graphs_accepts_graph_dump_directory(tmp_path):
+    graph_dir = tmp_path / "graph-dir"
+    _final().save(graph_dir / "graph.json")
+    assert not Workspace.check_path(graph_dir)
+
+    graphs = resolve_graphs(graph_dir)
+
+    assert len(graphs) == 1
+    assert graphs[0].result() == "root:child-answer"
+
+
+def test_viz_helpers_accept_workspace_and_path(tmp_path):
+    workspace = _run_workspace(tmp_path)
+
+    assert "tok over" in token_sparkline(workspace)
+    assert "## Result" in report_md(workspace.root)
+    assert "delegate('child', 'do the thing', '')" in code_log(workspace.root)
 
 
 @pytest.mark.skipif(not PLOTLY_INSTALLED, reason="plotly not installed")

@@ -5,15 +5,11 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+from rlmflow.graph import Graph, WorkspaceRef, retrace_steps
 from rlmflow.workspace.context import Context, FileContext
 from rlmflow.workspace.session import FileSession, Session
 from rlmflow.workspace.store import FileStore
-
-if TYPE_CHECKING:
-    from rlmflow.graph import Graph, WorkspaceRef
-    from rlmflow.runtime.runtime import Runtime
 
 
 @dataclass
@@ -66,9 +62,17 @@ class Workspace:
         """
         return cls.create(dir, branch_id=branch_id)
 
-    def ref(self) -> WorkspaceRef:
-        from rlmflow.graph import WorkspaceRef
+    @staticmethod
+    def check_path(path: str | Path) -> bool:
+        """Return True if ``path`` looks like a persisted RLMFlow workspace."""
+        root = Path(path)
+        return (
+            root.is_dir()
+            and (root / "graph.json").is_file()
+            and (root / "session").is_dir()
+        )
 
+    def ref(self) -> WorkspaceRef:
         return WorkspaceRef(root=str(self.root), branch_id=self.branch_id)
 
     def load_graph(self) -> Graph:
@@ -84,8 +88,6 @@ class Workspace:
         (children spawned by the same supervising step are
         round-robined, not drained one-at-a-time).
         """
-        from rlmflow.graph import retrace_steps
-
         return retrace_steps(self.load_graph())
 
     def open_viewer(self, **kwargs):
@@ -93,11 +95,6 @@ class Workspace:
         from rlmflow.utils.viewer import open_viewer
 
         return open_viewer(self, **kwargs)
-
-    def materialize_runtime(self) -> Runtime:
-        from rlmflow.runtime.local import LocalRuntime
-
-        return LocalRuntime(workspace=self)
 
     def fork(
         self,

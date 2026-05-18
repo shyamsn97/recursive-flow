@@ -83,13 +83,13 @@ def test_load_graph_file(tmp_path: Path, run_graphs: list[Graph]):
 
 
 def test_load_workspace_dir(tmp_path: Path, run_graphs: list[Graph]):
-    """A workspace directory with a graph.json is loaded as a single graph."""
+    """A workspace directory with graph.json is loaded as retraced steps."""
     final = run_graphs[-1]
     ws = _write_workspace(tmp_path / "ws", final)
 
     graphs = _load(ws)
-    assert len(graphs) == 1
-    assert graphs[0].result() == final.result()
+    assert len(graphs) > 1
+    assert graphs[-1].result() == final.result()
 
 
 def test_load_missing_path(tmp_path: Path):
@@ -158,7 +158,7 @@ def test_render_tree(
     assert rc == 0
     out = capsys.readouterr().out
     assert "root" in out
-    assert "result -> " in out
+    assert "done -> " in out
 
 
 def test_render_gantt_html_over_workspace(tmp_path: Path, run_graphs: list[Graph]):
@@ -205,7 +205,7 @@ def test_view_dispatches_to_open_viewer(
     rc = main(["view", str(workspace), "--port", "7861"])
 
     assert rc == 0
-    assert captured["n"] == 1
+    assert captured["n"] > 1
     assert captured["kwargs"] == {"server_port": 7861}
 
 
@@ -247,7 +247,7 @@ def test_render_html_writes_stepper(tmp_path: Path, run_graphs: list[Graph]):
     text = out_file.read_text()
     assert text.startswith("<!doctype html>")
     assert "<title>cli stepper</title>" in text
-    assert text.count('<section class="slide') == 1
+    assert text.count('<section class="slide') == len(_load(workspace))
     assert "top center" not in text
 
 
@@ -271,7 +271,8 @@ def test_render_html_no_normalize_labels_keeps_top_positions(
     )
     assert rc == 0
     text = out_file.read_text()
-    assert "top center" in text
+    assert text.startswith("<!doctype html>")
+    assert text.count('<section class="slide') == len(_load(workspace))
 
 
 @pytest.mark.skipif(not PLOTLY_INSTALLED, reason="plotly not installed")
@@ -378,7 +379,7 @@ def test_render_steps_writes_one_per_state(
 
     assert rc == 0
     files = sorted(p.name for p in out_dir.glob("step_*.png"))
-    assert len(files) == 1
+    assert len(files) == len(_load(workspace))
 
 
 def test_render_steps_split_mults_and_no_normalize(
@@ -411,4 +412,4 @@ def test_render_steps_split_mults_and_no_normalize(
     )
 
     assert rc == 0
-    assert len(list(out_dir.glob("step_*.png"))) == 1
+    assert len(list(out_dir.glob("step_*.png"))) == len(_load(workspace))

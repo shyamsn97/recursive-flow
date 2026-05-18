@@ -9,13 +9,13 @@ demonstrate the viewer UI.
 from __future__ import annotations
 
 from rlmflow.graph import (
-    ActionNode,
-    ErrorNode,
+    DoneOutput,
+    ErrorOutput,
     Graph,
+    LLMOutput,
     Node,
-    QueryNode,
-    ResultNode,
-    SupervisingNode,
+    SupervisingOutput,
+    UserQuery,
 )
 from rlmflow.utils.viewer import open_viewer
 
@@ -107,7 +107,7 @@ def snapshot(
 # ── snapshot 0: root just got its query ──────────────────────────────
 
 
-root_q = QueryNode(
+root_q = UserQuery(
     agent_id="root",
     seq=0,
     content="Create a boids simulation in plain HTML + JS.",
@@ -119,7 +119,7 @@ g0 = snapshot({"root": [root_q]})
 # ── snapshot 1: root spawned three children, now waiting ─────────────
 
 
-root_action = ActionNode(
+root_action = LLMOutput(
     agent_id="root",
     seq=1,
     reply="I'll split this into files and delegate each part.",
@@ -131,7 +131,7 @@ root_action = ActionNode(
         'done("\\n".join(results))'
     ),
 )
-root_sup = SupervisingNode(
+root_sup = SupervisingOutput(
     agent_id="root",
     seq=2,
     waiting_on=[
@@ -140,9 +140,9 @@ root_sup = SupervisingNode(
         "root.script_js",
     ],
 )
-child_index_q = QueryNode(agent_id="root.index_html", seq=0, content="Write index.html")
-child_style_q = QueryNode(agent_id="root.style_css", seq=0, content="Write style.css")
-child_script_q = QueryNode(agent_id="root.script_js", seq=0, content="Write script.js")
+child_index_q = UserQuery(agent_id="root.index_html", seq=0, content="Write index.html")
+child_style_q = UserQuery(agent_id="root.style_css", seq=0, content="Write style.css")
+child_script_q = UserQuery(agent_id="root.script_js", seq=0, content="Write script.js")
 
 FIRST_SPAWNS = {
     "root.index_html": root_action.id,
@@ -164,17 +164,17 @@ g1 = snapshot(
 # ── snapshot 2: two simple children done, script.js spawns sub-agents ──
 
 
-child_index_done = ResultNode(
+child_index_done = DoneOutput(
     agent_id="root.index_html",
     seq=1,
     result="Created index.html with canvas element",
 )
-child_style_done = ResultNode(
+child_style_done = DoneOutput(
     agent_id="root.style_css",
     seq=1,
     result="Created style.css with dark theme",
 )
-script_action = ActionNode(
+script_action = LLMOutput(
     agent_id="root.script_js",
     seq=1,
     reply="Splitting into core/renderer/controls.",
@@ -185,7 +185,7 @@ script_action = ActionNode(
         "yield wait(a, b, c)"
     ),
 )
-script_sup = SupervisingNode(
+script_sup = SupervisingOutput(
     agent_id="root.script_js",
     seq=2,
     waiting_on=[
@@ -194,9 +194,9 @@ script_sup = SupervisingNode(
         "root.script_js.controls",
     ],
 )
-sub_core_q = QueryNode(agent_id="root.script_js.boids_core", seq=0, content="Core boids")
-sub_render_q = QueryNode(agent_id="root.script_js.renderer", seq=0, content="Canvas renderer")
-sub_controls_q = QueryNode(agent_id="root.script_js.controls", seq=0, content="UI controls")
+sub_core_q = UserQuery(agent_id="root.script_js.boids_core", seq=0, content="Core boids")
+sub_render_q = UserQuery(agent_id="root.script_js.renderer", seq=0, content="Canvas renderer")
+sub_controls_q = UserQuery(agent_id="root.script_js.controls", seq=0, content="UI controls")
 
 SECOND_SPAWNS = {
     **FIRST_SPAWNS,
@@ -222,17 +222,17 @@ g2 = snapshot(
 # ── snapshot 3: leaf agents finish (one errors mid-stream) ───────────
 
 
-sub_core_done = ResultNode(
+sub_core_done = DoneOutput(
     agent_id="root.script_js.boids_core",
     seq=1,
     result="Implemented separation, alignment, and cohesion",
 )
-sub_render_done = ResultNode(
+sub_render_done = DoneOutput(
     agent_id="root.script_js.renderer",
     seq=1,
     result="Implemented requestAnimationFrame renderer",
 )
-sub_controls_err = ErrorNode(
+sub_controls_err = ErrorOutput(
     agent_id="root.script_js.controls",
     seq=1,
     error="no_code_block",
@@ -256,17 +256,17 @@ g3 = snapshot(
 # ── snapshot 4: script.js retries, finishes, then root completes ─────
 
 
-sub_controls_done = ResultNode(
+sub_controls_done = DoneOutput(
     agent_id="root.script_js.controls",
     seq=2,
     result="Implemented UI controls",
 )
-script_done = ResultNode(
+script_done = DoneOutput(
     agent_id="root.script_js",
     seq=3,
     result="Created script.js by combining core, renderer, and controls",
 )
-root_done = ResultNode(
+root_done = DoneOutput(
     agent_id="root",
     seq=3,
     result="Created boids simulation: index.html, style.css, script.js",

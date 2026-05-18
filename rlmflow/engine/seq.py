@@ -53,9 +53,9 @@ def unique_child_id(parent_aid: str, name: str, existing: set[str]) -> str:
 def create_pool(config: "RLMConfig", pool: Pool | Callable | None = None) -> Pool:
     if pool is not None:
         return pool if hasattr(pool, "execute") else CallablePool(pool)
-    if config.max_concurrency is not None:
-        return ThreadPool(config.max_concurrency)
-    return SequentialPool()
+    if config.max_concurrency is None or config.max_concurrency <= 1:
+        return SequentialPool()
+    return ThreadPool(config.max_concurrency)
 
 
 def iteration_count(graph: Graph) -> int:
