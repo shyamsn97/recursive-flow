@@ -67,3 +67,4 @@ examples/runs/
 examples/*/**/workspaces/*
 examples/autoresearch/runs/*
 examples/*/**/frames/*
+examples/example-workspaces/*

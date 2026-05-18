@@ -25,15 +25,6 @@ from rlmflow.runtime.local import LocalRuntime
 from rlmflow.tools import FILE_TOOLS
 
 
-class LoggingRLMFlow(RLMFlow):
-    def extract_code(self, text: str) -> str | None:
-        code = super().extract_code(text)
-        if code is None:
-            return code
-        header = 'print("[rlmflow] executing repl block...")'
-        return header + "\n" + code
-
-
 # ── Generate the haystack ───────────────────────────────────────────
 
 def generate_haystack(
@@ -65,7 +56,7 @@ def main():
     parser.add_argument("--num-files", type=int, default=500)
     parser.add_argument("--viewer", action="store_true",
                         help="Open the state viewer after finishing")
-    parser.add_argument("--model", default="claude-opus-4-6")
+    parser.add_argument("--model", default="gpt-5-mini")
     parser.add_argument("--fast-model", default=None)
     parser.add_argument("--docker-image", default=None,
                         help="If set, run agent code inside this Docker image (e.g. rlmflow:local).")
@@ -79,8 +70,8 @@ def main():
     else:
         print(">>> LOCAL RUNTIME")
 
-    workspace = Path("workspaces/needle-haystack").resolve()
-    haystack_path = Path("workspaces/needle-haystack/haystack").resolve()
+    workspace = Path("example-workspaces/needle-haystack").resolve()
+    haystack_path = Path("example-workspaces/needle-haystack/haystack").resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     haystack_path.mkdir(parents=True, exist_ok=True)
     answer = generate_haystack(haystack_path, num_files=args.num_files)
@@ -115,7 +106,7 @@ def main():
             "fast": {"model": fast, "description": "Cheaper model for small sub-tasks."},
         }
 
-    agent = LoggingRLMFlow(
+    agent = RLMFlow(
         llm_client=llm,
         runtime=make_runtime(),
         config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
