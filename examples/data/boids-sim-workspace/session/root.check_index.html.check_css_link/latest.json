@@ -1,0 +1,8 @@
+{
+  "agent_id": "root.check_index.html.check_css_link",
+  "latest_node_id": "n_dbcaffd885be",
+  "seq": 4,
+  "type": "done_output",
+  "terminal": true,
+  "result": "FOUND"
+}

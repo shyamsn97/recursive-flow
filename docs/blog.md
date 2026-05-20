@@ -112,7 +112,7 @@ context, run a search, read a passage, maybe delegate again, then
 return.
 
 In a minimal RLM-style implementation, every
-<span class="rlm-hl-del">rlm_delegate(name, query, ctx)</span> call is the
+<span class="rlm-hl-del">rlm_delegate(name=name, query=query, context=ctx)</span> call is the
 LLM call: it spins up a fresh sub-LLM with its own REPL — bound to
 `ctx` as `CONTEXT` — runs that sub-LLM's agent loop until it calls
 `done(value)`, and hands the value back as a `str`. A child's REPL
@@ -302,7 +302,7 @@ done(extract_code([chunk_0, chunk_1, chunk_2]))   # all three are plain str</pre
 
   <div class="rlm-slide rlm-slide-2">
     <h4>2. A child's REPL can recursively rlm_delegate(...) too</h4>
-    <pre><span class="rlm-hl-frame"># In the rlm_delegate("chunk_2", ...) — its sub-LLM is now the one writing REPL.</span>
+    <pre><span class="rlm-hl-frame"># In rlm_delegate(name="chunk_2", ...) — its sub-LLM is now the one writing REPL.</span>
 hits   = CONTEXT.grep(r"secret|code|passcode|needle").splitlines()
 cand_a = <span class="rlm-hl-del">rlm_delegate</span>("candidate_a", "Inspect candidate window A.", hits[0])
 cand_b = <span class="rlm-hl-del">rlm_delegate</span>("candidate_b", "Inspect candidate window B.", hits[1])

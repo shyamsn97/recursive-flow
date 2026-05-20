@@ -17,7 +17,9 @@ from __future__ import annotations
 import ast
 
 from rlmflow.graph import ChildHandle, WaitRequest
+from rlmflow.runtime.local import LocalRuntime
 from rlmflow.runtime.repl import REPL, _has_top_level_yield
+from rlmflow.tools.builtins import SHOW_VARS
 
 
 # ── _has_top_level_yield ─────────────────────────────────────────────
@@ -66,6 +68,24 @@ def test_block_with_no_yield_runs_to_completion():
     suspended, out = r.start("print('hi')\nx = 2 + 2\nprint(x)")
     assert suspended is False
     assert "hi" in out and "4" in out
+
+
+def test_show_vars_is_registered_as_builtin_tool():
+    runtime = LocalRuntime()
+    runtime.register_tool(SHOW_VARS, core=True)
+
+    out = runtime.execute(
+        "small = 4\n"
+        "huge = 'x' * 1000\n"
+        "_private = 'hidden'\n"
+        "print(SHOW_VARS())\n"
+    )
+    assert "SHOW_VARS" in runtime.tools
+    assert runtime.tools["SHOW_VARS"].core is True
+    assert "'small': 'int'" in out
+    assert "'huge': 'str'" in out
+    assert "_private" not in out
+    assert "xxxxxxxx" not in out
 
 
 def test_helper_generator_defined_and_consumed_does_not_suspend():

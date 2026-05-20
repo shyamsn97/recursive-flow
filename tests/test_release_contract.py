@@ -32,7 +32,7 @@ class DoneLLM(LLMClient):
 class DelegatingLLM(LLMClient):
     ROOT_REPLY = (
         "```repl\n"
-        'h = rlm_delegate("child", "do the thing", "")\n'
+        'h = rlm_delegate(name="child", query="do the thing", context="")\n'
         "results = yield rlm_wait(h)\n"
         "done(results[0])\n"
         "```"
@@ -162,7 +162,7 @@ def test_tree_displays_model_label_per_agent():
         def chat(self, messages, *args, **kwargs):
             return (
                 "```repl\n"
-                'h = rlm_delegate("fast_worker", "use fast", "", model="fast")\n'
+                'h = rlm_delegate(name="fast_worker", query="use fast", context="", model="fast")\n'
                 "r = yield rlm_wait(h)\n"
                 "done(r[0])\n"
                 "```"

@@ -168,7 +168,7 @@ prompt = (
     .section(
         "protocol",
         """
-- Respond with exactly one ```repl``` block.
+- Use exactly one ```repl``` block per assistant message.
 - Call `done(answer)` exactly once when finished.
 - Use tools to inspect or modify files.
 """,
@@ -193,7 +193,7 @@ agent = RLMFlow(
         system_prompt="""
 You are a Python REPL agent.
 
-- Respond with exactly one ```repl``` block.
+- Use exactly one ```repl``` block per assistant message.
 - Use available tools to make progress.
 - Call `done(answer)` exactly once when finished.
 """,
@@ -261,14 +261,14 @@ contracts.
 ```python
 handles = [
     rlm_delegate(
-        "api",
-        "Implement src/api.py. Return ONLY JSON {\"files\": [str], \"checks\": [str]}.",
-        api_spec,
+        name="api",
+        query="Implement src/api.py. Return ONLY JSON {\"files\": [str], \"checks\": [str]}.",
+        context=api_spec,
     ),
     rlm_delegate(
-        "tests",
-        "Implement tests for src/api.py. Return ONLY JSON {\"files\": [str], \"checks\": [str]}.",
-        test_spec,
+        name="tests",
+        query="Implement tests for src/api.py. Return ONLY JSON {\"files\": [str], \"checks\": [str]}.",
+        context=test_spec,
     ),
 ]
 results = yield rlm_wait(*handles)

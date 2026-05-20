@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="description" content="Example responsive, accessible single-file index.html created per shared requirements." />
+  <title>Example Project — Home</title>
+
+  <!-- Minimal, readable CSS -->
+  <style>
+    :root{
+      --bg:#ffffff; --fg:#111827; --muted:#6b7280; --accent:#0ea5a4; --maxw:1000px;
+      --radius:8px; --gap:1rem;
+    }
+    html,body{height:100%}
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      color:var(--fg);
+      background:linear-gradient(180deg,#fbfdff, #f8fafc);
+      -webkit-font-smoothing:antialiased;
+      line-height:1.5;
+      padding:0 1rem;
+    }
+    a{color:var(--accent); text-decoration:none}
+    a:focus{outline:3px solid color-mix(in srgb, var(--accent) 30%, transparent)}
+    header{background:transparent; padding:1rem 0}
+    .container{max-width:var(--maxw); margin:0 auto}
+    .topbar{display:flex; align-items:center; justify-content:space-between; gap:1rem}
+    .brand{font-weight:700; font-size:1.125rem; display:flex; align-items:center; gap:.5rem}
+    nav ul{list-style:none; margin:0; padding:0; display:flex; gap:0.75rem; align-items:center}
+    nav a{padding:.5rem .6rem; border-radius:6px}
+    .hero{display:grid; gap:1rem; grid-template-columns:1fr; padding:2rem 0}
+    .card{background:linear-gradient(180deg,#fff,#fbfeff); border:1px solid #e6eef0; padding:1.25rem; border-radius:var(--radius); box-shadow:0 6px 16px rgba(15,23,42,0.05)}
+    .grid{display:grid; gap:1rem; grid-template-columns:repeat(2,1fr)}
+    .lead{color:var(--muted); font-size:1rem}
+    .cta{display:inline-block; background:var(--accent); color:white; padding:.6rem .9rem; border-radius:8px;}
+    footer{padding:2rem 0; color:var(--muted); font-size:.9rem}
+    .skip-link{position:absolute; left:-999px; top:auto; width:1px; height:1px; overflow:hidden}
+    .skip-link:focus{position:static; left:auto; width:auto; height:auto; padding:.5rem; background:#000; color:#fff; z-index:100; border-radius:4px}
+
+    /* responsive */
+    @media (min-width:720px){
+      .hero{grid-template-columns:1fr 420px; align-items:center}
+      .grid{grid-template-columns:repeat(3,1fr)}
+    }
+
+    /* simple form layout */
+    form{display:flex; flex-direction:column; gap:.5rem}
+    label{font-size:.875rem}
+    input[type="text"], input[type="email"], textarea{
+      padding:.6rem; border-radius:6px; border:1px solid #d1e3e6; background:transparent;
+      font-size:1rem;
+    }
+    input:focus, textarea:focus{outline:2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color:var(--accent)}
+    button{cursor:pointer}
+    .muted{color:var(--muted)}
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <header class="container" role="banner" aria-label="Site header">
+    <div class="topbar">
+      <div class="brand" aria-hidden="false">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="2" width="20" height="20" rx="5" fill="#0ea5a4"/>
+          <path d="M7 12h10" stroke="#fff" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+        <span>Example Project</span>
+      </div>
+
+      <nav role="navigation" aria-label="Primary navigation">
+        <ul>
+          <li><a href="#about">About</a></li>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#contact">Contact</a></li>
+          <li><a href="#" class="cta" aria-label="Call to action">Get started</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="container" role="main" aria-labelledby="main-heading">
+    <section class="hero" aria-label="Hero">
+      <div>
+        <h1 id="main-heading">Build fast, accessible interfaces</h1>
+        <p class="lead">A minimal, responsive, and accessible HTML template demonstrating semantic structure, basic styling, and progressive enhancement.</p>
+        <p>
+          <a class="cta" href="#contact">Contact us</a>
+          <a style="margin-left:.5rem" href="#features" class="muted">See features →</a>
+        </p>
+      </div>
+      <aside class="card" aria-label="Quick facts">
+        <h2 style="margin-top:0">Quick facts</h2>
+        <ul>
+          <li>Responsive layout</li>
+          <li>Semantic markup & ARIA where appropriate</li>
+          <li>Progressive enhancement (no JS required)</li>
+        </ul>
+        <p class="muted" style="font-size:.9rem">This file is self-contained and suitable as a starting point.</p>
+      </aside>
+    </section>
+
+    <section id="about" class="card" aria-labelledby="about-heading" style="margin-bottom:1rem">
+      <h2 id="about-heading">About</h2>
+      <p class="muted">This template was generated to meet shared requirements for a single-file index.html. It demonstrates clear structure, good defaults, and accessible form controls.</p>
+    </section>
+
+    <section id="features" aria-labelledby="features-heading" style="margin-bottom:1rem">
+      <h2 id="features-heading">Features</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Accessible</h3>
+          <p class="muted">Uses landmarks, focus styles, and proper labels for assistive tech.</p>
+        </div>
+        <div class="card">
+          <h3>Responsive</h3>
+          <p class="muted">Simple, mobile-first layout that scales up on wider screens.</p>
+        </div>
+        <div class="card">
+          <h3>Lightweight</h3>
+          <p class="muted">No external dependencies; small inline CSS and a tiny script for enhancement.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="contact" class="card" aria-labelledby="contact-heading">
+      <h2 id="contact-heading">Contact</h2>
+      <p class="muted">Send us a note — this form uses client-side validation as progressive enhancement.</p>
+
+      <form id="contact-form" action="#" method="post" novalidate>
+        <div>
+          <label for="name">Name</label>
+          <input id="name" name="name" type="text" required aria-required="true" placeholder="Your name" />
+        </div>
+        <div>
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" required aria-required="true" placeholder="you@example.com" />
+        </div>
+        <div>
+          <label for="message">Message</label>
+          <textarea id="message" name="message" rows="5" required aria-required="true" placeholder="How can we help?"></textarea>
+        </div>
+        <div style="display:flex; gap:.5rem; margin-top:.5rem">
+          <button type="submit" class="cta">Send message</button>
+          <button type="reset" style="background:transparent; border:1px solid #d1e3e6; padding:.5rem .75rem; border-radius:6px">Reset</button>
+        </div>
+        <p id="form-status" class="muted" aria-live="polite" style="margin-top:.5rem"></p>
+      </form>
+    </section>
+  </main>
+
+  <footer class="container" role="contentinfo">
+    <div class="card" style="display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap">
+      <div>
+        <strong>Example Project</strong><div class="muted">© 2026 Example Author</div>
+      </div>
+      <div class="muted">Made with care · <a href="#" class="muted">License</a></div>
+    </div>
+  </footer>
+
+  <!-- Minimal JS for progressive enhancement -->
+  <script>
+    (function(){
+      // Simple form handling: validate and provide feedback without submitting
+      var form = document.getElementById('contact-form');
+      var status = document.getElementById('form-status');
+      form.addEventListener('submit', function(e){
+        e.preventDefault();
+        var name = form.name.value.trim();
+        var email = form.email.value.trim();
+        var message = form.message.value.trim();
+        if(!name || !email || !message){
+          status.textContent = 'Please fill out all required fields.';
+          status.style.color = '#b91c1c';
+          return;
+        }
+        // Very light "success" behavior
+        status.style.color = '#065f46';
+        status.textContent = 'Thanks — your message has been received (demo).';
+        form.reset();
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -178,13 +178,13 @@ full    = CONTEXT.read()        # full payload for handoff to a child
 
 ## Delegation
 
-Children are spawned with a positional, mandatory `context`:
+Children are spawned with keyword-only arguments and a mandatory `context`:
 
 ```python
-rlm_delegate(name, query, context, *, model=None)
+rlm_delegate(*, name, query, context, model=None)
 ```
 
-- Pass `""` when the child works from the query alone (the most common
+- Pass `context=""` when the child works from the query alone (the most common
   case for code-only tasks).
 - Pass a `CONTEXT.lines(...)` / `CONTEXT.read(...)` slice when each
   child reasons over a different chunk of the parent's payload
@@ -192,14 +192,9 @@ rlm_delegate(name, query, context, *, model=None)
 - Pass `CONTEXT.read()` only when the child genuinely needs the
   parent's full view (reviewers, auditors, deterministic retry).
 
-The default prompt biases toward **inline first**: if you (the parent)
-already know how to produce the answer end-to-end — a known multi-file
-artifact, a familiar algorithm, a self-contained transform — write it
-yourself with `write_file` / direct compute. Reserve `rlm_delegate(...)`
-for work that is both parallel **and** requires distinct reasoning per
-child (different data slices, different sources, separate verification).
-Cross-file schema drift between siblings is the #1 multi-file failure
-mode; inlining sidesteps it entirely.
+The default prompt biases toward a supervisor workflow for large context,
+parallel reasoning, and split artifacts. Inline work is still fine for small,
+tightly coupled tasks where delegation adds no useful ownership boundary.
 
 ## Walkthroughs
 

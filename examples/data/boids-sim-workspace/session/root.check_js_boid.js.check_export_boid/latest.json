@@ -1,0 +1,8 @@
+{
+  "agent_id": "root.check_js_boid.js.check_export_boid",
+  "latest_node_id": "n_ab892b255e63",
+  "seq": 4,
+  "type": "done_output",
+  "terminal": true,
+  "result": "FOUND export default class Boid {"
+}

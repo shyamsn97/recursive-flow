@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -68,30 +69,38 @@ from rlmflow.graph import (
     RuntimeRef,
     SupervisingOutput,
     UserQuery,
+    is_code_observation,
     is_errored,
     is_exec_output,
     is_llm_output,
+    is_resumed,
     is_user_query,
 )
 from rlmflow.llm import LLMClient, LLMUsage
 from rlmflow.prompts.default import DEFAULT_BUILDER
 from rlmflow.prompts.messages import (
-    CONTEXT_HINT_ABSENT,
-    CONTEXT_HINT_PRESENT,
     CONTINUE_ACTION,
     DEFAULT_QUERY,
     FINAL_ANSWER_ACTION,
     FIRST_ACTION,
     NO_CODE_BLOCK,
     ORPHANED_DELEGATES,
+    RESUME_VERIFY_ACTION,
     STATUS_DEPTH_MID,
     STATUS_DEPTH_NEAR_MAX,
     STATUS_DEPTH_ROOT,
     TRUNCATION_SESSION_HINT,
     TRUNCATION_SUMMARY,
+    format_context_hint,
 )
 from rlmflow.runtime import LocalRuntime, Runtime
-from rlmflow.tools.builtins import make_delegate, make_done, make_wait
+from rlmflow.tools.builtins import (
+    SHOW_VARS,
+    make_delegate,
+    make_done,
+    make_llm_query_batched,
+    make_wait,
+)
 from rlmflow.utils import OrphanedDelegatesError, check_yield_errors, find_code_blocks
 from rlmflow.workspace import (
     Context,
@@ -231,7 +240,7 @@ class RLMFlow(LLMClient):
         for key, value in (contexts or {}).items():
             self.context.write(key, value, agent_id=agent_id)
 
-        context_hint = CONTEXT_HINT_PRESENT if context else CONTEXT_HINT_ABSENT
+        context_hint = self.build_context_hint(agent_id)
         root = Graph(
             agent_id=agent_id,
             branch_id=self.workspace.branch_id if self.workspace else "main",
@@ -662,6 +671,46 @@ class RLMFlow(LLMClient):
         usage = active.last_usage or LLMUsage()
         return text, usage
 
+    def llm_query_batched(
+        self,
+        prompts: list[str],
+        *,
+        model: str = "default",
+    ) -> list[str]:
+        """Run one-shot LLM prompts concurrently without spawning child agents."""
+
+        if model not in self.llm_clients:
+            keys = ", ".join(sorted(self.llm_clients))
+            raise ValueError(f"unknown model {model!r}. available: {keys}")
+        if not prompts:
+            return []
+
+        client = self.llm_clients[model]
+
+        def run_one(prompt: str) -> tuple[str, LLMUsage]:
+            return self.call_llm([{"role": "user", "content": prompt}], client=client)
+
+        cap = self.config.max_concurrency or len(prompts)
+        max_workers = max(1, min(len(prompts), cap))
+        if max_workers == 1:
+            pairs = [run_one(prompt) for prompt in prompts]
+        else:
+            pairs_by_index: dict[int, tuple[str, LLMUsage]] = {}
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(run_one, prompt): i for i, prompt in enumerate(prompts)
+                }
+                for future in as_completed(futures):
+                    pairs_by_index[futures[future]] = future.result()
+            pairs = [pairs_by_index[i] for i in range(len(prompts))]
+
+        total_usage = LLMUsage(
+            input_tokens=sum(usage.input_tokens for _, usage in pairs),
+            output_tokens=sum(usage.output_tokens for _, usage in pairs),
+        )
+        self.record_usage(total_usage)
+        return [text for text, _ in pairs]
+
     def llm_client_for(self, graph: Graph) -> LLMClient:
         """Pick the per-agent LLM client.
 
@@ -758,11 +807,7 @@ class RLMFlow(LLMClient):
         )
         system = {"role": "system", "content": system_content}
 
-        try:
-            payload = self.context.read("context", agent_id=graph.agent_id)
-        except KeyError:
-            payload = ""
-        context_hint = CONTEXT_HINT_PRESENT if payload else CONTEXT_HINT_ABSENT
+        context_hint = self.build_context_hint(graph.agent_id)
 
         msgs: list[dict[str, str]] = []
         for state in graph.states:
@@ -799,8 +844,25 @@ class RLMFlow(LLMClient):
         # for *completed* prior turns, which is what "should we nudge
         # with CONTINUE_ACTION?" actually wants to know.
         has_prior_turn = any(is_llm_output(s) for s in graph.states)
+        last_code_observation = next(
+            (s for s in reversed(graph.states) if is_code_observation(s)), None
+        )
         if force_final:
             msgs.append({"role": "user", "content": FINAL_ANSWER_ACTION})
+        elif (
+            has_prior_turn
+            and last_code_observation
+            and is_resumed(last_code_observation)
+        ):
+            child_ids = ", ".join(last_code_observation.resumed_from)
+            msgs.append(
+                {
+                    "role": "user",
+                    "content": RESUME_VERIFY_ACTION.format(
+                        child_ids=child_ids, context_hint=context_hint
+                    ),
+                }
+            )
         elif has_prior_turn:
             msgs.append(
                 {
@@ -820,6 +882,20 @@ class RLMFlow(LLMClient):
             tools=self.build_tools_section(),
             status=self.build_status_section(graph),
         )
+
+    def build_context_hint(self, agent_id: str) -> str:
+        """Render a compact first-turn context metadata hint, if useful."""
+
+        try:
+            info = self.context.info("context", agent_id=agent_id)
+        except KeyError:
+            info = None
+        keys = self.context.list_contexts(agent_id=agent_id)
+        has_primary_context = bool(info and info.get("chars", 0) > 0)
+        has_extra_contexts = any(key != "context" for key in keys)
+        if not has_primary_context and not has_extra_contexts:
+            return ""
+        return format_context_hint(info, context_keys=keys)
 
     def build_system_prompt_for(
         self,
@@ -841,7 +917,7 @@ class RLMFlow(LLMClient):
     def build_tools_section(self) -> str:
         """Render the tools section that lands inside the system prompt."""
         baseline = self.config.max_depth == 0
-        tool_defs = self.runtime.get_tool_defs()
+        tool_defs = [t for t in self.runtime.get_tool_defs() if not t.core]
         if baseline:
             tool_defs = [
                 t for t in tool_defs if t.name not in ("rlm_delegate", "rlm_wait")
@@ -851,7 +927,10 @@ class RLMFlow(LLMClient):
             for tool_def in tool_defs
         ]
         if len(self.llm_clients) > 1 and not baseline:
-            lines.append("\nAvailable models for `rlm_delegate(model=...)`:")
+            lines.append(
+                "\nAvailable models for `rlm_delegate(model=...)` "
+                "and `llm_query_batched(model=...)`:"
+            )
             for key in sorted(self.llm_clients):
                 desc = self.model_descriptions.get(key)
                 lines.append(f"- `{key}`: {desc}" if desc else f"- `{key}`")
@@ -964,8 +1043,10 @@ class RLMFlow(LLMClient):
         """
         runtime = runtime or self.runtime
         runtime.inject("OrphanedDelegatesError", OrphanedDelegatesError)
+        runtime.register_tool(SHOW_VARS, core=True)
         runtime.register_tool(make_done(runtime.env), core=True)
         runtime.register_tool(make_wait(), core=True)
+        runtime.register_tool(make_llm_query_batched(self.llm_query_batched), core=True)
         runtime.register_tool(make_delegate(self.spawn_child, runtime.env), core=True)
 
     def format_exec_output(self, output: str) -> str:
@@ -1016,7 +1097,7 @@ class RLMFlow(LLMClient):
             ),
             "model": model,
         }
-        context_hint = CONTEXT_HINT_PRESENT if context else CONTEXT_HINT_ABSENT
+        context_hint = self.build_context_hint(child_aid)
         child_graph = Graph(
             agent_id=child_aid,
             branch_id=parent.branch_id,

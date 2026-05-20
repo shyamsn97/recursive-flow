@@ -30,7 +30,7 @@ You are an agent with a Python REPL. You solve tasks by writing and executing Py
 """
 
 REPL_BASELINE_TEXT = """
-- Every response is exactly one ```repl``` code block. Tools are pre-imported; variables persist across turns.
+- Use exactly one ```repl``` block per assistant message. Tools are pre-imported; variables persist across turns.
 - Final answer: `done(answer)` exactly once when complete. That string is what the user sees.
 - Iterate — run code, observe, decide. Don't one-shot unfamiliar data.
 - Verify before `done()` — an empty / zero / surprising result deserves one sanity check first.

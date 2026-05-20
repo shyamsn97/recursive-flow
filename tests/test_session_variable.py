@@ -56,14 +56,14 @@ def _seed_agent(
     return q.id, r.id
 
 
-def test_list_agents_excludes_self_and_summarizes_siblings(tmp_path: Path):
+def test_list_agents_excludes_self_and_lists_siblings(tmp_path: Path):
     session = FileSession(tmp_path / "workspace")
     root_q, _ = _seed_agent(
         session,
         agent_id="root",
         system="root prompt",
         query="build a thing",
-        code='rlm_delegate("html", "...")',
+        code='rlm_delegate(name="html", query="...", context="")',
         observation="ok",
         result="all done",
     )
@@ -81,13 +81,40 @@ def test_list_agents_excludes_self_and_summarizes_siblings(tmp_path: Path):
     )
 
     var = SessionVariable(session, agent_id="root")
-    rows = var.list_agents()
-    ids = [r["agent_id"] for r in rows]
-    assert ids == ["root.html"]
-    [child] = rows
+    assert var.list_agents() == ["root.html"]
+
+
+def test_summarize_agent_reports_latest_state(tmp_path: Path):
+    session = FileSession(tmp_path / "workspace")
+    root_q, _ = _seed_agent(
+        session,
+        agent_id="root",
+        system="root prompt",
+        query="build a thing",
+        code='rlm_delegate(name="html", query="...", context="")',
+        observation="ok",
+        result="all done",
+    )
+    _seed_agent(
+        session,
+        agent_id="root.html",
+        depth=1,
+        system="child prompt",
+        query="write index.html",
+        code='write_file("index.html", "<!DOCTYPE html>")',
+        observation="REPL output:\nNone",
+        result="wrote index.html",
+        parent_agent_id="root",
+        parent_node_id=root_q,
+    )
+
+    var = SessionVariable(session, agent_id="root")
+    child = var.summarize_agent("root.html")
+    assert child is not None
     assert child["type"] == "done_output"
     assert child["terminal"] is True
     assert "wrote index.html" in child["result_preview"]
+    assert var.summarize_agent("root.missing") is None
 
 
 def test_read_renders_full_chain_for_a_sibling(tmp_path: Path):
@@ -124,7 +151,7 @@ def test_grep_searches_across_agents_but_skips_self(tmp_path: Path):
         session,
         agent_id="root",
         query="self should be skipped",
-        code='rlm_delegate("html", "...")',
+        code='rlm_delegate(name="html", query="...", context="")',
         observation="self_only_marker",
         result="self_only_marker",
     )
@@ -285,5 +312,6 @@ def test_session_variable_injected_via_inject_env(tmp_path: Path):
     assert isinstance(handle, SessionVariable)
     assert handle.agent_id == "root"
     assert callable(handle.list_agents)
+    assert callable(handle.summarize_agent)
     assert callable(handle.read)
     assert callable(handle.grep)

@@ -1,0 +1,11 @@
+{
+  "root_agent_id": "root",
+  "agents": [
+    "root",
+    "root.create_index.html",
+    "root.create_css/styles.css",
+    "root.create_js/boid.js",
+    "root.create_js/flock.js",
+    "root.create_js/main.js"
+  ]
+}

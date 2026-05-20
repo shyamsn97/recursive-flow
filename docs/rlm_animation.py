@@ -403,7 +403,7 @@ class RLMFlowHero(Scene):
             Text(">>> chunks = CONTEXT.split(by='---')", font=CODE_FONT, font_size=FS_CAP, color=Q_C),
             Text(">>> handles = []", font=CODE_FONT, font_size=FS_CAP, color=WHITE_C),
             Text(">>> for i, chunk in enumerate(chunks):", font=CODE_FONT, font_size=FS_CAP, color=WHITE_C),
-            Text("...     h = rlm_delegate(f'chunk_{i}', 'analyze', context=chunk)", font=CODE_FONT, font_size=FS_CAP, color=A_C),
+            Text("...     h = rlm_delegate(name=f'chunk_{i}', query='analyze', context=chunk)", font=CODE_FONT, font_size=FS_CAP, color=A_C),
             Text("...     handles.append(h)", font=CODE_FONT, font_size=FS_CAP, color=A_C),
             Text(">>> results = yield rlm_wait(*handles)", font=CODE_FONT, font_size=FS_CAP, color=S_C),
             Text(">>> done(combine(results))", font=CODE_FONT, font_size=FS_CAP, color=R_C),

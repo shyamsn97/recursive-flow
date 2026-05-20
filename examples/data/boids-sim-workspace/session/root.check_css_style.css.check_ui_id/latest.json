@@ -1,0 +1,8 @@
+{
+  "agent_id": "root.check_css_style.css.check_ui_id",
+  "latest_node_id": "n_2d0342e59a3a",
+  "seq": 4,
+  "type": "done_output",
+  "terminal": true,
+  "result": "PASS"
+}

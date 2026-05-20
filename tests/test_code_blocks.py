@@ -62,6 +62,11 @@ def test_no_blocks():
     print("  no blocks: OK")
 
 
+def test_bare_repl_label_is_not_a_code_block():
+    assert find_code_blocks("repl\nprint('missing fences')") == []
+    print("  bare repl label rejected: OK")
+
+
 def test_replace_standard():
     text = "Here:\n\n```repl\nold_code()\n```\n\nMore text.\n"
     result = replace_code_block(text, "new_code()")
@@ -126,6 +131,7 @@ if __name__ == "__main__":
     test_nested_backticks()
     test_fence_at_eof()
     test_no_blocks()
+    test_bare_repl_label_is_not_a_code_block()
     test_replace_standard()
     test_replace_glued()
     test_replace_no_block()

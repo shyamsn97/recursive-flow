@@ -1,0 +1,8 @@
+{
+  "agent_id": "root.check_js_boid.js.check_flock_call",
+  "latest_node_id": "n_e1ba231439fe",
+  "seq": 4,
+  "type": "done_output",
+  "terminal": true,
+  "result": "FOUND flock(boids, weights = {align:1.0, cohesion:1.0, separation:1.5}){"
+}

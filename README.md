@@ -46,8 +46,8 @@ For example, an agent that delegates two children and combines their
 results writes one REPL block like this:
 
 ```python
-h1 = rlm_delegate("search", "Find evidence", context=chunk_a)
-h2 = rlm_delegate("verify", "Check the answer", context=chunk_b)
+h1 = rlm_delegate(name="search", query="Find evidence", context=chunk_a)
+h2 = rlm_delegate(name="verify", query="Check the answer", context=chunk_b)
 results = yield rlm_wait(h1, h2)
 done(combine(results))
 ```
@@ -58,8 +58,8 @@ engine via `send()`:
 
 ```python
 def __rlm_gen__():
-    h1 = rlm_delegate("search", "...", context=chunk_a)
-    h2 = rlm_delegate("verify", "...", context=chunk_b)
+    h1 = rlm_delegate(name="search", query="...", context=chunk_a)
+    h2 = rlm_delegate(name="verify", query="...", context=chunk_b)
     results = yield rlm_wait(h1, h2)   # ← suspend here
     done(combine(results))
 ```
@@ -123,29 +123,9 @@ This example is all you need for a simple and interpretable recursive coding age
 
 ```python
 from rlmflow import OpenAIClient, RLMConfig, RLMFlow, Workspace
-from rlmflow.prompts.default import DEFAULT_BUILDER
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.tools import FILE_TOOLS
 from rlmflow.utils.viewer import open_viewer
-
-# A small prompt extension layering coding strategy guardrails on top of
-# the default protocol prompt. See examples/coding-agent/prompt.py.
-CODING_BUILDER = DEFAULT_BUILDER.section(
-    "coding",
-    """
-- **Plan ownership before writing.** For non-trivial coding tasks, first make a compact manifest: file/component owners, shared interfaces, dependencies, and acceptance checks. The parent plans boundaries; children own implementation details.
-- **Keep plans lightweight.** Give children enough direction to own their piece without pre-writing the whole file for them.
-- **Bias toward delegation for separable work.** Do small, local tasks directly; when files, components, chunks, or checks can be owned independently, delegate them before implementing inline.
-- **Honor the requested artifact.** If the user asks for a component, app, CLI, test, script, library, config, migration, or data file, produce that artifact's expected files and behavior. Do not substitute a generic page, placeholder, README, template, or unrelated scaffold; preserve the requested runtime/API/contract in verification.
-- **Delegate focused artifact work.** Give each child one bounded file/component/chunk/check with a clear expected output. File-writing children must call `write_file(...)`, verify that file from disk, and return a short status.
-- **Pass only needed context.** Give children a spec, a relevant `CONTEXT.lines(...)` slice, or `""`; don't dump your whole view unless necessary.
-- **Combine from disk.** After children finish, read the files they wrote and verify the shared contract.
-- **Run real checks.** Syntax-check, run tests, or smoke-test the entry point before `done()` when the runtime can.
-- **Repair surgically.** After an exception, `ls`/`read_file` first; fix the broken file instead of rewriting or re-delegating everything.
-""".strip(),
-    title="Coding",
-    after="builtins",
-)
 
 workspace = Workspace.create("./myproject")
 runtime = LocalRuntime(workspace=workspace)
@@ -170,7 +150,6 @@ agent = RLMFlow(
             "description": "Cheap model for smaller subtasks",
         },
     },
-    prompt_builder=CODING_BUILDER,
 )
 
 query = "Build a python text-based adventure game with combat and inventory."
@@ -550,7 +529,8 @@ All examples share flags like `--no-viz`, `--docker-image rlmflow:local`,
 | [`showcase.py`](examples/showcase.py) | `Graph` snapshots, workspace persistence, session reads, time travel, gym-style stepping. |
 | [`drop_in_llm.py`](examples/drop_in_llm.py) | `RLMFlow` as an `LLMClient`. Nested agents. |
 | [`coding-agent/agent.py`](examples/coding-agent/agent.py) | Interactive coding agent that writes and edits files. |
-| [`needle_haystack.py`](examples/needle_haystack.py) | Needle-in-a-haystack across 500 files with custom tools and `runtime_factory`. |
+| [`needle_haystack.py`](examples/needle_haystack.py) | Needle-in-a-haystack over a massive in-memory `CONTEXT`, using parallel child chunks. |
+| [`needle_haystack_filesystem.py`](examples/needle_haystack_filesystem.py) | Needle-in-a-haystack across many files with custom tools and `runtime_factory`. |
 | [`summarizer.py`](examples/summarizer.py) | Recursive map-reduce over a long document. |
 | [`view_demo.py`](examples/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
 | [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, and inspect the workspace/viewer. Requires a live LLM. |
@@ -615,7 +595,7 @@ in [`docs/internals.md`](docs/internals.md).
 - [Positioning](docs/positioning.md): when to use rlmflow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 - [Control](docs/control.md): step loop, workspace resume, rewind,
-  forks, `CONTEXT.read()` / slices, `rlm_delegate(name, query, context)`,
+  forks, `CONTEXT.read()` / slices, `rlm_delegate(*, name, query, context)`,
   inline-first strategy, custom tools.
 - [Observability](docs/observability.md): querying the `Graph`,
   workspace layout, export helpers, live tree, gantt, topology

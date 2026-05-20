@@ -9,18 +9,6 @@ from typing import Any
 
 from rlmflow.workspace.store import Store, copy_workspace_paths, resolve_backend
 
-CONTEXT_VARIABLE_PROMPT = """
-`CONTEXT` is task-specific input data/spec. Check it first.
-
-- `CONTEXT.info()` / `CONTEXT.line_count()`
-- `CONTEXT.read(start=0, end=None)`
-- `CONTEXT.lines(start=0, end=None)`
-- `CONTEXT.grep(pattern, max_results=50)`
-
-If `CONTEXT.info()["chars"] == 0`, work from the query. For long context,
-sample or grep; don't print the whole payload.
-"""
-
 
 def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "context"
@@ -202,7 +190,6 @@ class InMemoryContext(Context):
 
 
 __all__ = [
-    "CONTEXT_VARIABLE_PROMPT",
     "Context",
     "ContextVariable",
     "FileContext",

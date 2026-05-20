@@ -1,0 +1,23 @@
+{
+  "root_agent_id": "root",
+  "agents": [
+    "root",
+    "root.check_index.html",
+    "root.check_css_style.css",
+    "root.check_js_boid.js",
+    "root.check_js_flock.js",
+    "root.check_js_main.js",
+    "root.check_css_style.css.check_root_selector",
+    "root.check_css_style.css.check_flockCanvas_id",
+    "root.check_css_style.css.check_ui_id",
+    "root.check_js_boid.js.check_export_boid",
+    "root.check_js_boid.js.check_flock_call",
+    "root.check_js_boid.js.check_draw_ctx",
+    "root.check_js_main.js.check_boid_import",
+    "root.check_js_main.js.check_createFlock_import",
+    "root.check_js_main.js.check_rAF",
+    "root.check_index.html.check_canvas",
+    "root.check_index.html.check_css_link",
+    "root.check_index.html.check_js_module"
+  ]
+}

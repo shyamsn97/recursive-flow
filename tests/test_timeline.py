@@ -30,7 +30,7 @@ class _OneChild(LLMClient):
 
     ROOT = (
         "```repl\n"
-        "h = rlm_delegate('child', 'do thing', '')\n"
+        "h = rlm_delegate(name='child', query='do thing', context='')\n"
         "results = yield rlm_wait(h)\n"
         "done('root:' + results[0])\n"
         "```"
@@ -55,9 +55,9 @@ class _ParallelChildren(LLMClient):
 
     ROOT = (
         "```repl\n"
-        "ha = rlm_delegate('a', 'task a', '')\n"
-        "hb = rlm_delegate('b', 'task b', '')\n"
-        "hc = rlm_delegate('c', 'task c', '')\n"
+        "ha = rlm_delegate(name='a', query='task a', context='')\n"
+        "hb = rlm_delegate(name='b', query='task b', context='')\n"
+        "hc = rlm_delegate(name='c', query='task c', context='')\n"
         "results = yield rlm_wait(ha, hb, hc)\n"
         "done(' '.join(results))\n"
         "```"
@@ -69,7 +69,14 @@ class _ParallelChildren(LLMClient):
 
     def chat(self, messages, *args, **kwargs):
         self.last_usage = LLMUsage(input_tokens=1, output_tokens=1)
-        text = "\n".join((m.get("content") or "") for m in messages)
+        text = next(
+            (
+                m.get("content") or ""
+                for m in messages
+                if (m.get("content") or "").startswith("Query: ")
+            ),
+            "",
+        )
         for tag in ("task a", "task b", "task c"):
             if tag in text:
                 self.turns[tag] = self.turns.get(tag, 0) + 1

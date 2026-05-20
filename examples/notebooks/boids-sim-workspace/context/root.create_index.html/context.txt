@@ -1,0 +1,41 @@
+
+Goal:
+Create a small, fast, colorful 2D boids simulation split across files.
+
+Files to create (one child per file):
+- index.html         (main runnable interface)
+- css/styles.css     (styling for canvas/UI)
+- js/boid.js         (Boid class: position, velocity, update, draw; export default Boid)
+- js/flock.js        (Flock manager: holds array of Boid, applies rules: separation, alignment, cohesion; export default Flock)
+- js/main.js         (wires everything: creates canvas, handles animation loop, spawns many colorful fast boids, user controls optional)
+
+Interfaces and wiring expectations:
+- Use ES modules. Each JS file should use `export default` where indicated, and other files should `import` from them using relative paths.
+- index.html must include a <canvas id="canvas"> and load js/main.js with <script type="module" src="js/main.js"></script>.
+- Provide small CSS to make canvas fullscreen and colorful background.
+- Boids should be fast-moving and colorful; render as small triangles/points with color variations.
+- Keep code readable and reasonably modular.
+- Children must write their designated file to disk using the available file utilities and then return exactly the written file path as the child's done(...) response (e.g., "WROTE: index.html").
+- Do not return extra prose.
+
+Acceptance checks (parent will run these after children finish):
+- All files exist at the expected paths.
+- index.html imports js/main.js as module.
+- js files contain at least one `export default` and use `import` as appropriate.
+- A basic syntax check will be attempted by running `node --check` on each js file; if node is not available, fall back to a simple balanced-brace/paren check performed in the parent.
+
+Constraints for children:
+- Content must be plain HTML/CSS/JS (no external build tools).
+- Keep each file under 1000 lines.
+- Avoid external network calls.
+
+Assigned single-file scope will be supplied as CONTEXT to each child: the shared_requirements above + the assigned file path.
+
+
+Assigned file: index.html
+
+Instructions to child:
+- Create the file at the given path with appropriate content per the shared requirements.
+- Use write_file(path, content) to write it.
+- Return exactly 'WROTE: index.html' (without quotes) as the done(...) response.
+- Do not include any other text in the done response.

@@ -14,7 +14,7 @@ turn 0:
  → run_baseline()                         # one-shot, idempotent
 turn 1+:
  → fresh = pick_slugs(get_runs())
- → handles = [rlm_delegate(slug, hyp) for slug, hyp in fresh]
+ → handles = [rlm_delegate(name=slug, query=hyp, context=ctx) for slug, hyp, ctx in fresh]
  → results = (yield rlm_wait(*handles))   # children call run_experiment
  → ...
  → done(<summary>)

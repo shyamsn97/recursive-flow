@@ -77,7 +77,7 @@ The parent plans research rounds. It should:
 2. Run `run_baseline()` once.
 3. Read `get_runs()` and identify the current best scored trial.
 4. Choose several independent, idea-named hypotheses.
-5. Spawn one child per hypothesis with `rlm_delegate(slug, query, context)`.
+5. Spawn one child per hypothesis with `rlm_delegate(name=slug, query=query, context=context)`.
 6. `yield rlm_wait(*handles)`.
 7. On resume, inspect the ledger. Spawn another small batch with
    fresh slugs if useful; otherwise `done(...)`.

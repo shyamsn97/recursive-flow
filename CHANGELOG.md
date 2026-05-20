@@ -34,7 +34,7 @@ each one is called out under **Breaking** below.
 - **`delegate` / `wait` renamed to `rlm_delegate` / `rlm_wait`.** The
   two engine-bound REPL tools used names that were too generic and
   shadowed common identifiers in agent code. They are now namespaced as
-  `rlm_delegate(name, query, context, *, max_iterations=None,
+  `rlm_delegate(*, name, query, context, max_iterations=None,
   model="default")` and `rlm_wait(*handles)`. The default system prompt,
   built-in examples, error messages (`OrphanedDelegatesError`,
   refusal strings), and the AST check that enforces `yield` before

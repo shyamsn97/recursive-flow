@@ -235,6 +235,15 @@ class REPL:
         if not isinstance(sys.stdout, _StdoutProxy):
             sys.stdout = _StdoutProxy(sys.stdout)
 
+    def _show_vars(self) -> dict[str, str]:
+        """Return public REPL names and their type names without dumping values."""
+
+        return {
+            name: type(value).__name__
+            for name, value in sorted(self.namespace.items())
+            if not name.startswith("_") and name != "SHOW_VARS"
+        }
+
     # ── code execution ────────────────────────────────────────────────
 
     @contextmanager
@@ -441,6 +450,8 @@ class REPL:
             self.namespace[msg["name"]] = eval(msg["value"], self.namespace)
         elif cmd == "inject_proxy":
             self.namespace[msg["name"]] = self.make_proxy(msg["name"])
+        elif cmd == "inject_show_vars":
+            self.namespace["SHOW_VARS"] = self._show_vars
         elif cmd == "inject_object_proxy":
             name = msg["name"]
             obj = types.SimpleNamespace()

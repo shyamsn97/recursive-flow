@@ -79,7 +79,7 @@ def truncate_output(raw: object, max_length: int) -> object:
 
 
 def format_exec_output(output: str) -> str:
-    return EXECUTION_OUTPUT.format(output=output or "(no output)")
+    return EXECUTION_OUTPUT.format(output=output or "none")
 
 
 __all__ = [

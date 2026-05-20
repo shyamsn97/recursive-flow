@@ -16,11 +16,15 @@ Usage::
 
     # Derive without mutating the original:
     custom = builder.section("role", "You are a security auditor.", title="Role")
+
+    # Or, to swap only the body of an existing section (keeps title/level/position):
+    custom = builder.update("role", "You are a security auditor.")
 """
 
 from __future__ import annotations
 
 import re
+import textwrap
 
 
 class Section:
@@ -48,7 +52,7 @@ class Section:
         if self.title:
             heading = "#" * max(self.level, 1) + " " + self.title
             return heading + "\n\n" + text
-        return text
+        return textwrap.dedent(text)
 
 
 class PromptBuilder:
@@ -100,6 +104,19 @@ class PromptBuilder:
 
         out._sections.append(new)
         return out
+
+    def update(self, name: str, body: str) -> PromptBuilder:
+        """Replace the body of an existing section, preserving title/level/position.
+
+        Raises ``KeyError`` if no section with ``name`` exists — use
+        ``.section()`` to add a new one.
+        """
+        out = self._copy()
+        for i, s in enumerate(out._sections):
+            if s.name == name:
+                out._sections[i] = Section(name, body, title=s.title, level=s.level)
+                return out
+        raise KeyError(f"no section named {name!r}; use .section() to add it")
 
     def remove(self, name: str) -> PromptBuilder:
         """Remove a section by name. Returns a new builder."""

@@ -1,0 +1,38 @@
+:root{
+  --bg:#0b1020;
+}
+html,body{
+  height:100%;
+  margin:0;
+  background:var(--bg);
+  color:#eee;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+#flockCanvas{
+  display:block;
+  width:100%;
+  height:100vh;
+}
+#ui{
+  position:fixed;
+  left:10px;
+  top:10px;
+  background:rgba(0,0,0,0.25);
+  padding:8px 10px;
+  border-radius:8px;
+  backdrop-filter: blur(6px);
+  display:flex;
+  gap:10px;
+  align-items:center;
+  z-index:10;
+}
+#ui label{ font-size:13px; color:#fff; }
+#ui input[type="range"]{ vertical-align:middle; }
+#ui button{
+  background:linear-gradient(180deg,#fff2,#ffffff00);
+  border:1px solid rgba(255,255,255,0.12);
+  color:#fff;
+  padding:6px 8px;
+  border-radius:6px;
+  cursor:pointer;
+}

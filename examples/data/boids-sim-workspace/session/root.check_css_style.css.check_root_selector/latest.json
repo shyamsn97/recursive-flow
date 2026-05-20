@@ -1,0 +1,8 @@
+{
+  "agent_id": "root.check_css_style.css.check_root_selector",
+  "latest_node_id": "n_ae078dad6c80",
+  "seq": 4,
+  "type": "done_output",
+  "terminal": true,
+  "result": "PASS"
+}

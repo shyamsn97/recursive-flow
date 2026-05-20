@@ -316,8 +316,8 @@ print("still running")     # this prints
 ✅ **Suspension:**
 
 ```python
-h1 = rlm_delegate("worker", "...")
-h2 = rlm_delegate("worker", "...")
+h1 = rlm_delegate(name="worker", query="...", context="")
+h2 = rlm_delegate(name="worker", query="...", context="")
 results = yield rlm_wait(h1, h2)   # suspends, resumes with results
 ```
 
@@ -326,7 +326,7 @@ results = yield rlm_wait(h1, h2)   # suspends, resumes with results
 ❌ **Doesn't do what you want:**
 
 ```python
-yield rlm_delegate("worker", "...")   # yields a ChildHandle, not a Wait
+yield rlm_delegate(name="worker", query="...", context="")   # yields a ChildHandle, not a Wait
 yield handle                      # same problem.
 ```
 
@@ -422,7 +422,7 @@ introduces a `SupervisingOutput` and the eventual `ResumeAction`.
 For code like:
 
 ```python
-handles = [rlm_delegate("a", q_a, c_a), rlm_delegate("b", q_b, c_b)]
+handles = [rlm_delegate(name="a", query=q_a, context=c_a), rlm_delegate(name="b", query=q_b, context=c_b)]
 results = yield rlm_wait(*handles)
 print(len(results))
 ```
@@ -487,7 +487,7 @@ jobs = [
     ("fundamentals", "Research growth, revenue, margins.", contract),
     ("analyst",      "Collect analyst targets.",           contract),
 ]
-handles = [rlm_delegate(name, q, c, model="fast") for name, q, c in jobs]
+handles = [rlm_delegate(name=name, query=q, context=c, model="fast") for name, q, c in jobs]
 results = yield rlm_wait(*handles)
 print(f"got {len(results)} child results")
 ```
@@ -622,8 +622,8 @@ root.{identity,valuation,fundamentals,analyst}
 A block can yield twice:
 
 ```python
-h1 = rlm_delegate("a", ...);  r1 = yield rlm_wait(h1)
-h2 = rlm_delegate("b", ...);  r2 = yield rlm_wait(h2)
+h1 = rlm_delegate(name="a", query=..., context=...);  r1 = yield rlm_wait(h1)
+h2 = rlm_delegate(name="b", query=..., context=...);  r2 = yield rlm_wait(h2)
 done(combine(r1, r2))
 ```
 
@@ -635,7 +635,7 @@ times — variables persist.
 
 ```python
 # Block 1
-h = rlm_delegate("a", ...)
+h = rlm_delegate(name="a", query=..., context=...)
 yield rlm_wait(h)            # block ends right after the yield
 
 # Block 2
@@ -774,7 +774,7 @@ hits    = CONTEXT.grep(r"TODO") # lineno:line rows
 full    = CONTEXT.read()        # full payload
 ```
 
-`rlm_delegate(name, query, context)` writes the child's context payload
+`rlm_delegate(*, name, query, context)` writes the child's context payload
 under `context/<child_id>/context.txt` before the child's first
 `UserQuery` is appended.
 

@@ -43,7 +43,7 @@ You are running recursive autoresearch.
 **Parent agent:** your query points at `program.md`. Read it, run
 `run_baseline()` once, inspect `get_runs()`, choose idea-named
 slugs, then spawn one child per hypothesis with
-`rlm_delegate(slug, query, context)`. The parent does not write or run
+`rlm_delegate(name=slug, query=query, context=context)`. The parent does not write or run
 candidate code directly. End the block exactly at
 `results = yield rlm_wait(*handles)`. On the resumed turn, inspect the
 ledger, then either spawn another small batch of children with fresh
@@ -101,7 +101,7 @@ Do not stop after a quick crash until you have either produced a score
 or exhausted the three targeted fixes.'''
 
 handles = [
-    rlm_delegate(slug, child_query(slug, hyp), context)
+    rlm_delegate(name=slug, query=child_query(slug, hyp), context=context)
     for slug, hyp in ideas
     if slug not in prior
 ]

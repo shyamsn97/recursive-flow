@@ -28,10 +28,10 @@ class DoneSignal(Exception):
 def make_done(env: dict[str, Any]):
     """Closure that records the final answer and stops the current block."""
 
-    @tool("Mark the current agent as finished.")
-    def done(message: str) -> str:
+    @tool("Return this agent's final answer.")
+    def done(answer: str) -> str:
         if env.get("DONE_RESULT") is None:
-            env["DONE_RESULT"] = str(message).strip()
+            env["DONE_RESULT"] = str(answer).strip()
             print(f"[done] {env['DONE_RESULT']}")
         raise DoneSignal(env["DONE_RESULT"])
 
@@ -61,6 +61,42 @@ def make_wait():
     return rlm_wait
 
 
+def make_llm_query_batched(query_batch: Callable[..., list[str]]):
+    """Closure that runs multiple one-shot LLM prompts without child agents."""
+
+    @tool(
+        "Run multiple independent one-shot LLM prompts concurrently. "
+        "Returns strings in the same order as the prompts."
+    )
+    def llm_query_batched(
+        prompts: list[str],
+        *,
+        model: str = "default",
+    ) -> list[str]:
+        if isinstance(prompts, str) or not isinstance(prompts, list):
+            raise TypeError("llm_query_batched() requires a list[str] of prompts")
+        bad = [
+            (i, type(prompt).__name__)
+            for i, prompt in enumerate(prompts)
+            if not isinstance(prompt, str)
+        ]
+        if bad:
+            details = "; ".join(f"prompts[{i}] is {typ}" for i, typ in bad)
+            raise TypeError(f"llm_query_batched() requires list[str]. {details}")
+        if not prompts:
+            return []
+        return query_batch(prompts, model=model)
+
+    return llm_query_batched
+
+
+@tool("Show current public REPL variable names and their type names.")
+def SHOW_VARS() -> dict[str, str]:
+    """Installed specially by Runtime so it can inspect the live REPL namespace."""
+
+    raise RuntimeError("SHOW_VARS must be installed by the runtime")
+
+
 def make_delegate(
     spawn_child: Callable[..., "ChildHandle | str"],
     env: dict[str, Any],
@@ -82,10 +118,10 @@ def make_delegate(
 
     @tool("Delegate a subtask to a named child agent.")
     def rlm_delegate(
+        *,
         name: str,
         query: str,
         context: str,
-        *,
         max_iterations: int | None = None,
         model: str = "default",
     ) -> ChildHandle | str:
@@ -116,4 +152,11 @@ def make_delegate(
     return rlm_delegate
 
 
-__all__ = ["DoneSignal", "make_delegate", "make_done", "make_wait"]
+__all__ = [
+    "DoneSignal",
+    "SHOW_VARS",
+    "make_delegate",
+    "make_done",
+    "make_llm_query_batched",
+    "make_wait",
+]
