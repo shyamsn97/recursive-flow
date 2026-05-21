@@ -1,8 +1,0 @@
-{
-  "agent_id": "root.create_index.html",
-  "latest_node_id": "n_17a10cbc793e",
-  "seq": 4,
-  "type": "done_output",
-  "terminal": true,
-  "result": "Wrote index.html to workspace. Follow-up: open the file to verify visually or run a linter/validator if needed."
-}

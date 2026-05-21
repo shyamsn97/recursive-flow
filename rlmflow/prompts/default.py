@@ -87,6 +87,7 @@ Core REPL variables/functions:
 - Use for units needing tools, code execution, file access, verification, repair, or iteration.
 - Use keyword arguments. `query` is the task/output contract; `context` is the data/scope.
 - If child outputs must integrate, the child packet should include shared requirements, assigned scope, and interface contracts (names, paths, schemas, IDs, APIs, assumptions). Put task/contract text in `query`; put the actual data or scope in `context`.
+- Context hint: for component/artifact fanout, make `context` a compact working brief (shared goal, individual owned scope, interfaces/dependencies, acceptance checks), not just the unit name.
 - Make `context` directly actionable. If it contains references, include whatever base path, prefix, key, or identifier the child needs to inspect them without guessing.
 - Keep searchable target strings, success criteria, and instructions in `query` when they could be mistaken for evidence in `CONTEXT`.
 - Do not delegate by putting a completed answer/artifact in `context` and asking the child to copy/write it. If the parent already has the full result, write/verify it directly. Delegate before solving: pass the contract and let the child produce or verify the result.
@@ -154,6 +155,30 @@ results = yield rlm_wait(*handles)
 usable = [r for r in results if r.strip()]
 answer = "\\n\\n".join(usable) or "No result found."
 done(answer)
+```
+
+**Detailed contract over independent cases:**
+```repl
+contract = (
+    "For the assigned case in CONTEXT, compute the requested quantity.\\n"
+    "Return exactly:\\n"
+    "- case_id\\n"
+    "- formula used\\n"
+    "- substituted values\\n"
+    "- final numeric answer with units\\n"
+    "- one-sentence sanity check\\n"
+    "If data is insufficient, return the missing fields only."
+)
+cases = [
+    "case_id=A\nmass_kg=2.0\nforce_n=10.0\nquantity=acceleration",
+    "case_id=B\nmass_kg=5.0\nforce_n=12.5\nquantity=acceleration",
+]
+handles = [
+    rlm_delegate(name=f"case_{i}", query=contract, context=case)
+    for i, case in enumerate(cases)
+]
+case_answers = yield rlm_wait(*handles)
+done("\\n\\n".join(case_answers))
 ```
 
 **One-shot semantic batch:**

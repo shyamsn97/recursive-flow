@@ -1,8 +1,0 @@
-{
-  "agent_id": "root.check_js_boid.js.check_draw_ctx",
-  "latest_node_id": "n_c91f18a739d7",
-  "seq": 4,
-  "type": "done_output",
-  "terminal": true,
-  "result": "FOUND draw(ctx, hue=180, size=6){"
-}

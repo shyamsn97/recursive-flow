@@ -502,7 +502,7 @@ def main() -> None:
     p.add_argument("--model", default="gpt-5")
     p.add_argument("--workspace", type=Path, default=Path("./runs/autoresearch"))
     p.add_argument("--max-concurrency", type=int, default=4)
-    p.add_argument("--max-depth", type=int, default=2)
+    p.add_argument("--max-depth", type=int, default=1)
     p.add_argument("--no-ui", action="store_true")
     args = p.parse_args()
 

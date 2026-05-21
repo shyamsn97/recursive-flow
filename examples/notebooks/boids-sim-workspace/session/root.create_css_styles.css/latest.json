@@ -1,8 +1,0 @@
-{
-  "agent_id": "root.create_css/styles.css",
-  "latest_node_id": "n_f2958c4ef61c",
-  "seq": 4,
-  "type": "done_output",
-  "terminal": true,
-  "result": "css/styles.css"
-}

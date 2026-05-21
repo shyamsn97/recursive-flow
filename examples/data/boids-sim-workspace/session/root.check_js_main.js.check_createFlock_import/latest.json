@@ -1,8 +1,0 @@
-{
-  "agent_id": "root.check_js_main.js.check_createFlock_import",
-  "latest_node_id": "n_7c9747ebbbda",
-  "seq": 4,
-  "type": "done_output",
-  "terminal": true,
-  "result": "FOUND"
-}

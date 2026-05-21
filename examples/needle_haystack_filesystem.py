@@ -60,7 +60,7 @@ def main():
         default=None,
         help="If set, run agent code inside this Docker image (e.g. rlmflow:local).",
     )
-    parser.add_argument("--max-depth", type=int, default=1)
+    parser.add_argument("--max-depth", type=int, default=2)
     parser.add_argument("--max-iterations", type=int, default=15)
     parser.add_argument("--no-viz", action="store_true")
     args = parser.parse_args()

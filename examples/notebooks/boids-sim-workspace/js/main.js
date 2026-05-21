@@ -1,231 +1,236 @@
-// main.js
-// Entry point for the app. Implements client-side behavior per shared requirements.
-//
-// Features implemented:
-// - Wait for DOMContentLoaded before initializing.
-// - Query and cache frequently-used DOM elements.
-// - Provide a small module-style structure to avoid global pollution.
-// - Implement a simple router to show/hide "pages" with data-route attributes.
-// - Set up event delegation for clicks on elements with data-action attributes.
-// - Provide utility functions: qs, qsa, on, ajax (fetch wrapper with JSON handling), debounce.
-// - Expose an init() for manual re-initialization/testing and auto-init on load.
-//
-// Assumptions:
-// - HTML has elements with data-route="<name>" for page sections.
-// - Links/buttons that trigger actions have data-action="<name>" and optional data-target.
-// - Forms that should be submitted via AJAX have data-ajax="true".
-//
-// Keep this file small and dependency-free.
 
-(function () {
-  'use strict';
+import Flock from './flock.js';
+import randomColor from './utils.js';
 
-  // Utilities
-  var util = {
-    qs: function (sel, ctx) { return (ctx || document).querySelector(sel); },
-    qsa: function (sel, ctx) { return Array.prototype.slice.call((ctx || document).querySelectorAll(sel)); },
-    on: function (el, evt, selOrHandler, handlerIfSel) {
-      // on(el, 'click', handler) OR on(el, 'click', '.btn', handler)
-      if (typeof selOrHandler === 'function') {
-        el.addEventListener(evt, selOrHandler);
-        return function () { el.removeEventListener(evt, selOrHandler); };
-      }
-      var sel = selOrHandler;
-      var handler = handlerIfSel;
-      var delegator = function (e) {
-        var target = e.target;
-        while (target && target !== el) {
-          if (target.matches && target.matches(sel)) {
-            handler.call(target, e);
-            return;
-          }
-          target = target.parentNode;
-        }
-      };
-      el.addEventListener(evt, delegator);
-      return function () { el.removeEventListener(evt, delegator); };
-    },
-    ajax: function (url, opts) {
-      opts = opts || {};
-      var method = (opts.method || 'GET').toUpperCase();
-      var headers = opts.headers || {};
-      if (opts.json) {
-        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-      }
-      var fetchOpts = {
-        method: method,
-        headers: headers,
-        credentials: opts.credentials || 'same-origin'
-      };
-      if (opts.body != null) {
-        fetchOpts.body = opts.json ? JSON.stringify(opts.body) : opts.body;
-      }
-      return fetch(url, fetchOpts).then(function (res) {
-        var ctype = res.headers.get('content-type') || '';
-        if (!res.ok) {
-          // try to parse json error body
-          if (ctype.indexOf('application/json') !== -1) {
-            return res.json().then(function (j) { var err = new Error('Request failed'); err.status = res.status; err.body = j; throw err; });
-          }
-          var err = new Error('Request failed: ' + res.status);
-          err.status = res.status;
-          throw err;
-        }
-        if (ctype.indexOf('application/json') !== -1) {
-          return res.json();
-        }
-        return res.text();
-      });
-    },
-    debounce: function (fn, wait) {
-      var t;
-      return function () {
-        var args = arguments;
-        clearTimeout(t);
-        t = setTimeout(function () { fn.apply(null, args); }, wait);
-      };
+// Entry module: initializes canvas, creates a Flock with many colorful fast boids, and animates them.
+// Tries to use imported Flock if compatible; falls back to an internal implementation to ensure safe runtime behavior.
+
+const canvas = document.createElement('canvas');
+canvas.id = 'flock-canvas';
+canvas.style.position = 'fixed';
+canvas.style.top = '0';
+canvas.style.left = '0';
+canvas.style.width = '100%';
+canvas.style.height = '100%';
+canvas.style.zIndex = '0';
+canvas.style.display = 'block';
+document.body.style.margin = '0';
+document.body.appendChild(canvas);
+
+const ctx = canvas.getContext('2d');
+
+function setCanvasSize() {
+  const dpr = Math.max(window.devicePixelRatio || 1, 1);
+  const width = Math.max(window.innerWidth, 300);
+  const height = Math.max(window.innerHeight, 200);
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  canvas.style.width = width + 'px';
+  canvas.style.height = height + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', () => {
+  setCanvasSize();
+  if (flock && typeof flock.onResize === 'function') {
+    try { flock.onResize(canvas.width, canvas.height); } catch (e) { /* ignore */ }
+  }
+});
+setCanvasSize();
+
+// Safe randomColor fallback
+function _randomColorFallback() {
+  // bright saturated HSL
+  const h = Math.floor(Math.random() * 360);
+  const s = 75 + Math.floor(Math.random() * 20);
+  const l = 45 + Math.floor(Math.random() * 15);
+  return `hsl(${h}deg ${s}% ${l}%)`;
+}
+const pickColor = (typeof randomColor === 'function') ? (() => {
+  try {
+    // Some randomColor libs accept options object, try bright palette first
+    const c = randomColor({ luminosity: 'bright' });
+    return () => randomColor({ luminosity: 'bright' });
+  } catch (e) {
+    return () => randomColor();
+  }
+})() : _randomColorFallback;
+
+// Internal minimal boid/flock implementation as a safe fallback.
+class InternalBoid {
+  constructor(x, y, vx, vy, color) {
+    this.x = x; this.y = y;
+    this.vx = vx; this.vy = vy;
+    this.color = color;
+    this.size = 2 + Math.random() * 3;
+  }
+  update(dt, width, height) {
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    // wrap
+    if (this.x < -10) this.x = width + 10;
+    if (this.x > width + 10) this.x = -10;
+    if (this.y < -10) this.y = height + 10;
+    if (this.y > height + 10) this.y = -10;
+  }
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    // draw a small triangle pointing along velocity
+    const angle = Math.atan2(this.vy, this.vx);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(this.size * 2, 0);
+    ctx.lineTo(-this.size, this.size);
+    ctx.lineTo(-this.size, -this.size);
+    ctx.closePath();
+    ctx.fillStyle = this.color;
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+class InternalFlock {
+  constructor(width, height) {
+    this.width = width;
+    this.height = height;
+    this.boids = [];
+  }
+  addBoid(boid) { this.boids.push(boid); }
+  onResize(w, h) { this.width = w; this.height = h; }
+  update(dt) {
+    for (const b of this.boids) b.update(dt, this.width, this.height);
+  }
+  draw(ctx) {
+    for (const b of this.boids) b.draw(ctx);
+  }
+}
+
+// Try to create an instance of the imported Flock in a few safe ways.
+// If that fails, use the internal flock.
+let flock = null;
+(function tryCreateFlock() {
+  const w = canvas.width;
+  const h = canvas.height;
+  try {
+    if (typeof Flock === 'function') {
+      // Try a few common constructor signatures
+      try { flock = new Flock(canvas); return; } catch (e) {}
+      try { flock = new Flock(ctx); return; } catch (e) {}
+      try { flock = new Flock({ canvas, ctx, width: canvas.width, height: canvas.height }); return; } catch (e) {}
+      try { flock = new Flock(); return; } catch (e) {}
     }
-  };
+  } catch (e) {
+    // fallthrough
+  }
+  // fallback
+  flock = new InternalFlock(canvas.width, canvas.height);
+})();
 
-  // Simple client-side router: show elements with data-route matching path, hide others
-  var router = (function () {
-    var routeAttr = 'data-route';
-    function show(route) {
-      var pages = util.qsa('[' + routeAttr + ']');
-      pages.forEach(function (p) {
-        if (p.getAttribute(routeAttr) === route) {
-          p.style.display = '';
-          p.setAttribute('aria-hidden', 'false');
+// Populate with many colorful, fast boids.
+// We'll use a mix of addBoid method if available, otherwise push into a boids array.
+const BOID_COUNT = Math.max(80, Math.min(600, Math.floor((canvas.width * canvas.height) / (8000))));
+for (let i = 0; i < BOID_COUNT; i++) {
+  const x = Math.random() * canvas.width / (window.devicePixelRatio || 1);
+  const y = Math.random() * canvas.height / (window.devicePixelRatio || 1);
+  // fast velocities: magnitude between 1.2 and 4.5 (pixels per ms scale later)
+  const speed = 1.6 + Math.random() * 3.2;
+  const angle = Math.random() * Math.PI * 2;
+  const vx = Math.cos(angle) * speed;
+  const vy = Math.sin(angle) * speed;
+  const color = (typeof pickColor === 'function') ? pickColor() : _randomColorFallback();
+
+  const boid = (typeof InternalBoid !== 'undefined') ? new InternalBoid(x, y, vx, vy, color) : { x, y, vx, vy, color };
+  // If imported Flock provided an 'add' or 'addBoid' method, try to use it, otherwise push to array.
+  if (flock) {
+    if (typeof flock.add === 'function') {
+      try { flock.add(boid); continue; } catch (e) {}
+    }
+    if (typeof flock.addBoid === 'function') {
+      try { flock.addBoid(boid); continue; } catch (e) {}
+    }
+    if (Array.isArray(flock.boids)) {
+      flock.boids.push(boid);
+      continue;
+    }
+  }
+}
+
+// Animation loop
+let last = performance.now();
+function frame(now) {
+  const dtMs = now - last;
+  last = now;
+  const dt = Math.min(dtMs, 50); // clamp delta to avoid large jumps
+
+  // clear with a slight alpha to produce trails (tweak as desired)
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // If the imported flock has update/draw methods, use them; else attempt common variations.
+  try {
+    if (flock) {
+      if (typeof flock.update === 'function') flock.update(dt);
+      else if (typeof flock.step === 'function') flock.step(dt);
+      else if (typeof flock.tick === 'function') flock.tick(dt);
+      else {
+        // fallback for internal: expects logical pixels, so convert dt to px step roughly
+        if (typeof flock.update === 'undefined' && typeof flock.boids !== 'undefined') {
+          // our InternalFlock expects dt in ms? It updates by velocity*dt so scale: convert dt to seconds-ish factor
+          // We'll interpret velocities as pixels per frame and multiply by (dt/16) for approximate speed constancy
+          const factor = dt / 16;
+          for (const b of flock.boids) {
+            if (typeof b.update === 'function') b.update(factor, canvas.width / (window.devicePixelRatio || 1), canvas.height / (window.devicePixelRatio || 1));
+            else {
+              b.x += b.vx * factor;
+              b.y += b.vy * factor;
+              // wrap
+              if (b.x < -10) b.x = canvas.width + 10;
+              if (b.x > canvas.width + 10) b.x = -10;
+              if (b.y < -10) b.y = canvas.height + 10;
+              if (b.y > canvas.height + 10) b.y = -10;
+            }
+          }
+        }
+      }
+
+      if (typeof flock.draw === 'function') {
+        flock.draw(ctx);
+      } else if (Array.isArray(flock.boids)) {
+        for (const b of flock.boids) {
+          if (typeof b.draw === 'function') b.draw(ctx);
+          else {
+            // draw simple triangle/circle
+            ctx.save();
+            ctx.translate(b.x, b.y);
+            ctx.fillStyle = b.color || '#fff';
+            ctx.beginPath();
+            ctx.arc(0, 0, b.size || 2.5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // On any unexpected error, stop using flock methods and try to draw what we can
+    if (Array.isArray(flock && flock.boids)) {
+      for (const b of flock.boids) {
+        if (typeof b.draw === 'function') {
+          try { b.draw(ctx); } catch (_) {}
         } else {
-          p.style.display = 'none';
-          p.setAttribute('aria-hidden', 'true');
+          ctx.save();
+          ctx.translate(b.x, b.y);
+          ctx.fillStyle = b.color || '#fff';
+          ctx.beginPath();
+          ctx.arc(0, 0, b.size || 2.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
         }
-      });
-      // update body attribute for styling/state
-      document.body.setAttribute('data-current-route', route);
-    }
-    function init() {
-      var hash = location.hash.replace(/^#/, '') || 'home';
-      show(hash);
-      // handle hashchange
-      window.addEventListener('hashchange', function () {
-        var r = location.hash.replace(/^#/, '') || 'home';
-        show(r);
-      });
-    }
-    return { init: init, show: show };
-  }());
-
-  // App initialization and event wiring
-  var App = (function () {
-    var delegates = [];
-
-    function handleActionClick(ev) {
-      var el = ev.currentTarget || ev.target;
-      // walk up to element with data-action
-      while (el && !el.getAttribute) el = el.parentNode;
-      while (el && !el.getAttribute('data-action')) el = el.parentNode;
-      if (!el) return;
-      var action = el.getAttribute('data-action');
-      var targetSelector = el.getAttribute('data-target');
-      var payload = el.getAttribute('data-payload');
-      // dispatch simple built-in actions
-      if (action === 'navigate') {
-        if (targetSelector) {
-          location.hash = targetSelector.replace(/^#/, '');
-        }
-        return;
       }
-      if (action === 'toggle') {
-        var t = targetSelector ? util.qs(targetSelector) : el.nextElementSibling;
-        if (t) {
-          var vis = window.getComputedStyle(t).display !== 'none';
-          t.style.display = vis ? 'none' : '';
-        }
-        return;
-      }
-      // custom events
-      var customEvent = new CustomEvent('app:action', { detail: { action: action, target: targetSelector, payload: payload }, bubbles: true });
-      el.dispatchEvent(customEvent);
     }
-
-    function wireActionDelegation(root) {
-      root = root || document;
-      // delegate click for any element with data-action
-      var remover = util.on(root, 'click', '[data-action]', function (e) {
-        handleActionClick(e);
-      });
-      delegates.push(remover);
-    }
-
-    function wireAjaxForms(root) {
-      root = root || document;
-      var forms = util.qsa('form[data-ajax="true"]', root);
-      forms.forEach(function (form) {
-        if (form.__ajaxBound) return;
-        form.addEventListener('submit', function (ev) {
-          ev.preventDefault();
-          var url = form.getAttribute('action') || location.href;
-          var method = (form.getAttribute('method') || 'POST').toUpperCase();
-          var formData = new FormData(form);
-          // convert to JSON if data-json="true" or enctype is application/json
-          var sendJson = form.getAttribute('data-json') === 'true' || form.enctype === 'application/json';
-          var body, opts = { method: method };
-          if (sendJson) {
-            var obj = {};
-            formData.forEach(function (v, k) {
-              if (obj[k] !== undefined) {
-                if (!Array.isArray(obj[k])) obj[k] = [obj[k]];
-                obj[k].push(v);
-              } else {
-                obj[k] = v;
-              }
-            });
-            opts.json = true;
-            opts.body = obj;
-          } else {
-            opts.body = formData;
-          }
-          util.ajax(url, opts).then(function (res) {
-            form.dispatchEvent(new CustomEvent('ajax:success', { detail: res }));
-          }).catch(function (err) {
-            form.dispatchEvent(new CustomEvent('ajax:error', { detail: err }));
-          });
-        });
-        form.__ajaxBound = true;
-      });
-    }
-
-    function init(root) {
-      root = root || document;
-      wireActionDelegation(root);
-      wireAjaxForms(root);
-      router.init();
-    }
-
-    function destroy() {
-      delegates.forEach(function (rem) { try { rem(); } catch (e) {} });
-      delegates = [];
-      // remove any other listeners if we added them (none persistent besides hashchange)
-    }
-
-    return { init: init, destroy: destroy };
-  }());
-
-  // Auto-init on DOM ready
-  function boot() {
-    App.init(document);
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    // already ready
-    setTimeout(boot, 0);
-  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
 
-  // Expose to window for debugging/testing without polluting too many names
-  window.App = window.App || App;
-  window.appUtil = window.appUtil || util;
-
-}());
+// Exports: entry module should export nothing (per contract)
