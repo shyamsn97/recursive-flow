@@ -923,6 +923,11 @@ class RLMFlow(LLMClient):
                 t for t in tool_defs if t.name not in ("rlm_delegate", "rlm_wait")
             ]
         lines = [
+            "Tool functions are already available in the REPL namespace; "
+            "do not import them from a `tools` module. Call them directly by name.",
+            "",
+        ]
+        lines += [
             f"- `{tool_def.name}{tool_def.signature}`: {tool_def.description}"
             for tool_def in tool_defs
         ]

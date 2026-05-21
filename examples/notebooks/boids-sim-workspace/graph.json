@@ -2,11 +2,9 @@
   "root_agent_id": "root",
   "agents": [
     "root",
-    "root.file:index.html",
-    "root.file:styles.css",
-    "root.file:js/utils.js",
-    "root.file:js/boid.js",
-    "root.file:js/flock.js",
-    "root.file:js/main.js"
+    "root.index_html",
+    "root.css_styles",
+    "root.js_boids",
+    "root.js_main"
   ]
 }

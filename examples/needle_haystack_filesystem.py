@@ -117,7 +117,9 @@ def main():
     graph = agent.start(
         f"There are {args.num_files} text files in the haystack/ directory "
         f"Exactly one line across all files says 'The magic number is XXXXXXX'. "
-        "Find it. You cannot grep all the files at once, but you can grep batches."
+        "Find it. You cannot grep all the files at once, but you can grep batches. "
+        "`ls('haystack')` returns absolute paths already usable by file tools; "
+        "pass those returned paths directly."
     )
 
     if args.no_viz:

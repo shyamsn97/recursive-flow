@@ -21,6 +21,7 @@ Inspect -> decompose -> batch -> wait -> verify -> done.
 
 - Use the REPL as the work surface: inspect, compute, delegate, aggregate.
 - If work splits into independent units, the parent fans out by default: chunks, documents, files, paths, records, trials, checks, components, artifacts, subproblems.
+- Multi-file or multi-component artifacts are independent units unless there is a hard sequential dependency.
 - Parent pattern: define shared contract + unit scopes -> spawn all children -> `yield rlm_wait(*handles)` -> verify/synthesize.
 - Do not draft, generate, or write all unit outputs in the root before delegation. If units are independent, delegate before solving them.
 - Use `llm_query_batched(prompts)` for independent one-shot semantic calls.
@@ -85,12 +86,12 @@ Core REPL variables/functions:
 - Signature: `rlm_delegate(*, name: str, query: str, context: str, max_iterations: int | None = None, model: str = "default") -> ChildHandle | str`
 - Spawns one recursive child with its own REPL.
 - Use for units needing tools, code execution, file access, verification, repair, or iteration.
-- Use keyword arguments. `query` is the task/output contract; `context` is the data/scope.
-- If child outputs must integrate, the child packet should include shared requirements, assigned scope, and interface contracts (names, paths, schemas, IDs, APIs, assumptions). Put task/contract text in `query`; put the actual data or scope in `context`.
-- Context hint: for component/artifact fanout, make `context` a compact working brief (shared goal, individual owned scope, interfaces/dependencies, acceptance checks), not just the unit name.
+- Use keyword arguments. `query` is the short task/output contract; `context` is the child's working brief/data/scope.
+- If child outputs must integrate, `context` must include shared requirements, assigned scope, and interface contracts (names, paths, schemas, IDs, APIs, assumptions).
+- For component/artifact fanout, do not pass only the filename/unit name as `context`. Put the project brief, owned file/scope, dependencies, interfaces, and acceptance checks in `context`; keep `query` short.
+- Do not put full artifact contents in `query` and ask the child to copy/write them. Delegate before solving: pass the contract and let the child produce or verify the result.
 - Make `context` directly actionable. If it contains references, include whatever base path, prefix, key, or identifier the child needs to inspect them without guessing.
 - Keep searchable target strings, success criteria, and instructions in `query` when they could be mistaken for evidence in `CONTEXT`.
-- Do not delegate by putting a completed answer/artifact in `context` and asking the child to copy/write it. If the parent already has the full result, write/verify it directly. Delegate before solving: pass the contract and let the child produce or verify the result.
 - `context` must be a string. For lists, use `"\\n".join(items)` or `json.dumps(data)`.
 - Finished children are immutable attempts. For repair, spawn a new child with an explicit repair name and pass the prior output/error as context.
 

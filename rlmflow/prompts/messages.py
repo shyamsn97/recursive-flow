@@ -5,55 +5,31 @@ All user-facing text lives here so rlm.py stays logic-only.
 
 from typing import Any
 
-DEFAULT_QUERY = (
-    "Please read through the context and answer any queries "
-    "or respond to any instructions contained within it."
-)
+DEFAULT_QUERY = "Please read through the context and answer any queries or respond to any instructions contained within it."
 
-REPL_BLOCK_RULE = (
-    "Use exactly one fenced REPL code block per assistant message. "
-    "Your entire reply must have this shape:\n"
-    "```repl\n"
-    "# Python code here\n"
-    "```\n"
-    "Do not write bare `repl` without the opening and closing triple backticks."
-)
+REPL_BLOCK_RULE = """Use exactly one fenced REPL code block per assistant message. Your entire reply must have this shape:
+```repl
+# Python code here
+```
+Do not write bare `repl` without the opening and closing triple backticks."""
 
-FIRST_ACTION = (
-    "Query: {query}\n\n"
-    "First inspect/decompose. If the query has many independent units/scopes, "
-    "spawn the child batch now with `rlm_delegate(...)` and "
-    "`yield rlm_wait(*handles)`. Do not draft/write all unit outputs in root "
-    "first. Do not final-answer before doing the needed REPL work. Your next "
-    "action:\n\n"
-    "{context_hint}"
-    f"{REPL_BLOCK_RULE}"
-)
+FIRST_ACTION = f"""Query: {{query}}
 
-CONTINUE_ACTION = (
-    "The history before is your previous interactions with the REPL environment. "
-    'Continue using the REPL environment to answer the original query: "{query}". '
-    "Use `CONTEXT` and batched or recursive LLM calls as useful, build on saved "
-    "variables, and determine your answer. Your next action:\n\n"
-    "{context_hint}"
-)
+Use the REPL to inspect/decompose and act now. Choose the lane in code: `llm_query_batched(prompts)` for independent one-shot LLM prompts that do not need tools/files/iteration; `rlm_delegate(...)` plus `yield rlm_wait(*handles)` for independent units that need tools, files, execution, repair, verification, or multi-turn work. For multi-file or multi-component artifacts, spawn the child batch before writing unit outputs in root unless there is a hard sequential dependency. When delegating artifacts/components, keep each child `query` short and put the shared brief, owned scope, dependencies, interfaces, and acceptance checks in `context`; do not pass only the filename/unit name as context. Work directly only for one small local scope or truly sequential work. Do not call `done(...)` until the needed REPL work is complete.
 
-RESUME_VERIFY_ACTION = (
-    "Children just finished: {child_ids}. Before any new `rlm_delegate`, "
-    "inspect their outputs/state with saved REPL variables, `SESSION.read(...)`, "
-    "or `SESSION.grep(...)`. Verify their requested output contracts, then "
-    "either call `done(answer)`, repair only failed pieces, or print a concrete "
-    "reason for another delegation batch.\n\n"
-    "{context_hint}"
-)
+{{context_hint}}{REPL_BLOCK_RULE}"""
 
-CONTEXT_HINT_PRESENT = (
-    "Relevant data is available as the `CONTEXT` REPL variable - "
-    "inspect it with `CONTEXT.info/read/lines/grep`. If `CONTEXT` contains "
-    "references or assigned scope rather than the target data itself, use "
-    "available tools/functions to inspect those referenced items; do not treat "
-    "the reference list itself as the evidence.\n\n"
-)
+CONTINUE_ACTION = """Continue working on the original query: "{query}". Use saved REPL variables, `CONTEXT`, `llm_query_batched(...)`, and `rlm_delegate(...)` as appropriate. If independent units remain, batch them before waiting; if a prior step failed, repair the specific failure. Your next action:
+
+{context_hint}"""
+
+RESUME_VERIFY_ACTION = """Your previous `yield rlm_wait(...)` has resumed; children finished: {child_ids}. Use the wait-result variables already saved by your code and any other saved REPL variables to verify the child outputs. Then call `done(answer)`, repair only failed pieces, or explain why another delegation batch is needed.
+
+{context_hint}"""
+
+CONTEXT_HINT_PRESENT = """Relevant data is available as the `CONTEXT` REPL variable - inspect it with `CONTEXT.info/read/lines/grep`. If `CONTEXT` contains references or assigned scope rather than the target data itself, use available tools/functions to inspect those referenced items; do not treat the reference list itself as the evidence.
+
+"""
 CONTEXT_HINT_ABSENT = ""
 
 
@@ -83,26 +59,15 @@ def format_context_hint(
     return "\n".join(lines) + "\n\n"
 
 
-FINAL_ANSWER_ACTION = (
-    "You have used the full iteration budget without calling done().\n\n"
-    "Based on the work above, provide the final answer now. "
-    "The block must call done(answer). "
-    "The done() argument must be only the final answer string in the exact form "
-    "the query requested. Do not do more investigation."
-)
+FINAL_ANSWER_ACTION = """You have used the full iteration budget without calling done().
 
-NO_CODE_BLOCK = (
-    "ERROR: Your previous reply did not contain a ```repl``` code block. "
-    f"{REPL_BLOCK_RULE} "
-    "Try again."
-)
+Based on the work above, provide the final answer now. The block must call done(answer). The done() argument must be only the final answer string in the exact form the query requested. Do not do more investigation."""
+
+NO_CODE_BLOCK = f"ERROR: Your previous reply did not contain a ```repl``` code block. {REPL_BLOCK_RULE} Try again."
 
 EXECUTION_OUTPUT = "REPL output:\n{output}"
 
-ORPHANED_DELEGATES = (
-    "You delegated [{names}] but never called `yield rlm_wait(...)`. "
-    "You must use `yield rlm_wait(*handles)` to collect results."
-)
+ORPHANED_DELEGATES = "You delegated [{names}] but never called `yield rlm_wait(...)`. You must use `yield rlm_wait(*handles)` to collect results."
 
 STATUS_DEPTH_ROOT = " You have the full recursion budget available."
 
@@ -110,9 +75,10 @@ STATUS_DEPTH_MID = " Some recursion budget remains available."
 
 STATUS_DEPTH_NEAR_MAX = " You are near the recursion limit."
 
-TRUNCATION_SUMMARY = (
-    "## Query\n{query}\n\n"
-    "## History\n{total} messages so far, showing the last {cap}.{session_hint}"
-)
+TRUNCATION_SUMMARY = """## Query
+{query}
+
+## History
+{total} messages so far, showing the last {cap}.{session_hint}"""
 
 TRUNCATION_SESSION_HINT = ""

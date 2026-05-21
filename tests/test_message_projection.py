@@ -48,7 +48,6 @@ def test_first_turn_projects_system_and_user_messages():
     first_user = messages[1]["content"]
     assert "Query: say ok" in first_user
     assert "First inspect/decompose" in first_user
-    assert "many independent units/scopes" in first_user
     assert "Your next action:" in first_user
     assert "assigned worker task" not in first_user
     assert "files/checks/components/trials" not in first_user
