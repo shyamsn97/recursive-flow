@@ -56,20 +56,6 @@ from typing import Any
 from rlmflow.graph import Graph, Node, is_done, is_observation, parse_node_obj
 from rlmflow.workspace.store import Store, copy_workspace_paths, resolve_backend
 
-SESSION_VARIABLE_PROMPT = """
-**Session variable:** read-only view of every *other* agent in this recursive tree.
-
-- `SESSION.agent_id` / `SESSION.node_id` — your own ids.
-- `SESSION.list_agents()` → `[{agent_id, type, depth, terminal, result_preview}, ...]`.
-- `SESSION.read(agent_id)` — rendered transcript (system + query + actions + observations + result).
-- `SESSION.grep(pattern, max_results=50)` — regex across every other agent's messages; `agent_id:type:line` rows.
-- `SESSION.parent(agent_id=None)` / `SESSION.ancestors(agent_id=None)` / `SESSION.children(agent_id=None)` / `SESSION.subtree(agent_id=None)` — tree nav.
-- `SESSION.tree()` — ASCII tree of the whole run.
-
-Use it to coordinate with siblings/parent: grep before redoing work, read a failed
-sibling's transcript before retrying, check `tree()` before delegating.
-"""
-
 
 def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "root"
@@ -315,9 +301,20 @@ class SessionVariable:
     def _graph(self) -> Graph:
         return self.store.load_graph()
 
-    def list_agents(self) -> list[dict[str, Any]]:
-        """Summarize every other agent in the session."""
-        return _summarize(self._graph(), exclude={self.agent_id})
+    def list_agents(self) -> list[str]:
+        """List every other agent id in the session."""
+        agents = [
+            agent for agent in self._graph().walk() if agent.agent_id != self.agent_id
+        ]
+        agents.sort(key=lambda agent: (agent.depth, agent.agent_id))
+        return [agent.agent_id for agent in agents]
+
+    def summarize_agent(self, agent_id: str) -> dict[str, Any] | None:
+        """Summarize the latest state for one agent."""
+        graph = self._graph()
+        if agent_id not in graph.agents:
+            return None
+        return _summarize_agent(graph[agent_id])
 
     def read(self, agent_id: str) -> str:
         """Render the named agent's transcript."""
@@ -417,31 +414,35 @@ def _summarize(
             continue
         if exclude is not None and aid in exclude:
             continue
-        tip = agent.current()
-        if tip is None:
-            continue
-        preview_src = ""
-        if is_done(tip):
-            preview_src = tip.result or ""
-        elif is_observation(tip):
-            preview_src = (
-                getattr(tip, "content", "")
-                or getattr(tip, "output", "")
-                or getattr(tip, "reply", "")
-                or ""
-            )
-        preview = " ".join(preview_src.split())
-        out.append(
-            {
-                "agent_id": aid,
-                "type": tip.type,
-                "depth": agent.depth,
-                "terminal": bool(tip.terminal),
-                "result_preview": preview[:120] + ("…" if len(preview) > 120 else ""),
-            }
-        )
+        summary = _summarize_agent(agent)
+        if summary is not None:
+            out.append(summary)
     out.sort(key=lambda r: (r["depth"], r["agent_id"]))
     return out
+
+
+def _summarize_agent(agent: Graph) -> dict[str, Any] | None:
+    tip = agent.current()
+    if tip is None:
+        return None
+    preview_src = ""
+    if is_done(tip):
+        preview_src = tip.result or ""
+    elif is_observation(tip):
+        preview_src = (
+            getattr(tip, "content", "")
+            or getattr(tip, "output", "")
+            or getattr(tip, "reply", "")
+            or ""
+        )
+    preview = " ".join(preview_src.split())
+    return {
+        "agent_id": agent.agent_id,
+        "type": tip.type,
+        "depth": agent.depth,
+        "terminal": bool(tip.terminal),
+        "result_preview": preview[:120] + ("…" if len(preview) > 120 else ""),
+    }
 
 
 __all__ = [
@@ -449,5 +450,4 @@ __all__ = [
     "InMemorySession",
     "Session",
     "SessionVariable",
-    "SESSION_VARIABLE_PROMPT",
 ]

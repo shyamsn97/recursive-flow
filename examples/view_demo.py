@@ -124,10 +124,10 @@ root_action = LLMOutput(
     seq=1,
     reply="I'll split this into files and delegate each part.",
     code=(
-        'h1 = delegate("index_html", "Write index.html", "")\n'
-        'h2 = delegate("style_css", "Write style.css", "")\n'
-        'h3 = delegate("script_js", "Write script.js with boids logic", "")\n'
-        "results = yield wait(h1, h2, h3)\n"
+        'h1 = rlm_delegate(name="index_html", query="Write index.html", context="")\n'
+        'h2 = rlm_delegate(name="style_css", query="Write style.css", context="")\n'
+        'h3 = rlm_delegate(name="script_js", query="Write script.js with boids logic", context="")\n'
+        "results = yield rlm_wait(h1, h2, h3)\n"
         'done("\\n".join(results))'
     ),
 )
@@ -179,10 +179,10 @@ script_action = LLMOutput(
     seq=1,
     reply="Splitting into core/renderer/controls.",
     code=(
-        'a = delegate("boids_core", "Core boids", "")\n'
-        'b = delegate("renderer", "Canvas renderer", "")\n'
-        'c = delegate("controls", "UI controls", "")\n'
-        "yield wait(a, b, c)"
+        'a = rlm_delegate(name="boids_core", query="Core boids", context="")\n'
+        'b = rlm_delegate(name="renderer", query="Canvas renderer", context="")\n'
+        'c = rlm_delegate(name="controls", query="UI controls", context="")\n'
+        "yield rlm_wait(a, b, c)"
     ),
 )
 script_sup = SupervisingOutput(

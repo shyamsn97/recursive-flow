@@ -12,15 +12,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
-
 from rlmflow.llm import AnthropicClient, OpenAIClient
 from rlmflow.rlm import RLMConfig, RLMFlow
 from rlmflow.runtime.docker import DockerRuntime
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.tools import FILE_TOOLS
 from rlmflow.workspace import Workspace
-
 
 def main():
     parser = argparse.ArgumentParser(description="Interactive coding agent")

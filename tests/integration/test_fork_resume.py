@@ -1,10 +1,10 @@
 """Fork-and-resume from a ``SupervisingOutput``.
 
-Covers the scenario where a parent agent has yielded inside ``wait(...)``,
+Covers the scenario where a parent agent has yielded inside ``rlm_wait(...)``,
 its children have run to completion, the workspace is forked (or the
 process restarted), and a fresh ``RLMFlow`` is asked to continue. The
 new engine has no live generator on its runtime — it has to replay the
-parent's action code with ``delegate`` in replay mode to rebuild the
+parent's action code with ``rlm_delegate`` in replay mode to rebuild the
 suspended generator at the right yield, then drop into the normal
 resume path.
 """
@@ -66,8 +66,8 @@ def _parent_supervising_with_terminal_children(graph: Graph) -> bool:
 
 PARENT_REPLY_SINGLE = (
     "```repl\n"
-    'h = delegate("worker", "do thing", "")\n'
-    "results = yield wait(h)\n"
+    'h = rlm_delegate(name="worker", query="do thing", context="")\n'
+    "results = yield rlm_wait(h)\n"
     'done("got: " + results[0])\n'
     "```"
 )
@@ -77,7 +77,7 @@ WORKER_REPLY = '```repl\ndone("hello")\n```'
 def _scripted() -> _ScriptedLLM:
     return _ScriptedLLM(
         [
-            ("do thing", WORKER_REPLY),
+            ("Query: do thing", WORKER_REPLY),
             ("", PARENT_REPLY_SINGLE),  # default for the parent's first turn
         ]
     )
@@ -172,10 +172,10 @@ def test_fork_lets_us_swap_a_child_result_and_re_resume(tmp_path: Path):
 
 PARENT_REPLY_MULTI = (
     "```repl\n"
-    'h = delegate("a", "step a", "")\n'
-    "first = yield wait(h)\n"
-    'v = delegate("b", "step b", "")\n'
-    "second = yield wait(v)\n"
+    'h = rlm_delegate(name="a", query="step a", context="")\n'
+    "first = yield rlm_wait(h)\n"
+    'v = rlm_delegate(name="b", query="step b", context="")\n'
+    "second = yield rlm_wait(v)\n"
     'done("p:" + first[0] + "+" + second[0])\n'
     "```"
 )
@@ -184,8 +184,8 @@ PARENT_REPLY_MULTI = (
 def _multi_scripted() -> _ScriptedLLM:
     return _ScriptedLLM(
         [
-            ("step a", '```repl\ndone("A")\n```'),
-            ("step b", '```repl\ndone("B")\n```'),
+            ("Query: step a", '```repl\ndone("A")\n```'),
+            ("Query: step b", '```repl\ndone("B")\n```'),
             ("", PARENT_REPLY_MULTI),
         ]
     )

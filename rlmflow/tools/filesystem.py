@@ -54,12 +54,15 @@ def edit_file(path: str, *edits: tuple[str, str]) -> str:
     return f"Applied {count}/{len(edits)} edits to {path}"
 
 
-@tool("List files and directories.")
+@tool(
+    "List files and directories, returning absolute paths usable by other "
+    "file tools. Pass returned paths directly to `read_file`, `grep`, etc."
+)
 def ls(path: str = ".") -> list[str]:
-    p = Path(path)
+    p = Path(path).resolve()
     if p.is_file():
-        return [p.name]
-    return sorted(entry.name for entry in p.iterdir())
+        return [str(p)]
+    return sorted(str(entry) for entry in p.iterdir())
 
 
 @tool("Read lines start:end (0-indexed, exclusive) from a file.")
@@ -70,16 +73,6 @@ def read_lines(path: str, start: int, end: int) -> str:
 @tool("Count the number of lines in a file.")
 def line_count(path: str) -> int:
     return len(Path(path).read_text().splitlines())
-
-
-@tool("List files matching a glob pattern.")
-def list_files(pattern: str = "*.txt") -> list[str]:
-    return sorted(str(p) for p in Path(".").glob(pattern))
-
-
-@tool("Count files matching a glob pattern.")
-def count_files(pattern: str = "*.txt") -> int:
-    return len(list(Path(".").glob(pattern)))
 
 
 @tool("Search for lines matching a regex pattern.")
@@ -110,7 +103,7 @@ FILE_TOOLS = [
     ls,
     read_lines,
     line_count,
-    list_files,
-    count_files,
+    # list_files,
+    # count_files,
     grep,
 ]

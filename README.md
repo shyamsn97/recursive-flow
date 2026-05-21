@@ -46,21 +46,21 @@ For example, an agent that delegates two children and combines their
 results writes one REPL block like this:
 
 ```python
-h1 = delegate("search", "Find evidence", context=chunk_a)
-h2 = delegate("verify", "Check the answer", context=chunk_b)
-results = yield wait(h1, h2)
+h1 = rlm_delegate(name="search", query="Find evidence", context=chunk_a)
+h2 = rlm_delegate(name="verify", query="Check the answer", context=chunk_b)
+results = yield rlm_wait(h1, h2)
 done(combine(results))
 ```
 
-`yield wait(...)` is a real Python generator suspension point. Each
+`yield rlm_wait(...)` is a real Python generator suspension point. Each
 REPL block is wrapped in a synthetic generator and driven by the
 engine via `send()`:
 
 ```python
 def __rlm_gen__():
-    h1 = delegate("search", "...", context=chunk_a)
-    h2 = delegate("verify", "...", context=chunk_b)
-    results = yield wait(h1, h2)   # ← suspend here
+    h1 = rlm_delegate(name="search", query="...", context=chunk_a)
+    h2 = rlm_delegate(name="verify", query="...", context=chunk_b)
+    results = yield rlm_wait(h1, h2)   # ← suspend here
     done(combine(results))
 ```
 
@@ -74,13 +74,13 @@ gen.send(results)                  # resume; `results` is now the list
 ```
 
 The REPL is stateful across blocks, so the next LLM turn can still
-see `h1`, `h2`, `results`. Only `yield wait(...)` is special — any
+see `h1`, `h2`, `results`. Only `yield rlm_wait(...)` is special — any
 other top-level yield is pumped through and ignored:
 
 ```python
-yield wait(h)        # suspend, then resume with children's results
+yield rlm_wait(h)    # suspend, then resume with children's results
 yield 42             # discarded, immediately resumed
-yield handle         # discarded (forgot to wrap in wait()? no result)
+yield handle         # discarded (forgot to wrap in rlm_wait()? no result)
 ```
 
 See [`docs/internals.md`](docs/internals.md) for the full protocol.
@@ -90,7 +90,7 @@ per step):
 
 ```text
 UserQuery(root)
-  -> LLMAction -> LLMOutput(code="delegate(search) + delegate(verify); wait(...)")
+  -> LLMAction -> LLMOutput(code="rlm_delegate(search) + rlm_delegate(verify); rlm_wait(...)")
   -> ExecAction -> SupervisingOutput(waiting_on=[root.search, root.verify])
       -> UserQuery(root.search)  -> ... -> DoneOutput(root.search)
       -> UserQuery(root.verify)  -> ... -> DoneOutput(root.verify)
@@ -529,7 +529,8 @@ All examples share flags like `--no-viz`, `--docker-image rlmflow:local`,
 | [`showcase.py`](examples/showcase.py) | `Graph` snapshots, workspace persistence, session reads, time travel, gym-style stepping. |
 | [`drop_in_llm.py`](examples/drop_in_llm.py) | `RLMFlow` as an `LLMClient`. Nested agents. |
 | [`coding-agent/agent.py`](examples/coding-agent/agent.py) | Interactive coding agent that writes and edits files. |
-| [`needle_haystack.py`](examples/needle_haystack.py) | Needle-in-a-haystack across 500 files with custom tools and `runtime_factory`. |
+| [`needle_haystack.py`](examples/needle_haystack.py) | Needle-in-a-haystack over a massive in-memory `CONTEXT`, using parallel child chunks. |
+| [`needle_haystack_filesystem.py`](examples/needle_haystack_filesystem.py) | Needle-in-a-haystack across many files with custom tools and `runtime_factory`. |
 | [`summarizer.py`](examples/summarizer.py) | Recursive map-reduce over a long document. |
 | [`view_demo.py`](examples/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
 | [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, and inspect the workspace/viewer. Requires a live LLM. |
@@ -594,7 +595,7 @@ in [`docs/internals.md`](docs/internals.md).
 - [Positioning](docs/positioning.md): when to use rlmflow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 - [Control](docs/control.md): step loop, workspace resume, rewind,
-  forks, `CONTEXT.read()` / slices, `delegate(name, query, context)`,
+  forks, `CONTEXT.read()` / slices, `rlm_delegate(*, name, query, context)`,
   inline-first strategy, custom tools.
 - [Observability](docs/observability.md): querying the `Graph`,
   workspace layout, export helpers, live tree, gantt, topology

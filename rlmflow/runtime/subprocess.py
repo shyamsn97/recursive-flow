@@ -113,5 +113,8 @@ class SubprocessRuntime(Runtime):
         new = self.__class__(self.argv, workspace=workspace or self.workspace)
         for name, td in self.tools.items():
             new.tools[name] = td
-            new.inject(name, td.fn)
+            if name == "SHOW_VARS":
+                new.inject_show_vars()
+            else:
+                new.inject(name, td.fn)
         return new

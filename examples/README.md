@@ -1,12 +1,13 @@
 # Examples
 
-Every compute example (`summarizer.py`, `needle_haystack.py`, `showcase.py`,
-`coding-agent/agent.py`) takes the same flags:
+Most compute examples (`summarizer.py`, `needle_haystack.py`,
+`needle_haystack_filesystem.py`, `showcase.py`, `coding-agent/agent.py`) take
+the same flags. Defaults can vary; run `--help` for the exact values.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--model MODEL` | `claude-opus-4-6` | Main LLM. Prefix decides client (`claude*` → Anthropic, else OpenAI). |
-| `--fast-model MODEL` | unset | Optional cheap secondary model registered as `fast` for delegates. |
+| `--model MODEL` | varies | Main LLM. Prefix decides client (`claude*` → Anthropic, else OpenAI). |
+| `--fast-model MODEL` | varies | Optional cheap secondary model registered as `fast` for delegates. |
 | `--docker-image IMAGE` | unset | If set, run agent code inside this Docker image. Must have `rlmflow` installed. Leaving this unset uses `LocalRuntime`. |
 | `--max-depth N` | `3` | Max delegation depth. |
 | `--max-iterations N` | `15` | Max LLM calls per agent. |
@@ -25,14 +26,15 @@ Then just pass `--docker-image rlmflow:local` to any example — presence of
 the flag is what enables the Docker runtime:
 
 ```bash
-python examples/summarizer.py      --docker-image rlmflow:local
-python examples/needle_haystack.py --docker-image rlmflow:local
-python examples/showcase.py        --docker-image rlmflow:local
+python examples/summarizer.py                  --docker-image rlmflow:local
+python examples/needle_haystack.py             --docker-image rlmflow:local
+python examples/needle_haystack_filesystem.py  --docker-image rlmflow:local
+python examples/showcase.py                    --docker-image rlmflow:local
 python examples/coding-agent/agent.py --workspace ./proj --docker-image rlmflow:local
 ```
 
 The host workspace is bind-mounted at `/workspace` inside the container, so
-the standard `FILE_TOOLS` work identically in both modes.
+registered workspace tools work identically in both modes.
 
 Each compute example writes its durable run state into its workspace. Reopen or
 export it with:

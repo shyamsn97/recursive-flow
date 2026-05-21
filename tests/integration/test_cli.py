@@ -18,8 +18,8 @@ PLOTLY_INSTALLED = importlib.util.find_spec("plotly") is not None
 class DelegatingLLM(LLMClient):
     ROOT = (
         "```repl\n"
-        "h = delegate('child', 'do the thing', '')\n"
-        "results = yield wait(h)\n"
+        "h = rlm_delegate(name='child', query='do the thing', context='')\n"
+        "results = yield rlm_wait(h)\n"
         "done(results[0])\n"
         "```"
     )

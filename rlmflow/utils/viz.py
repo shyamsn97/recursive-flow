@@ -15,7 +15,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any, Callable
 
-from rlmflow.graph import Graph, is_done, is_errored
+from rlmflow.graph import Graph, is_done, is_errored, is_supervising
 from rlmflow.utils.export import _kind
 from rlmflow.utils.viewer import ViewSource, resolve_graphs
 
@@ -70,6 +70,19 @@ def _render_rich_tree(graph: Graph):
     from rich.text import Text
     from rich.tree import Tree
 
+    def is_settled(aid: str) -> bool:
+        sub = graph.agents.get(aid)
+        cur = sub.current() if sub is not None else None
+        return bool(cur and (is_done(cur) or is_errored(cur)))
+
+    def running_children(sub: Graph) -> tuple[int, int] | None:
+        cur = sub.current()
+        if not is_supervising(cur):
+            return None
+        waiting_on = list(cur.waiting_on or [])
+        active = sum(1 for child_id in waiting_on if not is_settled(child_id))
+        return active, len(waiting_on)
+
     def label_for(aid: str) -> Text:
         sub = graph.agents[aid]
         cur = sub.current()
@@ -79,6 +92,10 @@ def _render_rich_tree(graph: Graph):
             info.append(
                 f" [{cur.type}]", style="magenta" if not cur.terminal else "green"
             )
+        counts = running_children(sub)
+        if counts is not None:
+            active, total = counts
+            info.append(f" | children running {active}/{total}", style="cyan")
         return info
 
     def build(aid: str) -> Tree:

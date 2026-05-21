@@ -11,6 +11,7 @@ import importlib.util
 import pytest
 
 from rlmflow import Graph, LLMClient, LLMUsage, RLMConfig, RLMFlow, Workspace
+from rlmflow.graph import DoneOutput, SupervisingOutput, UserQuery
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.utils import (
     render_html,
@@ -21,6 +22,7 @@ from rlmflow.utils import (
     save_steps,
 )
 from rlmflow.utils.viz import code_log, report_md, token_sparkline
+from rlmflow.utils.viz import _render_rich_tree
 from rlmflow.utils.viewer import _scale_figure_elements
 
 KALEIDO_INSTALLED = importlib.util.find_spec("kaleido") is not None
@@ -36,8 +38,8 @@ class _DelegatingLLM(LLMClient):
 
     ROOT = (
         "```repl\n"
-        "h = delegate('child', 'do the thing', '')\n"
-        "results = yield wait(h)\n"
+        "h = rlm_delegate(name='child', query='do the thing', context='')\n"
+        "results = yield rlm_wait(h)\n"
         "done('root:' + results[0])\n"
         "```"
     )
@@ -106,6 +108,36 @@ def test_plot_returns_plotly_figure_with_title():
     fig = _final().plot(title="sample")
     assert fig.layout.title.text.startswith("<b>sample</b>")
     assert len(fig.data) >= 2
+
+
+def test_live_tree_shows_running_children_count():
+    graph = Graph(
+        agent_id="root",
+        states=[
+            UserQuery(agent_id="root", seq=0, content="do work"),
+            SupervisingOutput(
+                agent_id="root",
+                seq=1,
+                waiting_on=["root.a", "root.b"],
+            ),
+        ],
+        children={
+            "root.a": Graph(
+                agent_id="root.a",
+                parent_agent_id="root",
+                states=[UserQuery(agent_id="root.a", seq=0, content="a")],
+            ),
+            "root.b": Graph(
+                agent_id="root.b",
+                parent_agent_id="root",
+                states=[DoneOutput(agent_id="root.b", seq=1, result="b")],
+            ),
+        },
+    )
+
+    tree = _render_rich_tree(graph)
+
+    assert "children running 1/2" in tree.label.plain
 
 
 # ── transcripts / sessions (text views over Graph) ───────────────────
@@ -219,7 +251,7 @@ def test_viz_helpers_accept_workspace_and_path(tmp_path):
 
     assert "tok over" in token_sparkline(workspace)
     assert "## Result" in report_md(workspace.root)
-    assert "delegate('child', 'do the thing', '')" in code_log(workspace.root)
+    assert "rlm_delegate(name='child', query='do the thing', context='')" in code_log(workspace.root)
 
 
 @pytest.mark.skipif(not PLOTLY_INSTALLED, reason="plotly not installed")

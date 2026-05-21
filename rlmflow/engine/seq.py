@@ -11,8 +11,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from rlmflow.graph import Graph, Node, is_llm_action
-from rlmflow.utils.pool import CallablePool, Pool, SequentialPool, ThreadPool
 from rlmflow.prompts.messages import EXECUTION_OUTPUT
+from rlmflow.utils.pool import CallablePool, Pool, SequentialPool, ThreadPool
 from rlmflow.workspace import Session
 
 if TYPE_CHECKING:
@@ -79,7 +79,7 @@ def truncate_output(raw: object, max_length: int) -> object:
 
 
 def format_exec_output(output: str) -> str:
-    return EXECUTION_OUTPUT.format(output=output or "(no output)")
+    return EXECUTION_OUTPUT.format(output=output or "none")
 
 
 __all__ = [

@@ -109,7 +109,7 @@ class Runtime(ABC):
         self.tools: dict[str, ToolDef] = {}
         self.proxied: dict[str, Callable] = {}
         # Per-runtime mutable state shared between the engine and any
-        # core tool closures (``done``, ``delegate``) the engine binds to
+        # core tool closures (``done``, ``rlm_delegate``) the engine binds to
         # this runtime. The engine resets this between executions.
         self.env: dict[str, Any] = {}
         # ``True`` while the REPL holds a generator paused at a ``yield``.
@@ -252,6 +252,11 @@ class Runtime(ABC):
             self.proxied[f"{name}.{m}"] = getattr(value, m)
         self.call({"cmd": "inject_object_proxy", "name": name, "methods": methods})
 
+    def inject_show_vars(self) -> None:
+        """Install the REPL-local SHOW_VARS builtin."""
+
+        self.call({"cmd": "inject_show_vars"})
+
     def clone(self, workspace: str | Path | None = None) -> Runtime:
         """Fresh runtime with the same tool registrations.
 
@@ -269,7 +274,9 @@ class Runtime(ABC):
         new = self.__class__(workspace=workspace or self.workspace)
         for name, td in self.tools.items():
             new.tools[name] = td
-            if td.fn is not None:
+            if name == "SHOW_VARS":
+                new.inject_show_vars()
+            elif td.fn is not None:
                 new.inject(name, td.fn)
         return new
 
@@ -327,6 +334,9 @@ class Runtime(ABC):
         """Register a function as a tool — injects it and makes it discoverable."""
         td = ToolDef.from_fn(fn, description, core=core)
         self.tools[td.name] = td
+        if td.name == "SHOW_VARS":
+            self.inject_show_vars()
+            return
         self.inject(td.name, fn)
 
     def register_tools(self, tools: list[Callable]) -> None:
