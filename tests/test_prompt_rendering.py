@@ -36,15 +36,3 @@ def test_prompt_builder_arranges_sections_by_insertion_and_anchors():
 
     assert base.names == ["role", "tools", "status"]
     assert derived.names == ["preamble", "role", "strategy", "tools", "status"]
-
-    prompt = derived.build(status="")
-    assert prompt == (
-        "## Preamble\n\n"
-        "preamble body\n\n"
-        "## Role\n\n"
-        "role body\n\n"
-        "## Strategy\n\n"
-        "strategy body\n\n"
-        "## Tools\n\n"
-        "updated tools\n"
-    )

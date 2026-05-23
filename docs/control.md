@@ -208,8 +208,8 @@ filesystem tools. Sample, slice, or pass the full payload explicitly:
 
 ```python
 CONTEXT.info()                  # {"chars": int, "lines": int}
-sample  = CONTEXT.read(0, 2000) # char slice
-window  = CONTEXT.lines(0, 50)  # line slice
+sample  = CONTEXT.read(0, 2000) # char slice as str
+window  = CONTEXT.lines(0, 50)  # line slice as list[str]
 hits    = CONTEXT.grep(r"TODO") # lineno:line rows
 full    = CONTEXT.read()        # full payload for handoff to a child
 ```
@@ -226,7 +226,8 @@ rlm_delegate(*, name, query, context, model=None)
   case for code-only tasks).
 - Pass a `CONTEXT.lines(...)` / `CONTEXT.read(...)` slice when each
   child reasons over a different chunk of the parent's payload
-  (chunk-and-aggregate).
+  (chunk-and-aggregate). `rlm_delegate` accepts the `list[str]` returned
+  by `CONTEXT.lines(...)` and stores it as newline-separated child context.
 - Pass `CONTEXT.read()` only when the child genuinely needs the
   parent's full view (reviewers, auditors, deterministic retry).
 

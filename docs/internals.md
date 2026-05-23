@@ -759,8 +759,8 @@ filesystem tools. Sample, slice, or pass the full payload explicitly:
 
 ```python
 CONTEXT.info()                  # {"chars": int, "lines": int}
-sample  = CONTEXT.read(0, 2000) # char slice
-window  = CONTEXT.lines(0, 50)  # line slice
+sample  = CONTEXT.read(0, 2000) # char slice as str
+window  = CONTEXT.lines(0, 50)  # line slice as list[str]
 hits    = CONTEXT.grep(r"TODO") # lineno:line rows
 full    = CONTEXT.read()        # full payload
 ```

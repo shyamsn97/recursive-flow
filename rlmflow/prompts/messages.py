@@ -61,6 +61,15 @@ def build_context_metadata(
 
 CONTINUE_ACTION = "Continue. Your next action:"
 
+FIRST_TURN_DECOMPOSITION_NUDGE = (
+    "If the task decomposes into independent units, your first action should "
+    "usually spawn the child batch with `rlm_delegate(...)` or issue a "
+    "`llm_query_batched(...)` fanout rather than solving every unit yourself. "
+    "When using `rlm_delegate`, put the shared requirements/data in "
+    "`context=...` so the child can inspect them through `CONTEXT.read()`; "
+    'avoid `context=""` for nontrivial delegated work.'
+)
+
 
 def build_user_prompt(
     *,
@@ -84,6 +93,7 @@ def build_user_prompt(
         if metadata:
             parts.append(metadata)
         parts.append(body)
+        parts.append(FIRST_TURN_DECOMPOSITION_NUDGE)
         prompt = "\n\n".join(parts)
     else:
         # Continue turns: the REPL output above already carries all the

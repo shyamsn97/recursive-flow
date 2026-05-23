@@ -1,0 +1,14 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #000; /* black page background */
+}
+
+/* Ensure the canvas fills the viewport and resizes responsively */
+canvas {
+  display: block;     /* eliminate inline gap/scrollbars */
+  width: 100vw;
+  height: 100vh;      /* fallback */
+  height: 100dvh;     /* modern: account for dynamic browser UI */
+}

@@ -71,7 +71,7 @@ Hard requirements:
 
 ### Parent Agent
 
-The parent plans research rounds. It should:
+The parent plans research batches. It should:
 
 1. Read this file.
 2. Run `run_baseline()` once.
