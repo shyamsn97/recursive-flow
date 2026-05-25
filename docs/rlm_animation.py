@@ -281,7 +281,7 @@ class RLMFlowHero(Scene):
             ),
             (
                 [("root", "S", [1, 2, 3]), ("search", "A", []), ("code", "A", []), ("verify", "A", [])],
-                "children are delegated",
+                "rlm_delegate fanout",
             ),
             (
                 [
@@ -369,7 +369,7 @@ class RLMFlowHero(Scene):
         )
 
         code_title = Text(
-            "agents recursively create child agents in plain Python",
+            "split work with rlm_delegate, then await the children",
             font=CODE_FONT,
             font_size=FS_BODY,
             color=WHITE_C,
@@ -378,11 +378,11 @@ class RLMFlowHero(Scene):
         code_box = RoundedRectangle(
             corner_radius=0.12,
             width=10.4,
-            height=3.55,
+            height=4.15,
             color=DIM,
             stroke_width=1.0,
             fill_opacity=0.06,
-        ).move_to(DOWN * 0.12)
+        ).move_to(DOWN * 0.05)
         repl_header = Text(
             "REPL",
             font=CODE_FONT,
@@ -400,18 +400,22 @@ class RLMFlowHero(Scene):
         ctx_label = Text("CONTEXT", font=CODE_FONT, font_size=FS_TINY, color=Q_C).move_to(ctx_tab)
         ctx = VGroup(ctx_tab, ctx_label)
         code_lines = VGroup(
-            Text(">>> chunks = CONTEXT.split(by='---')", font=CODE_FONT, font_size=FS_CAP, color=Q_C),
-            Text(">>> handles = []", font=CODE_FONT, font_size=FS_CAP, color=WHITE_C),
-            Text(">>> for i, chunk in enumerate(chunks):", font=CODE_FONT, font_size=FS_CAP, color=WHITE_C),
-            Text("...     h = rlm_delegate(name=f'chunk_{i}', query='analyze', context=chunk)", font=CODE_FONT, font_size=FS_CAP, color=A_C),
-            Text("...     handles.append(h)", font=CODE_FONT, font_size=FS_CAP, color=A_C),
-            Text(">>> results = yield rlm_wait(*handles)", font=CODE_FONT, font_size=FS_CAP, color=S_C),
-            Text(">>> done(combine(results))", font=CODE_FONT, font_size=FS_CAP, color=R_C),
-        ).arrange(DOWN, aligned_edge=LEFT, buff=0.13)
+            Text(">>> chunks = CONTEXT.lines(0, CONTEXT.line_count())", font=CODE_FONT, font_size=FS_SMALL, color=Q_C),
+            Text(">>> batches = chunked(chunks, size=500)", font=CODE_FONT, font_size=FS_SMALL, color=Q_C),
+            Text(">>> handles = [", font=CODE_FONT, font_size=FS_SMALL, color=WHITE_C),
+            Text("...   rlm_delegate(", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
+            Text("...     name=f'chunk_{i}',", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
+            Text("...     query='inspect your CONTEXT slice',", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
+            Text("...     context='\\n'.join(batch),", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
+            Text("...   ) for i, batch in enumerate(batches)", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
+            Text("... ]", font=CODE_FONT, font_size=FS_SMALL, color=WHITE_C),
+            Text(">>> results = await rlm_wait(*handles)", font=CODE_FONT, font_size=FS_SMALL, color=S_C),
+            Text(">>> done(combine(results))", font=CODE_FONT, font_size=FS_SMALL, color=R_C),
+        ).arrange(DOWN, aligned_edge=LEFT, buff=0.08)
         code_lines.move_to(code_box.get_center() + DOWN * 0.12)
 
         code_caption = Text(
-            "every rlm_delegate, rlm_wait, and result becomes an inspectable graph",
+            "child context stays in CONTEXT; parent only combines child results",
             font=CODE_FONT,
             font_size=FS_CAP,
             color=DIM,
