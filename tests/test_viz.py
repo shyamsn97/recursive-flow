@@ -28,6 +28,7 @@ from rlmflow.utils.viewer import _build_graph_figure, _scale_figure_elements
 KALEIDO_INSTALLED = importlib.util.find_spec("kaleido") is not None
 PIL_INSTALLED = importlib.util.find_spec("PIL") is not None
 PLOTLY_INSTALLED = importlib.util.find_spec("plotly") is not None
+RICH_INSTALLED = importlib.util.find_spec("rich") is not None
 
 
 # ── shared run fixtures ──────────────────────────────────────────────
@@ -231,6 +232,7 @@ def test_plot_dense_runs_cap_scaled_marker_and_label_size():
     assert len(fig.layout.annotations or ()) > 1
 
 
+@pytest.mark.skipif(not RICH_INSTALLED, reason="live-tree viz needs optional `rich`")
 def test_live_tree_shows_running_children_count():
     graph = Graph(
         agent_id="root",
@@ -261,6 +263,7 @@ def test_live_tree_shows_running_children_count():
     assert "children running 1/2" in tree.label.plain
 
 
+@pytest.mark.skipif(not RICH_INSTALLED, reason="live-tree viz needs optional `rich`")
 def test_live_tree_displays_model_label_and_state():
     graph = Graph(
         agent_id="root",
@@ -295,6 +298,7 @@ def test_live_tree_displays_model_label_and_state():
     assert "root.fast [fast:gpt-5-mini] [llm_output]" in child.label.plain
 
 
+@pytest.mark.skipif(not RICH_INSTALLED, reason="live-tree viz needs optional `rich`")
 def test_live_view_does_not_redirect_notebook_streams(monkeypatch):
     calls = {}
 
