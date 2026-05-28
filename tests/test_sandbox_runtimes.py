@@ -5,12 +5,9 @@ import queue
 import re
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 from rlmflow.graph import ChildHandle, ExecAction, Graph, WaitRequest
 from rlmflow.llm import LLMClient
