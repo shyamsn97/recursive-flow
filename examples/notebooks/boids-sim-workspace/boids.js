@@ -1,289 +1,246 @@
 (function () {
-  // Boids simulation on a canvas with id="boids"
-  var canvas = document.getElementById('boids');
-  if (!canvas) {
-    // Fail-safe: create canvas if not present (but per spec, it's in index.html)
-    canvas = document.createElement('canvas');
-    canvas.id = 'boids';
-    document.body.appendChild(canvas);
-  }
-  var ctx = canvas.getContext('2d', { alpha: false });
+  function start() {
+    var canvas = document.getElementById('boids');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-  var width = 0, height = 0, dpr = Math.max(1, window.devicePixelRatio || 1);
+    // Simulation constants
+    var COUNT = 250;
+    var ALIGN_RADIUS = 50;
+    var COHESION_RADIUS = 50;
+    var SEPARATION_RADIUS = 20;
+    var MAX_SPEED = 2.5;
+    var MAX_FORCE = 0.05;
 
-  function resize() {
-    dpr = Math.max(1, window.devicePixelRatio || 1);
-    width = window.innerWidth | 0;
-    height = window.innerHeight | 0;
-    canvas.style.width = width + 'px';
-    canvas.style.height = height + 'px';
-    canvas.width = Math.max(1, Math.floor(width * dpr));
-    canvas.height = Math.max(1, Math.floor(height * dpr));
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // render in CSS pixel coords
-  }
+    // World size in CSS pixels (drawing units after transform)
+    var viewW = 0;
+    var viewH = 0;
+    var halfW = 0;
+    var halfH = 0;
 
-  window.addEventListener('resize', resize);
+    var boids = [];
 
-  // Parameters
-  var NUM_BOIDS = 350;
-  var PERCEPTION = 45;      // neighbor perception radius
-  var SEPARATION_R = 20;    // separation radius
-  var COHESION_W = 0.005;
-  var ALIGN_W = 0.05;
-  var SEPARATE_W = 0.15;
-  var MAX_SPEED = 3.2;
-  var MAX_FORCE = 0.06;     // gentle steering
-  var EDGE_MARGIN = 12;     // wrap-around padding
-  var TRI_LEN = 8;          // visual triangle length
-  var TRI_WING = 4.5;       // visual wing half-span
+    function resize() {
+      var dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+      viewW = window.innerWidth || document.documentElement.clientWidth || 800;
+      viewH = window.innerHeight || document.documentElement.clientHeight || 600;
+      halfW = viewW * 0.5;
+      halfH = viewH * 0.5;
 
-  // Grid-based neighbor search for performance
-  var GRID_SIZE = PERCEPTION | 0;
-  function gridKey(cx, cy) { return (cx << 16) ^ cy; } // fast int key
-
-  var boids = [];
-  function randRange(a, b) { return a + Math.random() * (b - a); }
-  function mag(x, y) { return Math.sqrt(x * x + y * y); }
-  function limit(vx, vy, max) {
-    var m = vx * vx + vy * vy;
-    if (m > max * max) {
-      m = Math.sqrt(m);
-      var s = max / (m || 1);
-      vx *= s; vy *= s;
+      canvas.width = Math.floor(viewW * dpr);
+      canvas.height = Math.floor(viewH * dpr);
+      // Reset transform then scale so we can use CSS pixels for all math/drawing
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
-    return [vx, vy];
-  }
-  function setMag(vx, vy, m) {
-    var cur = Math.sqrt(vx * vx + vy * vy) || 1;
-    var s = m / cur;
-    return [vx * s, vy * s];
-  }
 
-  function makeBoid(i) {
-    var angle = randRange(0, Math.PI * 2);
-    var speed = randRange(0.5 * MAX_SPEED, MAX_SPEED);
-    return {
-      x: randRange(0, width),
-      y: randRange(0, height),
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      ax: 0,
-      ay: 0,
-      hueBase: (Math.random() * 360) | 0,
-      id: i
-    };
-  }
-
-  function rebuildGrid() {
-    grid = Object.create(null);
-    var gs = GRID_SIZE;
-    for (var i = 0; i < boids.length; i++) {
-      var b = boids[i];
-      var cx = (b.x / gs) | 0;
-      var cy = (b.y / gs) | 0;
-      var key = gridKey(cx, cy);
-      var cell = grid[key];
-      if (!cell) grid[key] = cell = [];
-      cell.push(i);
+    function randRange(a, b) {
+      return a + Math.random() * (b - a);
     }
-  }
 
-  function neighbors(index, outIdx) {
-    // Collect neighbor indices from 9 cells (self + 8 around)
-    var b = boids[index];
-    var gs = GRID_SIZE;
-    var cx = (b.x / gs) | 0;
-    var cy = (b.y / gs) | 0;
-    var k = 0;
-    for (var dy = -1; dy <= 1; dy++) {
-      for (var dx = -1; dx <= 1; dx++) {
-        var key = gridKey(cx + dx, cy + dy);
-        var cell = grid[key];
-        if (!cell) continue;
-        for (var j = 0; j < cell.length; j++) {
-          var idx = cell[j];
-          if (idx !== index) {
-            outIdx[k++] = idx;
+    function limitVec(x, y, max) {
+      var m2 = x * x + y * y;
+      if (m2 > max * max) {
+        var m = Math.sqrt(m2);
+        var s = max / (m || 1);
+        return [x * s, y * s];
+      }
+      return [x, y];
+    }
+
+    function initBoids() {
+      boids.length = 0;
+      for (var i = 0; i < COUNT; i++) {
+        var angle = Math.random() * Math.PI * 2;
+        var speed = randRange(MAX_SPEED * 0.4, MAX_SPEED);
+        boids.push({
+          x: Math.random() * viewW,
+          y: Math.random() * viewH,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          hue: Math.floor(Math.random() * 360)
+        });
+      }
+    }
+
+    function wrap(b) {
+      if (b.x < 0) b.x += viewW;
+      else if (b.x >= viewW) b.x -= viewW;
+      if (b.y < 0) b.y += viewH;
+      else if (b.y >= viewH) b.y -= viewH;
+    }
+
+    function update() {
+      // Compute accelerations for all boids
+      var axArr = new Array(boids.length);
+      var ayArr = new Array(boids.length);
+
+      for (var i = 0; i < boids.length; i++) {
+        var b = boids[i];
+
+        var sumAlignX = 0, sumAlignY = 0, countAlign = 0;
+        var sumCohX = 0, sumCohY = 0, countCoh = 0;
+        var sumSepX = 0, sumSepY = 0;
+
+        for (var j = 0; j < boids.length; j++) {
+          if (i === j) continue;
+          var o = boids[j];
+
+          // Compute minimal image distance (torus)
+          var dx = o.x - b.x;
+          var dy = o.y - b.y;
+
+          if (dx > halfW) dx -= viewW;
+          else if (dx < -halfW) dx += viewW;
+          if (dy > halfH) dy -= viewH;
+          else if (dy < -halfH) dy += viewH;
+
+          var d2 = dx * dx + dy * dy;
+
+          // Alignment and Cohesion within same radius
+          if (d2 < ALIGN_RADIUS * ALIGN_RADIUS) {
+            sumAlignX += o.vx;
+            sumAlignY += o.vy;
+            countAlign++;
+          }
+          if (d2 < COHESION_RADIUS * COHESION_RADIUS) {
+            // Accumulate neighbor positions accounting for wrap
+            sumCohX += b.x + dx;
+            sumCohY += b.y + dy;
+            countCoh++;
+          }
+          if (d2 < SEPARATION_RADIUS * SEPARATION_RADIUS && d2 > 0) {
+            var d = Math.sqrt(d2);
+            // Weight more strongly the closer the neighbor is
+            var inv = 1 / (d || 1);
+            // Direction away from neighbor
+            sumSepX -= dx * inv;
+            sumSepY -= dy * inv;
           }
         }
-      }
-    }
-    return k; // number of items populated in outIdx
-  }
 
-  // Simulation buffers
-  var grid = Object.create(null);
-  var neighIdx = new Int32Array(1024); // grows if needed per frame
-
-  function step(dt) {
-    // Build grid for neighbor queries
-    rebuildGrid();
-
-    // If many neighbors, ensure buffer large enough
-    var potentialMax = boids.length * 9; // loose upper bound (very conservative)
-    if (neighIdx.length < potentialMax) {
-      neighIdx = new Int32Array(potentialMax);
-    }
-
-    var pr = PERCEPTION;
-    var sr = SEPARATION_R;
-    var pr2 = pr * pr;
-    var sr2 = sr * sr;
-
-    for (var i = 0; i < boids.length; i++) {
-      var b = boids[i];
-
-      var alignX = 0, alignY = 0;
-      var cohX = 0, cohY = 0;
-      var sepX = 0, sepY = 0;
-      var countA = 0, countC = 0, countS = 0;
-
-      // Collect neighbor indices
-      var nCount = neighbors(i, neighIdx);
-
-      for (var n = 0; n < nCount; n++) {
-        var j = neighIdx[n];
-        var o = boids[j];
-        var dx = o.x - b.x;
-        var dy = o.y - b.y;
-        var d2 = dx * dx + dy * dy;
-
-        if (d2 < pr2) {
-          // Alignment and cohesion consider neighbors within perception
-          alignX += o.vx;
-          alignY += o.vy;
-          cohX += o.x;
-          cohY += o.y;
-          countA++;
-          countC++;
+        // Alignment: steer towards average heading
+        var steerAx = 0, steerAy = 0;
+        if (countAlign > 0) {
+          var avgVx = sumAlignX / countAlign;
+          var avgVy = sumAlignY / countAlign;
+          var desiredA = normalizeTo(avgVx, avgVy, MAX_SPEED);
+          var steerA = subtract(desiredA[0], desiredA[1], b.vx, b.vy);
+          var limitedA = limitVec(steerA[0], steerA[1], MAX_FORCE);
+          steerAx = limitedA[0];
+          steerAy = limitedA[1];
         }
-        if (d2 < sr2 && d2 > 0.0001) {
-          // Separation stronger at closer distances
-          var inv = 1 / Math.sqrt(d2);
-          // Weight by 1/d to push harder for very close neighbors
-          sepX -= dx * inv;
-          sepY -= dy * inv;
-          countS++;
+
+        // Cohesion: steer toward center of mass
+        var steerCx = 0, steerCy = 0;
+        if (countCoh > 0) {
+          var centerX = sumCohX / countCoh;
+          var centerY = sumCohY / countCoh;
+          var toCenterX = centerX - b.x;
+          var toCenterY = centerY - b.y;
+          var desiredC = normalizeTo(toCenterX, toCenterY, MAX_SPEED);
+          var steerC = subtract(desiredC[0], desiredC[1], b.vx, b.vy);
+          var limitedC = limitVec(steerC[0], steerC[1], MAX_FORCE);
+          steerCx = limitedC[0];
+          steerCy = limitedC[1];
         }
+
+        // Separation: steer away from neighbors
+        var steerSx = 0, steerSy = 0;
+        if (sumSepX !== 0 || sumSepY !== 0) {
+          var desiredS = normalizeTo(sumSepX, sumSepY, MAX_SPEED);
+          var steerS = subtract(desiredS[0], desiredS[1], b.vx, b.vy);
+          var limitedS = limitVec(steerS[0], steerS[1], MAX_FORCE);
+          steerSx = limitedS[0];
+          steerSy = limitedS[1];
+        }
+
+        // Weight contributions
+        var weightAlign = 1.0;
+        var weightCoh = 0.9;
+        var weightSep = 1.5;
+
+        var ax = steerAx * weightAlign + steerCx * weightCoh + steerSx * weightSep;
+        var ay = steerAy * weightAlign + steerCy * weightCoh + steerSy * weightSep;
+
+        axArr[i] = ax;
+        ayArr[i] = ay;
       }
 
-      // Reset acceleration
-      var ax = 0, ay = 0;
+      // Integrate velocities and positions
+      for (var k = 0; k < boids.length; k++) {
+        var bk = boids[k];
+        bk.vx += axArr[k];
+        bk.vy += ayArr[k];
 
-      // Alignment
-      if (countA > 0) {
-        alignX /= countA; alignY /= countA;
-        var aVec = setMag(alignX, alignY, MAX_SPEED);
-        aVec[0] -= b.vx; aVec[1] -= b.vy;
-        aVec = limit(aVec[0], aVec[1], MAX_FORCE);
-        ax += aVec[0] * ALIGN_W;
-        ay += aVec[1] * ALIGN_W;
+        var limitedV = limitVec(bk.vx, bk.vy, MAX_SPEED);
+        bk.vx = limitedV[0];
+        bk.vy = limitedV[1];
+
+        bk.x += bk.vx;
+        bk.y += bk.vy;
+
+        wrap(bk);
       }
-
-      // Cohesion
-      if (countC > 0) {
-        cohX = (cohX / countC) - b.x;
-        cohY = (cohY / countC) - b.y;
-        var cVec = setMag(cohX, cohY, MAX_SPEED);
-        cVec[0] -= b.vx; cVec[1] -= b.vy;
-        cVec = limit(cVec[0], cVec[1], MAX_FORCE);
-        ax += cVec[0] * COHESION_W;
-        ay += cVec[1] * COHESION_W;
-      }
-
-      // Separation
-      if (countS > 0) {
-        sepX /= countS; sepY /= countS;
-        var sVec = setMag(sepX, sepY, MAX_SPEED);
-        sVec[0] -= b.vx; sVec[1] -= b.vy;
-        sVec = limit(sVec[0], sVec[1], MAX_FORCE * 1.2);
-        ax += sVec[0] * SEPARATE_W;
-        ay += sVec[1] * SEPARATE_W;
-      }
-
-      // Apply acceleration
-      b.vx += ax;
-      b.vy += ay;
-
-      // Limit speed
-      var vLimited = limit(b.vx, b.vy, MAX_SPEED);
-      b.vx = vLimited[0]; b.vy = vLimited[1];
-
-      // Integrate
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-
-      // Wrap-around edges with margin
-      if (b.x < -EDGE_MARGIN) b.x = width + EDGE_MARGIN;
-      else if (b.x > width + EDGE_MARGIN) b.x = -EDGE_MARGIN;
-      if (b.y < -EDGE_MARGIN) b.y = height + EDGE_MARGIN;
-      else if (b.y > height + EDGE_MARGIN) b.y = -EDGE_MARGIN;
     }
-  }
 
-  function draw() {
-    // Clear with dark background (canvas is opaque by default due to alpha:false)
-    ctx.fillStyle = '#0b0e11';
-    ctx.fillRect(0, 0, width, height);
-
-    for (var i = 0; i < boids.length; i++) {
-      var b = boids[i];
-      var ang = Math.atan2(b.vy, b.vx);
-      var ca = Math.cos(ang), sa = Math.sin(ang);
-
-      // Triangle points oriented by velocity
-      var len = TRI_LEN, wing = TRI_WING;
-      var x = b.x, y = b.y;
-
-      var tipX = x + ca * len;
-      var tipY = y + sa * len;
-      var tailX = x - ca * (len * 0.6);
-      var tailY = y - sa * (len * 0.6);
-
-      // Wings using a perpendicular vector
-      var leftX = tailX + (-sa) * wing;
-      var leftY = tailY + (ca) * wing;
-      var rightX = tailX - (-sa) * wing;
-      var rightY = tailY - (ca) * wing;
-
-      // Color by base hue and speed
-      var speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
-      var hue = (b.hueBase + speed * 40) % 360;
-      var light = 45 + Math.min(15, speed * 3.5); // subtle speed-based lightness
-
-      ctx.beginPath();
-      ctx.moveTo(tipX, tipY);
-      ctx.lineTo(leftX, leftY);
-      ctx.lineTo(rightX, rightY);
-      ctx.closePath();
-
-      ctx.fillStyle = 'hsl(' + hue.toFixed(0) + ', 80%,' + light.toFixed(0) + '%)';
-      ctx.strokeStyle = 'hsla(' + hue.toFixed(0) + ', 90%, 70%, 0.25)';
-      ctx.lineWidth = 1;
-      ctx.fill();
-      ctx.stroke();
+    function normalizeTo(x, y, mag) {
+      var m = Math.sqrt(x * x + y * y);
+      if (m === 0) return [0, 0];
+      var s = mag / m;
+      return [x * s, y * s];
     }
+
+    function subtract(ax, ay, bx, by) {
+      return [ax - bx, ay - by];
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, viewW, viewH);
+
+      var size = 8; // triangle length
+      for (var i = 0; i < boids.length; i++) {
+        var b = boids[i];
+        var angle = Math.atan2(b.vy, b.vx) || 0;
+
+        ctx.save();
+        ctx.translate(b.x, b.y);
+        ctx.rotate(angle);
+        ctx.fillStyle = 'hsl(' + b.hue + ', 80%, 60%)';
+
+        ctx.beginPath();
+        ctx.moveTo(size, 0);
+        ctx.lineTo(-size * 0.6, size * 0.5);
+        ctx.lineTo(-size * 0.6, -size * 0.5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function tick() {
+      update();
+      draw();
+      requestAnimationFrame(tick);
+    }
+
+    // Initialize
+    resize();
+    initBoids();
+    window.addEventListener('resize', function () {
+      resize();
+    }, { passive: true });
+    window.addEventListener('orientationchange', function () {
+      // Delay resize to allow viewport to settle
+      setTimeout(resize, 50);
+    }, { passive: true });
+
+    requestAnimationFrame(tick);
   }
 
-  // Main loop
-  var last = 0;
-  function loop(ts) {
-    if (!last) last = ts;
-    var dt = (ts - last) / 16.6667; // normalize to ~60 FPS steps
-    if (dt > 2.5) dt = 2.5; // clamp for stability if tab was inactive
-    last = ts;
-
-    step(dt);
-    draw();
-    requestAnimationFrame(loop);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    start();
   }
-
-  // Init
-  resize();
-  boids.length = 0;
-  for (var i = 0; i < NUM_BOIDS; i++) {
-    boids.push(makeBoid(i));
-  }
-
-  requestAnimationFrame(loop);
 })();

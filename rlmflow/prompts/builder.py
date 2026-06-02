@@ -25,6 +25,10 @@ from __future__ import annotations
 
 import re
 import textwrap
+from collections.abc import Callable
+from typing import Any
+
+SectionBody = str | Callable[[Any, Any], str]
 
 
 class Section:
@@ -35,7 +39,7 @@ class Section:
     def __init__(
         self,
         name: str,
-        body: str = "",
+        body: SectionBody = "",
         *,
         title: str | None = None,
         level: int = 2,
@@ -45,14 +49,21 @@ class Section:
         self.title = title
         self.level = level
 
-    def render(self, body_override: str | None = None) -> str:
-        text = (body_override if body_override is not None else self.body).strip()
+    def render(
+        self,
+        engine: Any = None,
+        graph: Any = None,
+        body_override: str | None = None,
+    ) -> str:
+        body = body_override if body_override is not None else self.body
+        text = body(engine, graph) if callable(body) else body
+        text = textwrap.dedent(text).strip()
         if not text:
             return ""
         if self.title:
             heading = "#" * max(self.level, 1) + " " + self.title
             return heading + "\n\n" + text
-        return textwrap.dedent(text)
+        return text
 
 
 class PromptBuilder:
@@ -75,7 +86,7 @@ class PromptBuilder:
     def section(
         self,
         name: str,
-        body: str = "",
+        body: SectionBody = "",
         *,
         title: str | None = None,
         level: int = 2,
@@ -105,7 +116,7 @@ class PromptBuilder:
         out._sections.append(new)
         return out
 
-    def update(self, name: str, body: str) -> PromptBuilder:
+    def update(self, name: str, body: SectionBody) -> PromptBuilder:
         """Replace the body of an existing section, preserving title/level/position.
 
         Raises ``KeyError`` if no section with ``name`` exists — use
@@ -135,15 +146,16 @@ class PromptBuilder:
                 return s
         return None
 
-    def build(self, **overrides: str) -> str:
+    def build(self, engine: Any = None, graph: Any = None, **overrides: str) -> str:
         """Render all sections in order, skip empties.
 
-        Keyword arguments override section bodies for this call only.
+        Callable sections receive ``(engine, graph)``. Keyword arguments
+        override section bodies for this call only.
         """
         parts = []
         for s in self._sections:
             override = overrides.get(s.name)
-            rendered = s.render(override)
+            rendered = s.render(engine, graph, override)
             if rendered.strip():
                 parts.append(rendered)
         text = "\n\n".join(parts)
@@ -151,4 +163,4 @@ class PromptBuilder:
         return text + "\n" if text else ""
 
 
-__all__ = ["PromptBuilder", "Section"]
+__all__ = ["PromptBuilder", "Section", "SectionBody"]

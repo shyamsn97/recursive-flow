@@ -40,7 +40,6 @@ def test_rlm_delegate_is_keyword_only():
 
 class _EchoLLM(LLMClient):
     def chat(self, messages, *args, **kwargs) -> str:
-        del args, kwargs
         return messages[-1]["content"].upper()
 
 

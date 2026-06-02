@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -67,30 +66,30 @@ from rlmflow.graph import (
     RuntimeRef,
     SupervisingOutput,
     UserQuery,
-    is_errored,
-    is_exec_output,
     is_llm_output,
-    is_user_query,
 )
 from rlmflow.llm import LLMClient, LLMUsage
-from rlmflow.prompts.default import DEFAULT_BUILDER
+from rlmflow.llm_channel import LLMChannel
+from rlmflow.prompts.default import DEFAULT_BUILDER, status_section, tools_section
 from rlmflow.prompts.messages import (
     DEFAULT_QUERY,
     FINAL_ANSWER_ACTION,
-    STATUS_DEPTH_MID,
-    STATUS_DEPTH_NEAR_MAX,
-    STATUS_DEPTH_ROOT,
     TRUNCATION_SESSION_HINT,
     TRUNCATION_SUMMARY,
     build_user_prompt,
 )
+from rlmflow.prompts.projection import (
+    append_message,
+    coalesce_messages,
+    project_state_messages,
+)
 from rlmflow.runtime import LocalRuntime, Runtime
+from rlmflow.runtime.env import execution_facts, seed_execution_env
 from rlmflow.tools import tool
 from rlmflow.tools.builtins import (
     SHOW_VARS,
     make_delegate,
     make_done,
-    make_launch_subagent,
     make_launch_subagents,
     make_wait,
 )
@@ -200,12 +199,25 @@ class RLMFlow(LLMClient):
 
         self.llm_clients: dict[str, LLMClient] = {}
         self.model_descriptions: dict[str, str] = {}
+        llm_thread_safe: dict[str, bool] = {}
         for key, entry in (llm_clients or {}).items():
             self.llm_clients[key] = entry["model"]
             if "description" in entry:
                 self.model_descriptions[key] = entry["description"]
+            if "thread_safe" in entry:
+                llm_thread_safe[key] = bool(entry["thread_safe"])
         if "default" not in self.llm_clients:
             self.llm_clients["default"] = self.llm_client
+        self.llm_channel = LLMChannel(
+            self.llm_clients,
+            max_concurrency=(
+                self.config.llm_max_concurrency
+                if self.config.llm_max_concurrency is not None
+                else self.config.max_concurrency
+            ),
+            request_timeout=self.config.llm_request_timeout,
+            thread_safe=llm_thread_safe,
+        )
 
         self.runtime_sessions: dict[str, Runtime] = {ROOT_RUNTIME_ID: runtime}
         self.terminate_requested: set[str] = set()
@@ -417,9 +429,10 @@ class RLMFlow(LLMClient):
         ``self.last_usage`` via :meth:`record_usage`.
         """
         messages = self.build_messages(graph, force_final=force_final)
-        client = self.llm_client_for(graph)
+        model = getattr(last, "model", None) or graph.config.get("model", "default")
+        client = self.llm_client_for(graph, model=model)
         t0 = time.time()
-        raw, usage = self.call_llm(messages, client=client)
+        raw, usage = self.call_llm(messages, model=model)
         elapsed_s = round(time.time() - t0, 3)
         code = self.extract_code(raw)
         self.transcript_recorder.record_turn(
@@ -437,7 +450,7 @@ class RLMFlow(LLMClient):
             seq=last.seq + 1,
             reply=raw,
             code=code or "",
-            model=getattr(client, "model", None),
+            model=getattr(client, "model", model),
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
         )
@@ -448,17 +461,22 @@ class RLMFlow(LLMClient):
         messages: list[dict[str, str]],
         *,
         client: LLMClient | None = None,
+        model: str | None = None,
     ) -> tuple[str, LLMUsage]:
         """Stream a chat completion and return ``(text, usage)``.
 
         Override to add retries, caching, mocking, etc. Defaults to
-        streaming from ``client`` (or ``self.llm_client`` if omitted)
-        and returning the post-call ``LLMUsage``.
+        routing through the shared LLM channel and returning per-call
+        usage.
         """
-        active = client or self.llm_client
-        text = "".join(active.stream(messages))
-        usage = active.last_usage or LLMUsage()
-        return text, usage
+        if model is not None:
+            return self.llm_channel.call(model, messages)
+        if client is None:
+            return self.llm_channel.call("default", messages)
+        for key, candidate in self.llm_clients.items():
+            if candidate is client:
+                return self.llm_channel.call(key, messages)
+        return client.completion(messages)
 
     @tool(
         "Run multiple independent one-shot LLM prompts concurrently. "
@@ -482,24 +500,7 @@ class RLMFlow(LLMClient):
         if not prompts:
             return []
 
-        client = self.llm_clients[model]
-
-        def run_one(prompt: str) -> tuple[str, LLMUsage]:
-            return self.call_llm([{"role": "user", "content": prompt}], client=client)
-
-        cap = self.config.max_concurrency or len(prompts)
-        max_workers = max(1, min(len(prompts), cap))
-        if max_workers == 1:
-            pairs = [run_one(prompt) for prompt in prompts]
-        else:
-            pairs_by_index: dict[int, tuple[str, LLMUsage]] = {}
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures = {
-                    pool.submit(run_one, prompt): i for i, prompt in enumerate(prompts)
-                }
-                for future in as_completed(futures):
-                    pairs_by_index[futures[future]] = future.result()
-            pairs = [pairs_by_index[i] for i in range(len(prompts))]
+        pairs = self.llm_channel.batch(model, prompts)
 
         total_usage = LLMUsage(
             input_tokens=sum(usage.input_tokens for _, usage in pairs),
@@ -508,15 +509,15 @@ class RLMFlow(LLMClient):
         self.record_usage(total_usage)
         return [text for text, _ in pairs]
 
-    def llm_client_for(self, graph: Graph) -> LLMClient:
+    def llm_client_for(self, graph: Graph, *, model: str | None = None) -> LLMClient:
         """Pick the per-agent LLM client.
 
         The agent's ``config["model"]`` is the lookup key into
         ``self.llm_clients``; when missing, fall back to
         ``self.llm_client``. Override to add per-graph routing.
         """
-        model = graph.config.get("model", "default")
-        return self.llm_clients.get(model, self.llm_client)
+        key = model or graph.config.get("model", "default")
+        return self.llm_clients.get(key, self.llm_client)
 
     def extract_code(self, text: str) -> str | None:
         """Pull the first (or merged) ```repl block from an LLM reply.
@@ -548,18 +549,7 @@ class RLMFlow(LLMClient):
         context_keys = self.context.list_contexts(agent_id=graph.agent_id)
         max_depth = (graph.config or {}).get("max_depth", self.config.max_depth)
 
-        msgs: list[dict[str, str]] = []
-        for state in graph.states:
-            if is_user_query(state):
-                _append_message(msgs, "user", state.content)
-            elif is_llm_output(state):
-                _append_message(msgs, "assistant", state.reply)
-            elif is_exec_output(state):
-                _append_message(msgs, "user", state.content or state.output)
-            elif is_errored(state):
-                _append_message(msgs, "user", state.content)
-            # SupervisingOutput, DoneOutput, and every ActionNode are
-            # engine bookkeeping — not part of the LLM projection.
+        msgs = project_state_messages(graph.states)
 
         cap = self.config.max_messages
         if cap and len(msgs) > cap:
@@ -574,7 +564,7 @@ class RLMFlow(LLMClient):
                     ),
                 }
             ] + msgs[-cap:]
-            msgs = _coalesce_messages(msgs)
+            msgs = coalesce_messages(msgs)
 
         # Gate on LLMOutput count — not LLMAction count — so we don't
         # double up the user prompt on the very first turn. The
@@ -598,26 +588,16 @@ class RLMFlow(LLMClient):
             )
 
         if nudge is not None:
-            # Merge the continue-turn / final-answer nudge into the last
-            # message if it's already user-role — otherwise providers
-            # like Anthropic reject (or silently merge) consecutive
-            # `{role: "user"}` blocks. Fall back to appending a new
-            # message only if the trailing message is assistant-role,
-            # which shouldn't happen in practice but keeps us safe.
-            if msgs and msgs[-1]["role"] == "user":
-                _append_message(msgs, "user", nudge)
-            else:
-                _append_message(msgs, "user", nudge)
+            # `append_message` coalesces consecutive user messages so providers
+            # that reject adjacent user blocks still receive a valid projection.
+            append_message(msgs, "user", nudge)
         return [system] + msgs
 
     def build_system_prompt(self, graph: Graph) -> str:
         """Render the system prompt for the agent rooted in ``graph``."""
         if self.config.system_prompt:
             return self.config.system_prompt
-        return self.prompt_builder.build(
-            tools=self.build_tools_section(),
-            status=self.build_status_section(graph),
-        )
+        return self.prompt_builder.build(self, graph)
 
     def build_system_prompt_for(
         self,
@@ -638,49 +618,11 @@ class RLMFlow(LLMClient):
 
     def build_tools_section(self) -> str:
         """Render the tools section that lands inside the system prompt."""
-        baseline = self.config.max_depth == 0
-        tool_defs = [t for t in self.runtime.get_tool_defs() if not t.core]
-        lines = [
-            "Tool functions are already available in the REPL namespace; "
-            "do not import them from a `tools` module. Call them directly by name.",
-            "",
-        ]
-        lines += [
-            f"- `{tool_def.name}{tool_def.signature}`: {tool_def.description}"
-            for tool_def in tool_defs
-        ]
-        if len(self.llm_clients) > 1 and not baseline:
-            lines.append(
-                "\nAvailable models for `launch_subagent(model=...)` "
-                "and `llm_query_batched(model=...)`:"
-            )
-            for key in sorted(self.llm_clients):
-                desc = self.model_descriptions.get(key)
-                lines.append(f"- `{key}`: {desc}" if desc else f"- `{key}`")
-        modules = self.runtime.available_modules()
-        if modules:
-            lines.append(f"\nPre-imported: `{'`, `'.join(modules)}`")
-        return "\n".join(lines)
+        return tools_section(self, None)
 
     def build_status_section(self, graph: Graph) -> str:
         """Render the depth/status note that lands inside the system prompt."""
-        effective_max = graph.config.get("max_depth", self.config.max_depth)
-        if effective_max == 0:
-            return (
-                "Baseline mode: no sub-agents available. Do all work directly "
-                "in this REPL."
-            )
-        note = (
-            f"You are at recursion depth **{graph.depth}** of max "
-            f"**{effective_max}**."
-        )
-        if graph.depth == 0:
-            note += STATUS_DEPTH_ROOT
-        elif graph.depth >= effective_max - 1:
-            note += STATUS_DEPTH_NEAR_MAX
-        elif graph.depth > 0:
-            note += STATUS_DEPTH_MID
-        return note
+        return status_section(self, graph)
 
     # ── runtime / env ────────────────────────────────────────────────
 
@@ -723,21 +665,20 @@ class RLMFlow(LLMClient):
 
         ``runtime.env`` is the host-side dict shared with ``done`` /
         ``rlm_delegate`` closures (cleared + seeded each call). ``rlm_delegate``
-        / ``rlm_wait`` are the internal primitives the ``launch_subagent`` /
-        ``launch_subagents`` REPL launchers compose over. The same
+        / ``rlm_wait`` are the internal primitives the ``launch_subagents``
+        REPL launcher composes over. The same
         per-agent facts plus ``CONTEXT`` / ``SESSION`` are also pushed
         into the REPL namespace so user code can reference them by
         bare name.
         """
         runtime = self.runtime_for(graph.runtime)
-        facts: dict[str, Any] = {
-            "AGENT_ID": graph.agent_id,
-            "DEPTH": graph.depth,
-            "MAX_DEPTH": self.config.max_depth,
-            "PARENT_NODE_ID": node.id,
-        }
-        runtime.env.clear()
-        runtime.env.update({**facts, "DONE_RESULT": None})
+        facts = execution_facts(
+            agent_id=graph.agent_id,
+            depth=graph.depth,
+            max_depth=self.config.max_depth,
+            parent_node_id=node.id,
+        )
+        seed_execution_env(runtime.env, facts)
         preserve_suspension = runtime.suspended
         if preserve_suspension:
             runtime.prepare_for_resume()
@@ -770,7 +711,7 @@ class RLMFlow(LLMClient):
 
         Closures live in :mod:`rlmflow.tools.builtins` and capture the
         same ``env`` dict the engine reads back after each execution
-        (so ``DONE_RESULT`` / ``DELEGATED`` round-trip cleanly).
+        (so ``DONE_RESULT`` round-trips cleanly).
         """
         runtime = runtime or self.runtime
         runtime.register_tool(SHOW_VARS, core=True)
@@ -780,7 +721,6 @@ class RLMFlow(LLMClient):
         runtime.register_tool(self.llm_query_batched, core=True)
         rlm_delegate = make_delegate(self.spawn_child, runtime.env)
         runtime.register_tool(rlm_delegate, core=True, hidden=True)
-        runtime.register_tool(make_launch_subagent(rlm_delegate, rlm_wait), core=True)
         runtime.register_tool(make_launch_subagents(rlm_delegate, rlm_wait), core=True)
 
     def format_exec_output(self, output: str) -> str:
@@ -898,23 +838,6 @@ class RLMFlow(LLMClient):
             "single_block": self.config.single_block,
             "max_budget": self.config.max_budget,
         }
-
-
-def _append_message(msgs: list[dict[str, str]], role: str, content: str) -> None:
-    if msgs and role == "user" and msgs[-1]["role"] == "user":
-        msgs[-1] = {
-            "role": "user",
-            "content": msgs[-1]["content"] + "\n\n" + content,
-        }
-        return
-    msgs.append({"role": role, "content": content})
-
-
-def _coalesce_messages(msgs: list[dict[str, str]]) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for msg in msgs:
-        _append_message(out, msg["role"], msg["content"])
-    return out
 
 
 __all__ = ["NodeScheduler", "RLMConfig", "RLMFlow", "create_pool"]

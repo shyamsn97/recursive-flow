@@ -14,12 +14,12 @@ all through the same clean coding interface.
 
 **rlmflow** turns that recursive run into a live execution graph. Every
 query, action, observation, child call, wait, resume, and result is a
-typed state you can inspect, step, fork, replay, resume, and branch into
+typed state you can inspect, step, retrace, resume, fork, and branch into
 new workspaces. It is for people building long-context agents, recursive
 coding agents, and research loops where the execution trace needs to be
 as controllable as the final answer is useful. Each `start` / `step`
-returns a fresh `Graph` snapshot: a recursive structure where every
-`graph[id]` (node *or* agent id) returns a `Graph` rooted at that vertex.
+returns a fresh `Graph` snapshot: a recursive structure where
+`graph[agent_id]` returns the sub-agent graph for that agent.
 
 <p align="center">
   <img src="docs/rlm_animation.gif" alt="rlmflow animation" />
@@ -31,7 +31,7 @@ RLMs delegate subtasks to children, those children can delegate to their
 own children, and results bubble back up. **rlmflow** represents the
 whole run as one recursive type:
 
-- **`Graph`** — one agent, frozen. Carries the agent's run-invariants
+- **`Graph`** — one agent snapshot. Carries the agent's run-invariants
   flat on itself (`agent_id`, `depth`, `query`, `system_prompt`,
   `config`, `workspace`, `runtime`, `model`, `branch_id`,
   `parent_agent_id`, `parent_node_id`), plus its `states` trajectory
@@ -47,10 +47,11 @@ whole run as one recursive type:
     `SupervisingOutput`, `ErrorOutput`, `DoneOutput`.
   - Actions: `LLMAction`, `ExecAction`, `ResumeAction`.
 
-The agent has exactly two delegation calls. `await launch_subagent(query, ...)`
-runs one child and returns its answer; `await launch_subagents([...])` runs many
-in parallel and returns their answers in order. An agent that delegates two
-children and combines their results writes one REPL block like this:
+The agent has one delegation call: `await launch_subagents([...])`. It always
+takes a list of dict specs and always returns child answers as a `list[str]` in
+the same order. A one-child delegation is just a one-item list. An agent that
+delegates two children and combines their results writes one REPL block like
+this:
 
 ```python
 results = await launch_subagents([
@@ -73,9 +74,9 @@ coro.send(results)                 # resume; `results` is now the list
 ```
 
 The REPL is stateful across blocks, so the next LLM turn can still see
-`results`. The launchers must be awaited; a bare call or a top-level `yield`
+`results`. The launcher must be awaited; a bare call or a top-level `yield`
 are errors. (`rlm_delegate` / `rlm_wait` are the internal primitives the
-launchers compose over — agents never call them directly.)
+launcher composes over — agents never call them directly.)
 
 See [`docs/internals.md`](docs/internals.md) for the full protocol.
 
@@ -158,9 +159,13 @@ print(graph.result())
 open_viewer(workspace)
 ```
 
+All model calls for a run share one scheduler channel. Normal agent LLM
+turns and `llm_query_batched(...)` both respect the same
+`RLMConfig.llm_max_concurrency` cap, and usage is recorded per request
+rather than read from shared client state.
+
 To let child agents drain work-conservingly after a parent reaches its
-delegation wait (`await launch_subagent(...)` / `await launch_subagents(...)`),
-enable `eager_children`:
+delegation wait (`await launch_subagents([...])`), enable `eager_children`:
 
 ```python
 agent = RLMFlow(
@@ -170,6 +175,7 @@ agent = RLMFlow(
         max_depth=2,
         max_iterations=30,
         max_concurrency=8,
+        llm_max_concurrency=4,
         eager_children=True,
     ),
 )
@@ -188,9 +194,18 @@ deterministic timestamped demo.
 turn-by-turn conversation each agent's LLM saw, with per-message metadata
 (model, token counts, timing) for auditing or replay. `graph.json` is the
 compact graph manifest for the whole run, and `context/<agent-id>/` holds
-payloads exposed as `CONTEXT`. The workspace is the saved run: reopen it
-later with `Workspace.open_path("./myproject").load_graph()` or
-`open_viewer("./myproject")`.
+payloads exposed as `CONTEXT`.
+
+User-controlled workspace files live beside that engine state. Use
+`workspace.artifacts` for safe, root-relative reads/writes:
+
+```python
+workspace.artifacts.write_text("skills/numpy-linear-algebra/SKILL.md", skill_md)
+workspace.artifacts.read_text("reports/summary.md")
+```
+
+The workspace is the saved run: reopen it later with
+`Workspace.open_path("./myproject").load_graph()` or `open_viewer("./myproject")`.
 
 ## Drop-in `LLMClient`
 
@@ -206,10 +221,38 @@ ask(RLMFlow(llm_client=..., runtime=...), "2+2?")    # full agent, same return t
 
 Nest agents by passing one `RLMFlow` as another's `llm_client`.
 
+## Prompt sections and skills
+
+The default system prompt is built from named sections. Sections can be static
+text or callables with the simple signature `section(engine, graph) -> str`.
+That makes project memory or skills ordinary workspace artifacts plus a prompt
+section that decides when to include them:
+
+```python
+def skills_section(engine, graph):
+    if engine.workspace is None:
+        return ""
+    path = "skills/numpy-linear-algebra/SKILL.md"
+    if not engine.workspace.artifacts.exists(path):
+        return ""
+    return engine.workspace.artifacts.read_text(path)
+
+prompt = DEFAULT_BUILDER.section(
+    "skills",
+    skills_section,
+    title="Skills",
+    before="tools",
+)
+```
+
+See [`examples/skills.py`](examples/skills.py), which uses the checked-in
+workspace [`examples/example-workspaces/skills-demo`](examples/example-workspaces/skills-demo)
+and a concrete NumPy linear-algebra `SKILL.md`.
+
 ## Step and inspect
 
 `step(graph) -> graph'` is one atomic graph transition. Every step
-returns a new immutable `Graph`, so the live tree is just `graph.tree()`:
+returns a fresh `Graph` snapshot, so the live tree is just `graph.tree()`:
 
 ```python
 graph = agent.start(query)
@@ -245,9 +288,9 @@ observation. The graph is queryable in plain Python:
 
 ```python
 graph.tree()                                  # ASCII render
-graph["root.scanner_api"]                     # sub-Graph rooted at that agent / node
+graph["root.scanner_api"]                     # sub-Graph rooted at that agent
 graph.agents["root.scanner_api"].states       # state trajectory for one agent
-graph.children                                # list[Graph] for child agents
+graph.children                                # dict[str, Graph] for child agents
 graph.nodes.find("n_abc...")                  # bare Node lookup by id
 graph.nodes.errors()                          # every ErrorOutput across agents
 graph.nodes.results()                         # every DoneOutput across agents
@@ -272,20 +315,18 @@ graph = graph.inject(
         output="Injected controller observation: answer with current evidence.",
         content="Injected controller observation: answer with current evidence.",
     ),
-    reason="message budget nearly exhausted",
 )
 graph = agent.step(graph)  # persists the observation, then continues
 
 graph = graph.inject(
     target="root.scanner_api",
     node=ExecAction(code='done("best available answer")'),
-    reason="message budget exhausted",
 )
 graph = agent.step(graph)  # executes the action and writes DoneOutput
 ```
 
-Injected nodes are marked in the graph (`node.injected`,
-`node.injected_reason`) and persisted like normal states. See
+Injected nodes become ordinary graph states with the same shape as organic
+states. See
 [`docs/injections.md`](docs/injections.md) and
 [`examples/injections.py`](examples/injections.py).
 
@@ -600,8 +641,11 @@ version.
 
 ## Examples
 
-All examples share flags like `--no-viz`, `--docker-image rlmflow:local`,
-`--max-depth`, and `--max-iterations`. See [`examples/README.md`](examples/README.md).
+Run the offline smoke suite with `python examples/run_examples.py`.
+Add `--include-optional`, `--include-live`, `--include-notebooks`,
+or `--include-sandbox` as needed. Most live examples share flags like
+`--no-viz`, `--docker-image rlmflow:local`, `--max-depth`, and
+`--max-iterations`; see [`examples/README.md`](examples/README.md).
 
 | Example | What it shows |
 |---|---|
@@ -618,6 +662,7 @@ All examples share flags like `--no-viz`, `--docker-image rlmflow:local`,
 | [`best_of_n.py`](examples/best_of_n.py) | Run N independent workspace branches and pick the best result. |
 | [`autoresearch/`](examples/autoresearch/) | Karpathy-style hill-climbing research loop with custom `@tool`s and delegation. |
 | [`graph-features/`](examples/graph-features/) | Offline tour of the `Graph` API: query, navigate, mutate, save/load, replay, fork, render. |
+| [`run_examples.py`](examples/run_examples.py) | Manifest-driven smoke runner for offline, optional, live, sandbox, and notebook examples. |
 | [`view_demo.py`](examples/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
 | [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, and inspect the workspace/viewer. Requires a live LLM. |
 | [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | Every visualization against the saved fixture: inline tree, Plotly graph, HTML stepper, topology renders (mermaid/dot/d2/sequence), step-indexed timeline, per-state detail, cost & reports, run-vs-run comparison, CLI equivalents. |
@@ -688,8 +733,8 @@ in [`docs/internals.md`](docs/internals.md).
 - [Positioning](docs/positioning.md): when to use rlmflow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 - [Control](docs/control.md): step loop, workspace resume, rewind,
-  forks, `CONTEXT.read()` / slices, `launch_subagent` / `launch_subagents`,
-  inline-first strategy, custom tools.
+  forks, `CONTEXT.read()` / slices, `launch_subagents`, inline-first
+  strategy, custom tools.
 - [Node injection](docs/injections.md): append typed controller events to a
   running graph and commit them through `agent.step(graph)`.
 - [Observability](docs/observability.md): querying the `Graph`,
@@ -698,7 +743,8 @@ in [`docs/internals.md`](docs/internals.md).
 - [Runtimes](docs/runtimes.md): `Runtime` protocol, shipped runtimes
   (Local / Docker / Modal / E2B / Daytona), writing your own.
 - [Prompt customization](docs/prompt_customization.md): `PromptBuilder`
-  sections, deriving from the default prompt, full replacement.
+  sections, callable dynamic sections, workspace-backed skills/memory,
+  deriving from the default prompt, full replacement.
 - [Security](docs/security.md): trust model, Docker isolation knobs,
   engine-level caps, proxied tools, approval gates.
 - [Changelog](CHANGELOG.md): release-by-release changes.

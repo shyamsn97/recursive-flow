@@ -1,6 +1,6 @@
 # Observability
 
-Everything you need to debug a run lives in the immutable :class:`Graph` snapshot returned by every `start` / `step` call.
+Everything you need to debug a run lives in the `Graph` snapshot returned by every `start` / `step` call.
 
 ## Data model
 
@@ -20,7 +20,7 @@ graph.runtime      # RuntimeRef | None
 graph.model        # str | None — concrete model name (if set)
 graph.parent_agent_id / graph.parent_node_id
 
-graph.states       # tuple[Node, ...] — this agent's trajectory (seq order)
+graph.states       # list[Node] — this agent's trajectory (seq order)
 graph.children     # dict[str, Graph] — direct sub-agents
 
 # subtree views (every agent / node / edge in the recursion)
@@ -64,9 +64,9 @@ graph.finished                                 # root agent's current state is t
 graph.tokens()                                 # (in, out) — recursive by default
 graph.tokens(recursive=False)                  # (in, out) — just this agent
 
-graph["root.scanner_api"]                      # sub-Graph rooted at that agent / node
+graph["root.scanner_api"]                      # sub-Graph rooted at that agent
 graph.agents["root.scanner_api"]               # same, but explicit
-graph.children                                 # list[Graph] of spawned children
+graph.children                                 # dict[str, Graph] of spawned children
 graph.parent_id                                # str | None — id of the spawning agent
 
 graph.agents[aid].states                       # ordered list[Node] for one agent
@@ -88,7 +88,7 @@ graph.edges.flows_to()                         # list[Edge] — same-agent conti
 ## Workspace persistence
 
 A workspace is the durable run. It separates per-agent state logs,
-the graph manifest, and task payloads:
+the graph manifest, task payloads, and user-controlled artifact files:
 
 ```text
 workspace/
@@ -107,6 +107,10 @@ workspace/
   context/
     root/context.txt          # CONTEXT payload + metadata
     root.child/context.txt
+  skills/
+    numpy-linear-algebra/SKILL.md  # user artifact, via workspace.artifacts
+  reports/
+    summary.md                      # user artifact, via workspace.artifacts
 ```
 
 `transcript.json` is the ground-truth record of what each agent's LLM
@@ -123,6 +127,16 @@ as the same `Graph` shape the engine emits — `flows_to` edges are
 derived from state order, `spawns` edges come straight from
 `graph.json`. See [`internals.md`](internals.md#persistence) for the
 full session/transcript/context layout.
+
+`workspace.artifacts` is the safe API for ordinary user-controlled workspace
+files. It uses the paths you choose, rejects absolute paths and `..`, and hides
+engine-owned paths like `session/`, `context/`, and `graph.json`:
+
+```python
+workspace.artifacts.write_text("skills/review/SKILL.md", skill_text)
+workspace.artifacts.read_text("reports/summary.md")
+workspace.artifacts.list("skills")
+```
 
 ## Live terminal
 
@@ -191,10 +205,10 @@ graph.save_image("final.png")
 graph.save_html("viewer.html")
 ```
 
-Markers, edges, and fonts auto-scale (`element_mult=3.0` by default
-for image export) so the tree stays visually balanced on the larger
-export canvas. Tune `width` / `height` / `scale` / `element_mult` to
-taste.
+Markers, edges, and fonts share the same default element scale
+(`element_mult=1.0`) across image, GIF, steps, and HTML export so
+static artifacts stay close to the interactive viewer. Tune `width` /
+`height` / `scale` / `element_mult` to taste.
 
 ```python
 save_steps(
@@ -203,7 +217,7 @@ save_steps(
     width=1800,
     height=1350,
     scale=2.0,           # kaleido density multiplier (hi-dpi crispness)
-    element_mult=3.0,    # marker / edge / font size multiplier
+    element_mult=1.0,    # marker / edge / font size multiplier
 )
 ```
 

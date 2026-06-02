@@ -27,6 +27,7 @@ from rlmflow.graph import (
     SupervisingOutput,
 )
 from rlmflow.prompts.messages import NO_CODE_BLOCK
+from rlmflow.runtime.env import done_result
 from rlmflow.utils import check_wait_syntax
 
 
@@ -76,7 +77,20 @@ def step_llm(
     )
     append_node(engine.session, graph, llm_action)
 
-    llm_output, usage = engine.reply_to(graph, llm_action, force_final=force_final)
+    try:
+        llm_output, usage = engine.reply_to(graph, llm_action, force_final=force_final)
+    except Exception as exc:
+        output = f"{type(exc).__name__}: {exc}"
+        append_node(
+            engine.session,
+            graph,
+            ErrorOutput(
+                content=engine.format_exec_output(output),
+                error="llm_exception",
+                output=output,
+            ),
+        )
+        return
     engine.record_usage(usage)
     append_node(engine.session, graph, llm_output)
 
@@ -140,18 +154,15 @@ def run_exec(
         )
         return
     raw = truncate_output(raw, engine.config.max_output_length)
-    env = runtime.env
-    done_result = env.get("DONE_RESULT")
+    result = done_result(runtime.env)
 
-    if done_result is not None:
-        output = raw if isinstance(raw, str) else ""
-        if not output.strip():
-            output = "(no output)"
+    if result is not None:
+        output = _runtime_output(raw)
         terminal = append_node(
             engine.session,
             graph,
             DoneOutput(
-                result=done_result.strip(),
+                result=str(result).strip(),
                 output=output,
                 content=engine.format_exec_output(output),
             ),
@@ -171,9 +182,7 @@ def run_exec(
         )
         return
 
-    output = raw if isinstance(raw, str) else ""
-    if not output.strip():
-        output = "(no output)"
+    output = _runtime_output(raw)
     if errored:
         append_node(
             engine.session,
@@ -235,25 +244,23 @@ def step_after_supervising(
         )
         return
     raw = truncate_output(raw, engine.config.max_output_length)
-    env = runtime.env
-    done_result = env.get("DONE_RESULT")
+    result = done_result(runtime.env)
 
     if suspended:
         request, output = raw
     else:
-        output = raw if isinstance(raw, str) else ""
-    if not output.strip():
-        output = "(no output)"
+        output = _runtime_output(raw)
+    output = _runtime_output(output)
 
     graph = engine.session.load_graph().agents[graph.agent_id]
     resumed_from = list(last.waiting_on)
 
-    if done_result is not None:
+    if result is not None:
         terminal = append_node(
             engine.session,
             graph,
             DoneOutput(
-                result=done_result.strip(),
+                result=str(result).strip(),
                 output=output,
                 content=engine.format_exec_output(output),
                 resumed_from=resumed_from,
@@ -295,6 +302,11 @@ def step_after_supervising(
             resumed_from=resumed_from,
         ),
     )
+
+
+def _runtime_output(raw: object) -> str:
+    output = raw if isinstance(raw, str) else ""
+    return output if output.strip() else "(no output)"
 
 
 __all__ = [

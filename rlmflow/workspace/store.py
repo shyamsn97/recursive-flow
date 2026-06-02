@@ -131,7 +131,6 @@ class MemoryStore(Store):
         return sorted(path for path in self.values if path.startswith(prefix))
 
     def fork(self, new_location: object) -> Store:
-        del new_location
         out = MemoryStore()
         out.values = dict(self.values)
         return out

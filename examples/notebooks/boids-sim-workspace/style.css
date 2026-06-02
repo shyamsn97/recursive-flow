@@ -1,4 +1,6 @@
-/* Full-viewport canvas on a dark background; no scrollbars */
+:root {
+  color-scheme: dark;
+}
 
 *,
 *::before,
@@ -6,16 +8,22 @@
   box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
+  height: 100%;
   margin: 0;
   padding: 0;
-  height: 100%;
-  background: #0b0f14; /* dark background */
-  overflow: hidden;     /* prevent scrollbars */
+  background: #0b1020;
+  color: #ddd;
+  overflow: hidden;
 }
 
-#boids {
+canvas {
   display: block;
   width: 100vw;
-  height: 100vh;        /* fill the viewport */
+  height: 100vh;
+  background: transparent;
+  margin: 0;
+  padding: 0;
+  touch-action: none;
 }

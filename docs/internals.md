@@ -38,7 +38,7 @@ User-facing topic guides ([control](control.md), [observability](observability.m
   — is a method on this class.
 - **`engine/*`** is pure helpers. Anything in there is a free function
   or pure data with no engine state.
-- **`Graph`** is the immutable data model. Every `start`/`step` returns
+- **`Graph`** is the recursive data model. Every `start`/`step` returns
   a fresh snapshot reloaded from the session.
 - **`Runtime`** runs the REPL. Send/receive a small JSON protocol;
   shipped variants are `LocalRuntime`, `DockerRuntime`, and the
@@ -68,7 +68,7 @@ graph.runtime          # RuntimeRef | None
 graph.parent_agent_id  # str | None
 graph.parent_node_id   # str | None — the ActionNode id that delegated us
 
-graph.states           # tuple[Node, ...]  — this agent's trajectory
+graph.states           # list[Node]  — this agent's trajectory
 graph.children         # dict[str, Graph]  — direct sub-agents
 
 # subtree views
@@ -96,8 +96,8 @@ types under four base classes:
 | `done_output`        | `DoneOutput`        | `CodeObservation` (obs) | terminal answer from `done(...)`                   |
 | `resume_action`      | `ResumeAction`      | `ActionNode`            | "supervisor resumed paused code"                   |
 
-Every leaf in the persisted graph is an observation; intermediate
-action nodes only exist *inside* a single `apply_one` call's writes.
+Persisted graphs contain both action and observation nodes; each
+action is immediately followed by the observation it produced.
 See [`internal/node_model.md`](internal/node_model.md) for the full
 state-machine spec.
 
@@ -212,6 +212,15 @@ model, then writes `LLMOutput`. The action-before-call ordering means
 `CONTINUE_ACTION` nudge gates on `LLMOutput` count, not `LLMAction`
 count.
 
+All model requests route through a shared `LLMChannel`. Agent turns call
+`LLMChannel.call(model, messages)`, and `llm_query_batched(...)` submits
+its prompts to `LLMChannel.batch(...)` instead of creating its own nested
+executor. The channel owns the run-wide LLM concurrency cap
+(`RLMConfig.llm_max_concurrency`, falling back to the normal engine
+concurrency when unset), preserves batch result order, and uses
+per-request `LLMClient.completion(...) -> (text, usage)` so usage
+accounting never reads a racy shared `last_usage`.
+
 #### `step_exec` — exec half
 
 ```python
@@ -227,8 +236,8 @@ def step_exec(self, graph, llm_output):
 ```
 
 `_run_exec` is the long branch that calls into the runtime, handles
-`done(...)`, delegation (`await launch_subagent(...)` /
-`await launch_subagents(...)`), and exceptions. It produces exactly one of
+`done(...)`, delegation (`await launch_subagents([...])`), and exceptions. It
+produces exactly one of
 `ExecOutput`, `SupervisingOutput`, `ErrorOutput`, or `DoneOutput`.
 
 #### `step_after_supervising` — resume half
@@ -242,9 +251,9 @@ observation just like `step_exec`.
 
 ## The REPL `await` protocol
 
-Agents delegate through two launchers — `await launch_subagent(...)` and
-`await launch_subagents([...])`. These are plain `async def`s installed in the
-REPL namespace; each spawns its children via the internal `rlm_delegate(...)`
+Agents delegate through one launcher — `await launch_subagents([...])`. This is
+a plain `async def` installed in the REPL namespace; it spawns its children via
+the internal `rlm_delegate(...)`
 primitive and then performs a single `await rlm_wait(*handles)`. So while
 agents only ever write the launchers, the value the engine actually suspends on
 is still the `WaitRequest` produced by that internal `rlm_wait` — which
@@ -282,15 +291,14 @@ descending at nested boundaries.
 ```python
 # ── TOP-LEVEL awaits ────────────────────────────────────────────────
 # These count. The REPL compiles with top-level await.
-result = await launch_subagent("scan the file")
-for spec in specs:
-    result = await launch_subagent(spec)
+[result] = await launch_subagents([{"name": "scan", "query": "scan the file"}])
+results = await launch_subagents(specs)
 
 # ── NOT top level ───────────────────────────────────────────────────
 # An `await` nested inside a function / comprehension scope doesn't make
 # the block a coroutine the engine can drive — it belongs to that scope.
 async def helper():
-    return await launch_subagent("...")   # belongs to `helper`, not the block
+    return await launch_subagents([...])  # belongs to `helper`, not the block
 # (the block would have to `await helper()` at top level to suspend)
 
 # Ordinary generators / comprehensions are plain Python — no await:
@@ -600,12 +608,12 @@ root.{identity,valuation,fundamentals,analyst}
 
 ### Multi-wait in one block
 
-A block can await twice — each `await launch_subagent(...)` is its own
+A block can await twice — each `await launch_subagents([...])` is its own
 suspension point (this is the sequential pattern):
 
 ```python
-r1 = await launch_subagent("...", name="a")
-r2 = await launch_subagent("...", name="b")
+[r1] = await launch_subagents([{"name": "a", "query": "..."}])
+[r2] = await launch_subagents([{"name": "b", "query": "...", "context": r1}])
 done(combine(r1, r2))
 ```
 
@@ -628,7 +636,7 @@ Same agent, two LLM turns. The first block's `LLMOutput` →
 `ExecAction` → `SupervisingOutput`. After the child settles, the
 resume produces an `ExecOutput`; then the agent runs another LLM
 turn and the second block's code runs in a *fresh* REPL submission
-(but the runtime keeps the same namespace — the launchers,
+(but the runtime keeps the same namespace — the launcher,
 `results`, and any prior assignment are in scope).
 
 ---
@@ -793,9 +801,9 @@ Three methods own the lifecycle:
 `register_tools(runtime)` binds the core `done` / `rlm_wait` /
 `rlm_delegate` closures to `runtime.env`. The `rlm_delegate` closure
 captures `self.spawn_child` so it can call back into engine state. The
-agent-facing `launch_subagent` / `launch_subagents` are registered as real core
-tools and compose over those closures at call time, so they work identically on
-local and remote runtimes.
+agent-facing `launch_subagents` launcher is registered as a real core tool and
+composes over those closures at call time, so it works identically on local and
+remote runtimes.
 
 See [`runtimes.md`](runtimes.md) for the `Runtime` protocol and
 shipped variants.

@@ -10,27 +10,43 @@ each one is called out under **Breaking** below.
 
 ### Added
 
-- **Two-function delegation surface: `launch_subagent` / `launch_subagents`.**
-  Agents now delegate exclusively through two `async` launchers installed in
-  the REPL namespace. `await launch_subagent(query, num_steps=None,
-  context="", *, name="subagent", model="default")` spawns one child and
-  returns its finish string; `await launch_subagents(specs)` spawns many in
-  parallel (each spec a dict with `query` and optional
-  `num_steps`/`context`/`name`/`model`, or a bare query string) and returns a
-  `list[str]` in spec order. Both must be awaited. Sequential pipelines chain
-  `launch_subagent` calls (threading each result into the next `context=`);
-  parallel fanout uses a single `launch_subagents([...])`. The launchers are
-  registered as real core tools and compose over `rlm_delegate` / `rlm_wait`, so
-  they behave identically on local and remote runtimes.
+- **Single delegation surface: `launch_subagents`.** Agents now delegate
+  through one `async` launcher installed in the REPL namespace.
+  `await launch_subagents(specs)` takes a `list[dict]` only; each spec requires
+  `query` and may set `num_steps`, `context`, `name`, and `model`. It returns a
+  `list[str]` in spec order, even for a one-item list. Sequential pipelines use
+  one-item calls and thread each result into the next spec's `context`;
+  parallel fanout uses a multi-item list. The launcher is registered as a real
+  core tool and composes over `rlm_delegate` / `rlm_wait`, so it behaves
+  identically on local and remote runtimes.
+- **Shared LLM scheduler channel.** All agent LLM turns and
+  `llm_query_batched(...)` calls now route through one per-run `LLMChannel`,
+  keyed by model/client. `RLMConfig.llm_max_concurrency` controls the global
+  LLM request cap; unsafe clients are serialized behind a per-client lock, and
+  safe clients can run concurrently within the channel limit.
+- **Thread-safe per-request usage accounting.** `LLMClient.completion(...)`
+  returns `(text, LLMUsage)` for each request. `OpenAIClient` and
+  `AnthropicClient` implement it directly from provider response usage, so the
+  engine no longer depends on racy shared `last_usage` reads under nested
+  batching.
+- **Example smoke runner.** `python examples/run_examples.py` runs the
+  deterministic/offline example suite by default, with opt-in flags for
+  optional dependencies, live LLM examples, notebooks, sandbox providers, and
+  manual viewer/interactive checks.
+- **Direct child-writes-file prompt pattern.** The default prompt's multi-file
+  fanout example no longer teaches a `PATH: <path>` answer header. It passes
+  target paths through child `CONTEXT` and demonstrates plain Python
+  `pathlib.Path(...).write_text(...)` writes, either in the parent or directly
+  inside child agents.
 
 ### Breaking
 
-- **`rlm_delegate` / `rlm_wait` are now internal primitives, not the
-  agent-facing API.** The launchers compose over them; agent code, the default
-  prompt, examples, and docs all use `launch_subagent` / `launch_subagents`
-  instead. The AST check (`check_wait_syntax`) now permits `await
-  launch_subagent(...)` / `await launch_subagents(...)` at action-block top
-  level. Update any custom prompts or hand-scripted REPL fixtures.
+- **`rlm_delegate` / `rlm_wait` are now internal primitives, and
+  `launch_subagent` has been removed.** Agent code, the default prompt,
+  examples, and docs all use `launch_subagents([...])` instead. The AST check
+  (`check_wait_syntax`) now permits `await launch_subagents(...)` at
+  action-block top level. Update any custom prompts or hand-scripted REPL
+  fixtures.
 - **`OrphanedDelegatesError` removed.** Because spawn and wait are fused inside
   the launchers, an un-awaited delegate is no longer expressible, so the
   orphaned-delegate detection, its `ErrorOutput(error="orphaned_delegates")`
@@ -38,6 +54,10 @@ each one is called out under **Breaking** below.
 - **`RLMConfig.async_children` renamed to `eager_children`.** Same semantics
   (work-conserving child drain once a parent is supervising); update config
   literals and any persisted `agent.json` fixtures.
+- **`Node.injected` and `Node.injected_reason` removed.** Injected controller
+  nodes are now stored with the exact same schema as ordinary graph states.
+  `Graph.inject(...)` no longer accepts or persists a reason string; external
+  controllers that need provenance should track it outside the node payload.
 
 ## [0.3.2] — 2026-05-28
 

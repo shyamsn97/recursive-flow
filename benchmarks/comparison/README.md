@@ -61,7 +61,7 @@ task, model, depth, and iteration budget aligned, then measures:
 - latency;
 - token usage when exposed by the implementation;
 - number of agents/subcalls used;
-- RLM method-call frequency (`rlmflow`: `launch_subagent` / `launch_subagents`,
+- RLM method-call frequency (`rlmflow`: `launch_subagents`,
   `llm_query_batched`; upstream `rlm`: `rlm_query`, `llm_query_batched`,
   `llm_query`).
 

@@ -68,3 +68,6 @@ examples/*/**/workspaces/*
 examples/autoresearch/runs/*
 examples/*/**/frames/*
 examples/example-workspaces/*
+!examples/example-workspaces/skills-demo/
+!examples/example-workspaces/skills-demo/skills/
+!examples/example-workspaces/skills-demo/skills/**
