@@ -124,7 +124,7 @@
 <body>
 <main>
   <h1>Needle Graph Stepper</h1>
-  <p>Generated from an actual deterministic rlmflow run using <code>delegate(...)</code> and <code>yield wait(...)</code>. Each slide is one recorded graph snapshot rendered with <code>graph.plot()</code>.</p>
+  <p>Generated from an actual deterministic rlmflow run using <code>await launch_subagents([...])</code> with <code>list[dict]</code> child specs. Each slide is one recorded graph snapshot rendered with <code>graph.plot()</code>.</p>
 
   <section class="collapsed">
     <h2>Collapsed RLM View</h2>
@@ -214,10 +214,11 @@ Respond with exactly one ```repl``` code block.
 --- assistant ---
 ```repl
 n = CONTEXT.line_count()
-h0 = delegate(&quot;chunk_0&quot;, &quot;Scan first third for the hidden secret code.&quot;, CONTEXT.lines(0, n // 3))
-h1 = delegate(&quot;chunk_1&quot;, &quot;Scan middle third for the hidden secret code.&quot;, CONTEXT.lines(n // 3, 2 * n // 3))
-h2 = delegate(&quot;chunk_2&quot;, &quot;Scan final third for the hidden secret code.&quot;, CONTEXT.lines(2 * n // 3, n))
-chunk_results = yield wait(h0, h1, h2)
+chunk_results = await launch_subagents([
+    {&quot;name&quot;: &quot;chunk_0&quot;, &quot;query&quot;: &quot;Scan first third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(0, n // 3))},
+    {&quot;name&quot;: &quot;chunk_1&quot;, &quot;query&quot;: &quot;Scan middle third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(n // 3, 2 * n // 3))},
+    {&quot;name&quot;: &quot;chunk_2&quot;, &quot;query&quot;: &quot;Scan final third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(2 * n // 3, n))},
+])
 print(chunk_results)
 ```
 
@@ -259,10 +260,11 @@ Respond with exactly one ```repl``` code block.
 --- assistant ---
 ```repl
 n = CONTEXT.line_count()
-h0 = delegate(&quot;chunk_0&quot;, &quot;Scan first third for the hidden secret code.&quot;, CONTEXT.lines(0, n // 3))
-h1 = delegate(&quot;chunk_1&quot;, &quot;Scan middle third for the hidden secret code.&quot;, CONTEXT.lines(n // 3, 2 * n // 3))
-h2 = delegate(&quot;chunk_2&quot;, &quot;Scan final third for the hidden secret code.&quot;, CONTEXT.lines(2 * n // 3, n))
-chunk_results = yield wait(h0, h1, h2)
+chunk_results = await launch_subagents([
+    {&quot;name&quot;: &quot;chunk_0&quot;, &quot;query&quot;: &quot;Scan first third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(0, n // 3))},
+    {&quot;name&quot;: &quot;chunk_1&quot;, &quot;query&quot;: &quot;Scan middle third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(n // 3, 2 * n // 3))},
+    {&quot;name&quot;: &quot;chunk_2&quot;, &quot;query&quot;: &quot;Scan final third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(2 * n // 3, n))},
+])
 print(chunk_results)
 ```
 
@@ -312,10 +314,11 @@ Respond with exactly one ```repl``` code block.
 --- assistant ---
 ```repl
 n = CONTEXT.line_count()
-h0 = delegate(&quot;chunk_0&quot;, &quot;Scan first third for the hidden secret code.&quot;, CONTEXT.lines(0, n // 3))
-h1 = delegate(&quot;chunk_1&quot;, &quot;Scan middle third for the hidden secret code.&quot;, CONTEXT.lines(n // 3, 2 * n // 3))
-h2 = delegate(&quot;chunk_2&quot;, &quot;Scan final third for the hidden secret code.&quot;, CONTEXT.lines(2 * n // 3, n))
-chunk_results = yield wait(h0, h1, h2)
+chunk_results = await launch_subagents([
+    {&quot;name&quot;: &quot;chunk_0&quot;, &quot;query&quot;: &quot;Scan first third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(0, n // 3))},
+    {&quot;name&quot;: &quot;chunk_1&quot;, &quot;query&quot;: &quot;Scan middle third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(n // 3, 2 * n // 3))},
+    {&quot;name&quot;: &quot;chunk_2&quot;, &quot;query&quot;: &quot;Scan final third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(2 * n // 3, n))},
+])
 print(chunk_results)
 ```
 
@@ -369,10 +372,11 @@ Respond with exactly one ```repl``` code block.
 --- assistant ---
 ```repl
 n = CONTEXT.line_count()
-h0 = delegate(&quot;chunk_0&quot;, &quot;Scan first third for the hidden secret code.&quot;, CONTEXT.lines(0, n // 3))
-h1 = delegate(&quot;chunk_1&quot;, &quot;Scan middle third for the hidden secret code.&quot;, CONTEXT.lines(n // 3, 2 * n // 3))
-h2 = delegate(&quot;chunk_2&quot;, &quot;Scan final third for the hidden secret code.&quot;, CONTEXT.lines(2 * n // 3, n))
-chunk_results = yield wait(h0, h1, h2)
+chunk_results = await launch_subagents([
+    {&quot;name&quot;: &quot;chunk_0&quot;, &quot;query&quot;: &quot;Scan first third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(0, n // 3))},
+    {&quot;name&quot;: &quot;chunk_1&quot;, &quot;query&quot;: &quot;Scan middle third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(n // 3, 2 * n // 3))},
+    {&quot;name&quot;: &quot;chunk_2&quot;, &quot;query&quot;: &quot;Scan final third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(2 * n // 3, n))},
+])
 print(chunk_results)
 ```
 
@@ -427,10 +431,11 @@ Respond with exactly one ```repl``` code block.
 --- assistant ---
 ```repl
 n = CONTEXT.line_count()
-h0 = delegate(&quot;chunk_0&quot;, &quot;Scan first third for the hidden secret code.&quot;, CONTEXT.lines(0, n // 3))
-h1 = delegate(&quot;chunk_1&quot;, &quot;Scan middle third for the hidden secret code.&quot;, CONTEXT.lines(n // 3, 2 * n // 3))
-h2 = delegate(&quot;chunk_2&quot;, &quot;Scan final third for the hidden secret code.&quot;, CONTEXT.lines(2 * n // 3, n))
-chunk_results = yield wait(h0, h1, h2)
+chunk_results = await launch_subagents([
+    {&quot;name&quot;: &quot;chunk_0&quot;, &quot;query&quot;: &quot;Scan first third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(0, n // 3))},
+    {&quot;name&quot;: &quot;chunk_1&quot;, &quot;query&quot;: &quot;Scan middle third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(n // 3, 2 * n // 3))},
+    {&quot;name&quot;: &quot;chunk_2&quot;, &quot;query&quot;: &quot;Scan final third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(2 * n // 3, n))},
+])
 print(chunk_results)
 ```
 
@@ -495,10 +500,11 @@ Respond with exactly one ```repl``` code block.
 --- assistant ---
 ```repl
 n = CONTEXT.line_count()
-h0 = delegate(&quot;chunk_0&quot;, &quot;Scan first third for the hidden secret code.&quot;, CONTEXT.lines(0, n // 3))
-h1 = delegate(&quot;chunk_1&quot;, &quot;Scan middle third for the hidden secret code.&quot;, CONTEXT.lines(n // 3, 2 * n // 3))
-h2 = delegate(&quot;chunk_2&quot;, &quot;Scan final third for the hidden secret code.&quot;, CONTEXT.lines(2 * n // 3, n))
-chunk_results = yield wait(h0, h1, h2)
+chunk_results = await launch_subagents([
+    {&quot;name&quot;: &quot;chunk_0&quot;, &quot;query&quot;: &quot;Scan first third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(0, n // 3))},
+    {&quot;name&quot;: &quot;chunk_1&quot;, &quot;query&quot;: &quot;Scan middle third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(n // 3, 2 * n // 3))},
+    {&quot;name&quot;: &quot;chunk_2&quot;, &quot;query&quot;: &quot;Scan final third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(2 * n // 3, n))},
+])
 print(chunk_results)
 ```
 
@@ -516,8 +522,9 @@ Generator resumed. Output:
 
 --- assistant ---
 ```repl
-v = delegate(&quot;verify&quot;, &quot;Verify candidate code 84721 against the original question.&quot;, &quot;&quot;)
-verdict = yield wait(v)
+[verdict] = await launch_subagents([
+    {&quot;name&quot;: &quot;verify&quot;, &quot;query&quot;: &quot;Verify candidate code 84721 against the original question.&quot;, &quot;context&quot;: &quot;&quot;},
+])
 done(&quot;84721&quot;)
 ```
 
@@ -576,10 +583,11 @@ Respond with exactly one ```repl``` code block.
 --- assistant ---
 ```repl
 n = CONTEXT.line_count()
-h0 = delegate(&quot;chunk_0&quot;, &quot;Scan first third for the hidden secret code.&quot;, CONTEXT.lines(0, n // 3))
-h1 = delegate(&quot;chunk_1&quot;, &quot;Scan middle third for the hidden secret code.&quot;, CONTEXT.lines(n // 3, 2 * n // 3))
-h2 = delegate(&quot;chunk_2&quot;, &quot;Scan final third for the hidden secret code.&quot;, CONTEXT.lines(2 * n // 3, n))
-chunk_results = yield wait(h0, h1, h2)
+chunk_results = await launch_subagents([
+    {&quot;name&quot;: &quot;chunk_0&quot;, &quot;query&quot;: &quot;Scan first third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(0, n // 3))},
+    {&quot;name&quot;: &quot;chunk_1&quot;, &quot;query&quot;: &quot;Scan middle third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(n // 3, 2 * n // 3))},
+    {&quot;name&quot;: &quot;chunk_2&quot;, &quot;query&quot;: &quot;Scan final third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(2 * n // 3, n))},
+])
 print(chunk_results)
 ```
 
@@ -597,8 +605,9 @@ Generator resumed. Output:
 
 --- assistant ---
 ```repl
-v = delegate(&quot;verify&quot;, &quot;Verify candidate code 84721 against the original question.&quot;, &quot;&quot;)
-verdict = yield wait(v)
+[verdict] = await launch_subagents([
+    {&quot;name&quot;: &quot;verify&quot;, &quot;query&quot;: &quot;Verify candidate code 84721 against the original question.&quot;, &quot;context&quot;: &quot;&quot;},
+])
 done(&quot;84721&quot;)
 ```
 
@@ -659,10 +668,11 @@ Respond with exactly one ```repl``` code block.
 --- assistant ---
 ```repl
 n = CONTEXT.line_count()
-h0 = delegate(&quot;chunk_0&quot;, &quot;Scan first third for the hidden secret code.&quot;, CONTEXT.lines(0, n // 3))
-h1 = delegate(&quot;chunk_1&quot;, &quot;Scan middle third for the hidden secret code.&quot;, CONTEXT.lines(n // 3, 2 * n // 3))
-h2 = delegate(&quot;chunk_2&quot;, &quot;Scan final third for the hidden secret code.&quot;, CONTEXT.lines(2 * n // 3, n))
-chunk_results = yield wait(h0, h1, h2)
+chunk_results = await launch_subagents([
+    {&quot;name&quot;: &quot;chunk_0&quot;, &quot;query&quot;: &quot;Scan first third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(0, n // 3))},
+    {&quot;name&quot;: &quot;chunk_1&quot;, &quot;query&quot;: &quot;Scan middle third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(n // 3, 2 * n // 3))},
+    {&quot;name&quot;: &quot;chunk_2&quot;, &quot;query&quot;: &quot;Scan final third for the hidden secret code.&quot;, &quot;context&quot;: &quot;\n&quot;.join(CONTEXT.lines(2 * n // 3, n))},
+])
 print(chunk_results)
 ```
 
@@ -680,8 +690,9 @@ Generator resumed. Output:
 
 --- assistant ---
 ```repl
-v = delegate(&quot;verify&quot;, &quot;Verify candidate code 84721 against the original question.&quot;, &quot;&quot;)
-verdict = yield wait(v)
+[verdict] = await launch_subagents([
+    {&quot;name&quot;: &quot;verify&quot;, &quot;query&quot;: &quot;Verify candidate code 84721 against the original question.&quot;, &quot;context&quot;: &quot;&quot;},
+])
 done(&quot;84721&quot;)
 ```
 

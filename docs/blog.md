@@ -108,7 +108,7 @@ That is still a small run, but it is already recursive: the root has
 children, and one of those children has children of its own. The
 important detail is that those children are not single black-box API
 calls. Each child is an agent with its own little loop: inspect the
-context, run a search, read a passage, maybe delegate again, then
+context, run a search, read a passage, maybe launch another sub-agent, then
 return.
 
 In rlmflow, every
@@ -282,7 +282,7 @@ The parent never sees any of it. Click through:
 
   <div class="rlm-slide rlm-slide-1">
     <h4>1. What the root LLM emits in its REPL block</h4>
-    <pre><span class="rlm-hl-frame"># In the root delegate — CONTEXT is the haystack, bound as a variable.</span>
+    <pre><span class="rlm-hl-frame"># In the root agent — CONTEXT is the haystack, bound as a variable.</span>
 n = CONTEXT.line_count()
 results = await <span class="rlm-hl-del">launch_subagents</span>([
     {"name": "chunk_0", "query": "scan first third",  "context": "\n".join(CONTEXT.lines(0, n // 3))},
@@ -325,7 +325,7 @@ done("candidate code 84721")   # the root never sees this code ran</pre>
   </div>
 
   <div class="rlm-slide rlm-slide-3">
-    <h4>3. ...so the call stack nests delegate frames, with no fixed depth</h4>
+    <h4>3. ...so the call stack nests launch_subagents frames, with no fixed depth</h4>
     <pre><span class="rlm-hl-frame"># Live Python stack while candidate_b's sub-LLM is reasoning:</span>
 <span class="rlm-hl-del">launch_subagents</span>([{"name": "root", "query": "What secret code is hidden in the haystack?", "context": haystack}])
 └── <span class="rlm-hl-del">launch_subagents</span>([{"name": "chunk_2", "query": "Scan final third...", "context": final_third}])
@@ -369,7 +369,7 @@ chunk_2 == "candidate code 84721"
 That's the core observability problem with vanilla RLMs: a single
 awaited child launch can hide an entire recursive subtree of LLM work,
 and **nothing about that subtree survives the return**. Children can
-delegate to children can delegate to children — and all the parent
+launch children that launch children — and all the parent
 ever gets is a `list[str]`. When the answer is wrong, you can't tell
 *which* level of the recursion went off the rails; when the answer is
 right, you can't tell whether it was right for the right reason. The
@@ -411,8 +411,8 @@ execution graph that you can step through, inspect, and replay:
   </div>
 
   <div class="rlm-slide rlm-slide-2">
-    <h4>Step 2 / 9 — root delegates 3 chunks and parks in supervising</h4>
-    <img alt="root delegates 3 chunks and parks in supervising" src="static/needle_trace_images/step_01.png">
+    <h4>Step 2 / 9 — root launches 3 chunks and parks in supervising</h4>
+    <img alt="root launches 3 chunks and parks in supervising" src="static/needle_trace_images/step_01.png">
     <div class="rlm-slide-nav">
       <label class="rlm-slide-arrow" for="graph-phase-1">&larr;</label>
       <div class="rlm-slide-dots">
@@ -431,8 +431,8 @@ execution graph that you can step through, inspect, and replay:
   </div>
 
   <div class="rlm-slide rlm-slide-3">
-    <h4>Step 3 / 9 — chunks run; chunk_2 sub-delegates two candidates</h4>
-    <img alt="chunks run; chunk_2 sub-delegates two candidates" src="static/needle_trace_images/step_02.png">
+    <h4>Step 3 / 9 — chunks run; chunk_2 launches two candidates</h4>
+    <img alt="chunks run; chunk_2 launches two candidates" src="static/needle_trace_images/step_02.png">
     <div class="rlm-slide-nav">
       <label class="rlm-slide-arrow" for="graph-phase-2">&larr;</label>
       <div class="rlm-slide-dots">
@@ -511,8 +511,8 @@ execution graph that you can step through, inspect, and replay:
   </div>
 
   <div class="rlm-slide rlm-slide-7">
-    <h4>Step 7 / 9 — root delegates to verify and parks again</h4>
-    <img alt="root delegates to verify and parks again" src="static/needle_trace_images/step_06.png">
+    <h4>Step 7 / 9 — root launches verify and parks again</h4>
+    <img alt="root launches verify and parks again" src="static/needle_trace_images/step_06.png">
     <div class="rlm-slide-nav">
       <label class="rlm-slide-arrow" for="graph-phase-6">&larr;</label>
       <div class="rlm-slide-dots">

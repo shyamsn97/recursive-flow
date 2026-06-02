@@ -374,7 +374,7 @@ class RLMFlowHero(Scene):
         )
 
         code_title = Text(
-            "split work with launch_subagents, then verify",
+            "launch_subagents takes a list of child specs",
             font=CODE_FONT,
             font_size=FS_BODY,
             color=WHITE_C,
@@ -405,22 +405,22 @@ class RLMFlowHero(Scene):
         ctx_label = Text("CONTEXT", font=CODE_FONT, font_size=FS_TINY, color=Q_C).move_to(ctx_tab)
         ctx = VGroup(ctx_tab, ctx_label)
         code_lines = VGroup(
-            Text(">>> chunks = CONTEXT.lines(0, CONTEXT.line_count())", font=CODE_FONT, font_size=FS_SMALL, color=Q_C),
-            Text(">>> batches = chunked(chunks, size=500)", font=CODE_FONT, font_size=FS_SMALL, color=Q_C),
-            Text(">>> results = await launch_subagents([", font=CODE_FONT, font_size=FS_SMALL, color=S_C),
+            Text(">>> chunks = chunked(CONTEXT.lines(0, CONTEXT.line_count()), 500)", font=CODE_FONT, font_size=FS_SMALL, color=Q_C),
+            Text(">>> child_specs = [", font=CODE_FONT, font_size=FS_SMALL, color=S_C),
             Text("...   {", font=CODE_FONT, font_size=FS_SMALL, color=WHITE_C),
             Text("...     'name': f'chunk_{i}',", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
             Text("...     'query': 'inspect your CONTEXT slice',", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
-            Text("...     'context': '\\n'.join(batch),", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
-            Text("...   } for i, batch in enumerate(batches)", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
-            Text("... ])", font=CODE_FONT, font_size=FS_SMALL, color=S_C),
+            Text("...     'context': '\\n'.join(chunk),", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
+            Text("...   } for i, chunk in enumerate(chunks)", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
+            Text("... ]  # list[dict], even for one child", font=CODE_FONT, font_size=FS_SMALL, color=S_C),
+            Text(">>> results = await launch_subagents(child_specs)", font=CODE_FONT, font_size=FS_SMALL, color=S_C),
             Text(">>> final = combine(results)", font=CODE_FONT, font_size=FS_SMALL, color=WHITE_C),
             Text(">>> done(final)", font=CODE_FONT, font_size=FS_SMALL, color=R_C),
         ).arrange(DOWN, aligned_edge=LEFT, buff=0.08)
         code_lines.move_to(code_box.get_center() + DOWN * 0.12)
 
         code_caption = Text(
-            "child context stays in CONTEXT; parent only combines child results",
+            "one launcher: await launch_subagents([{...}, {...}])",
             font=CODE_FONT,
             font_size=FS_CAP,
             color=DIM,

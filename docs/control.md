@@ -264,9 +264,9 @@ saved plans, fixtures, or other user-chosen workspace paths.
 Agents delegate through one launcher, which must be awaited:
 
 ```python
-# One child — still pass a one-item list, and unpack the one-item result.
+# One child — still pass a one-item list of dict specs, and unpack the result.
 [answer] = await launch_subagents([
-    {"name": "single", "query": query, "num_steps": None, "context": ""},
+    {"name": "single", "query": query, "num_steps": None, "context": data},
 ])
 
 # Many children in parallel — returns finish strings in spec order.
@@ -280,8 +280,9 @@ results = await launch_subagents([
   calls, feeding each result into the next child's `context`.
 - **Parallel** independent work: pass every spec to `launch_subagents([...])`
   in one call so the engine schedules them on its pool concurrently.
-- Pass `context=""` when the child works from the query alone (the most common
-  case for code-only tasks).
+- Put child-specific data in each spec's `context` whenever the child needs
+  task payload, files, chunks, or parent-derived evidence. Use `context=""`
+  only for truly query-only work.
 - Pass a `CONTEXT.lines(...)` / `CONTEXT.read(...)` slice when each
   child reasons over a different chunk of the parent's payload
   (chunk-and-aggregate). A `list[str]` from `CONTEXT.lines(...)` is stored as
