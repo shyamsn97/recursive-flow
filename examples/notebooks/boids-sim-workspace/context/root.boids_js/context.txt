@@ -1,0 +1,50 @@
+Build a runnable browser-based boids simulation in plain HTML/CSS/JS.
+
+Global requirements:
+- The main runnable interface is index.html.
+- Separate files: index.html, style.css, boids.js (exact filenames).
+- No build tools or external libraries.
+- Use a dark color background (CSS).
+- Do not use ES modules; wire scripts with <script src="..."></script> (no type="module").
+- Render 100s of colorful boids on a 2D <canvas>. Do not add UI/configurations—only the canvas is visible.
+- Robust, no obvious syntax/wiring errors. Use requestAnimationFrame. Handle window resizing and devicePixelRatio scaling.
+- Keep code self-contained.
+
+Behavioral specifics for boids.js (must implement):
+- Create ~250 boids by default.
+- Each boid has position and velocity; draw as a small triangle oriented to velocity.
+- Use three rules: alignment, cohesion, separation.
+- Perception radius ~50px; separation radius ~20px.
+- Limit max speed (~2.5 px/frame) and apply a max steering force (~0.05).
+- Wrap-around at edges (torus), not bouncing.
+- Colorful boids (e.g., HSV hue per boid).
+- Canvas fills the window (CSS 100vw/100vh) and is resized with DPR scaling for crisp rendering.
+
+Deliverable rule:
+- Return ONLY the full content of your target file. No markdown fences, no filenames, no commentary.
+
+Target file: boids.js
+
+Implementation guidance (must produce working code):
+- Obtain the canvas by id 'boids', get 2D context. If context missing, abort gracefully.
+- Maintain arrays for boids: each boid = {x,y,vx,vy,hue}.
+- Constants: COUNT=250, ALIGN_RADIUS=50, COHESION_RADIUS=50, SEPARATION_RADIUS=20, MAX_SPEED=2.5, MAX_FORCE=0.05.
+- Resize logic: set canvas CSS to 100vw/100vh; for devicePixelRatio dpr use:
+    canvas.width = Math.floor(innerWidth * dpr);
+    canvas.height = Math.floor(innerHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+- Animation loop with requestAnimationFrame: update boids then draw them.
+- Update:
+  - For each boid, compute neighbors within perception radii (O(n^2) acceptable).
+  - Compute alignment (avg neighbor velocity), cohesion (steer toward neighbor centroid), separation (steer away inversely to distance).
+  - Sum weighted steering, limit by MAX_FORCE, then update velocity and clamp to MAX_SPEED.
+  - Apply wrap-around at edges.
+- Draw:
+  - Clear the canvas each frame.
+  - For each boid, compute angle = atan2(vy, vx) and draw a small triangle (e.g., size ~6-10 px) using save/translate/rotate/fill.
+  - Use HSL with the boid's hue to make colorful boids.
+- Add window resize listener to call resize function and continue animation.
+- Place code in an IIFE or top-level script; no global pollution beyond what's necessary.
+- No 'export', no ESM, no external assets.
+
+Deliverable: Return ONLY the file content. No markdown.

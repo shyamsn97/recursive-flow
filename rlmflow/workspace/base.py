@@ -7,11 +7,14 @@ import re
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rlmflow.graph import Graph, Node, WorkspaceRef, retrace_steps
 from rlmflow.workspace.graph_load import build_graph
 from rlmflow.workspace.sync import engine_state_path, excluded, sync_lock_for
+
+if TYPE_CHECKING:
+    from rlmflow.workspace.artifacts import ArtifactStore
 
 
 class ContextVariable:
@@ -120,6 +123,7 @@ class BaseWorkspace(ABC):
     root: Path
     session: Session
     context: Context
+    artifacts: ArtifactStore
     branch_id: str
     uri: str | None = None
 

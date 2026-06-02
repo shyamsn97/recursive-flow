@@ -170,7 +170,6 @@ def test_injected_observations_are_coalesced_in_messages():
 def test_runtime_exception_after_exec_action_records_error():
     class _FailingRuntime(LocalRuntime):
         def start_code(self, code: str):
-            del code
             raise RuntimeError("transport lost")
 
     agent = RLMFlow(
@@ -190,6 +189,31 @@ def test_runtime_exception_after_exec_action_records_error():
         "llm_action",
         "llm_output",
         "exec_action",
+        "error_output",
+    ]
+
+
+def test_llm_exception_after_llm_action_records_error():
+    class _TimeoutChannel:
+        def call(self, model, messages):
+            raise TimeoutError("LLM request timed out after 420s")
+
+    agent = RLMFlow(
+        _StaticLLM("unused"),
+        runtime=LocalRuntime(),
+        config=RLMConfig(max_iterations=3),
+    )
+    agent.llm_channel = _TimeoutChannel()
+
+    graph = agent.start("run")
+    graph = agent.step(graph)
+
+    assert is_errored(graph.current())
+    assert graph.current().error == "llm_exception"
+    assert "LLM request timed out after 420s" in graph.current().output
+    assert _types(graph) == [
+        "user_query",
+        "llm_action",
         "error_output",
     ]
 
@@ -1186,8 +1210,8 @@ def test_each_step_advances_runnable_agents_once():
 # ── edge cases ───────────────────────────────────────────────────────
 
 
-def test_launch_subagent_runs_through_engine():
-    """``await launch_subagent(...)`` spawns one child and returns its answer."""
+def test_launch_subagents_one_spec_runs_through_engine():
+    """A one-item ``await launch_subagents([...])`` call spawns one child."""
 
     class _Parent(LLMClient):
         def chat(self, messages, *args, **kwargs):
@@ -1195,7 +1219,7 @@ def test_launch_subagent_runs_through_engine():
             if "leaf task" in convo:
                 return '```repl\ndone("leaf-answer")\n```'
             return (
-                '```repl\nr = await launch_subagent("leaf task", num_steps=5)\n'
+                '```repl\n[r] = await launch_subagents([{"query": "leaf task", "num_steps": 5}])\n'
                 'done("parent:" + r)\n```'
             )
 

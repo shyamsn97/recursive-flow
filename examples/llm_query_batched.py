@@ -30,7 +30,6 @@ class GuidedLLM(LLMClient):
         self._lock = threading.Lock()
 
     def chat(self, messages, *args, **kwargs) -> str:
-        del args, kwargs
         self.last_usage = LLMUsage(input_tokens=25, output_tokens=10)
         text = messages[-1]["content"]
 

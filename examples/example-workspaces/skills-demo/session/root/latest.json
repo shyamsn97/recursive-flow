@@ -1,0 +1,8 @@
+{
+  "agent_id": "root",
+  "latest_node_id": "n_32ea9a48ff6f",
+  "seq": 12,
+  "type": "done_output",
+  "terminal": true,
+  "result": "Slope (m): 0.90\nIntercept (b): 0.90\nPredicted values: [0.9000000000000009, 1.8000000000000016, 2.7000000000000024, 3.6000000000000028]\nL2 residual norm: 0.84"
+}

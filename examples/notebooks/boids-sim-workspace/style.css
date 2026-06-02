@@ -1,24 +1,29 @@
-/* Boids app base styles */
-:root { color-scheme: dark; }
-
-* { box-sizing: border-box; }
-
-html, body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  background: #0d1117; /* pleasant dark */
+:root {
+  color-scheme: dark;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
 body {
-  overflow: hidden; /* prevent scrollbars when canvas is 100vh/vw */
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: #0b1020;
+  color: #ddd;
+  overflow: hidden;
 }
 
 canvas {
   display: block;
   width: 100vw;
   height: 100vh;
+  background: transparent;
+  margin: 0;
+  padding: 0;
   touch-action: none;
-  background: inherit;
 }

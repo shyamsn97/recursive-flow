@@ -236,8 +236,8 @@ def step_exec(self, graph, llm_output):
 ```
 
 `_run_exec` is the long branch that calls into the runtime, handles
-`done(...)`, delegation (`await launch_subagent(...)` /
-`await launch_subagents(...)`), and exceptions. It produces exactly one of
+`done(...)`, delegation (`await launch_subagents([...])`), and exceptions. It
+produces exactly one of
 `ExecOutput`, `SupervisingOutput`, `ErrorOutput`, or `DoneOutput`.
 
 #### `step_after_supervising` — resume half
@@ -251,9 +251,9 @@ observation just like `step_exec`.
 
 ## The REPL `await` protocol
 
-Agents delegate through two launchers — `await launch_subagent(...)` and
-`await launch_subagents([...])`. These are plain `async def`s installed in the
-REPL namespace; each spawns its children via the internal `rlm_delegate(...)`
+Agents delegate through one launcher — `await launch_subagents([...])`. This is
+a plain `async def` installed in the REPL namespace; it spawns its children via
+the internal `rlm_delegate(...)`
 primitive and then performs a single `await rlm_wait(*handles)`. So while
 agents only ever write the launchers, the value the engine actually suspends on
 is still the `WaitRequest` produced by that internal `rlm_wait` — which
@@ -291,15 +291,14 @@ descending at nested boundaries.
 ```python
 # ── TOP-LEVEL awaits ────────────────────────────────────────────────
 # These count. The REPL compiles with top-level await.
-result = await launch_subagent("scan the file")
-for spec in specs:
-    result = await launch_subagent(spec)
+[result] = await launch_subagents([{"name": "scan", "query": "scan the file"}])
+results = await launch_subagents(specs)
 
 # ── NOT top level ───────────────────────────────────────────────────
 # An `await` nested inside a function / comprehension scope doesn't make
 # the block a coroutine the engine can drive — it belongs to that scope.
 async def helper():
-    return await launch_subagent("...")   # belongs to `helper`, not the block
+    return await launch_subagents([...])  # belongs to `helper`, not the block
 # (the block would have to `await helper()` at top level to suspend)
 
 # Ordinary generators / comprehensions are plain Python — no await:
@@ -609,12 +608,12 @@ root.{identity,valuation,fundamentals,analyst}
 
 ### Multi-wait in one block
 
-A block can await twice — each `await launch_subagent(...)` is its own
+A block can await twice — each `await launch_subagents([...])` is its own
 suspension point (this is the sequential pattern):
 
 ```python
-r1 = await launch_subagent("...", name="a")
-r2 = await launch_subagent("...", name="b")
+[r1] = await launch_subagents([{"name": "a", "query": "..."}])
+[r2] = await launch_subagents([{"name": "b", "query": "...", "context": r1}])
 done(combine(r1, r2))
 ```
 
@@ -637,7 +636,7 @@ Same agent, two LLM turns. The first block's `LLMOutput` →
 `ExecAction` → `SupervisingOutput`. After the child settles, the
 resume produces an `ExecOutput`; then the agent runs another LLM
 turn and the second block's code runs in a *fresh* REPL submission
-(but the runtime keeps the same namespace — the launchers,
+(but the runtime keeps the same namespace — the launcher,
 `results`, and any prior assignment are in scope).
 
 ---
@@ -802,9 +801,9 @@ Three methods own the lifecycle:
 `register_tools(runtime)` binds the core `done` / `rlm_wait` /
 `rlm_delegate` closures to `runtime.env`. The `rlm_delegate` closure
 captures `self.spawn_child` so it can call back into engine state. The
-agent-facing `launch_subagent` / `launch_subagents` are registered as real core
-tools and compose over those closures at call time, so they work identically on
-local and remote runtimes.
+agent-facing `launch_subagents` launcher is registered as a real core tool and
+composes over those closures at call time, so it works identically on local and
+remote runtimes.
 
 See [`runtimes.md`](runtimes.md) for the `Runtime` protocol and
 shipped variants.

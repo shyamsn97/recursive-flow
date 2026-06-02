@@ -60,7 +60,6 @@ CONTINUE_ACTION = "Continue your next action:"
 FIRST_TURN_INSPECTION_NUDGE = """\
 Your first REPL block should usually inspect the environment/task `CONTEXT` and/or `SESSION` variables, then stop so you can use that output in the next turn.
 """
-
 FIRST_TURN_DECOMPOSITION_NUDGE = """\
 After the initial inspection, delegate independent units with
 `await launch_subagents([...])` or `llm_query_batched(...)` instead of doing all

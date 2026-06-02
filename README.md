@@ -47,10 +47,11 @@ whole run as one recursive type:
     `SupervisingOutput`, `ErrorOutput`, `DoneOutput`.
   - Actions: `LLMAction`, `ExecAction`, `ResumeAction`.
 
-The agent has exactly two delegation calls. `await launch_subagent(query, ...)`
-runs one child and returns its answer; `await launch_subagents([...])` runs many
-in parallel and returns their answers in order. An agent that delegates two
-children and combines their results writes one REPL block like this:
+The agent has one delegation call: `await launch_subagents([...])`. It always
+takes a list of dict specs and always returns child answers as a `list[str]` in
+the same order. A one-child delegation is just a one-item list. An agent that
+delegates two children and combines their results writes one REPL block like
+this:
 
 ```python
 results = await launch_subagents([
@@ -73,9 +74,9 @@ coro.send(results)                 # resume; `results` is now the list
 ```
 
 The REPL is stateful across blocks, so the next LLM turn can still see
-`results`. The launchers must be awaited; a bare call or a top-level `yield`
+`results`. The launcher must be awaited; a bare call or a top-level `yield`
 are errors. (`rlm_delegate` / `rlm_wait` are the internal primitives the
-launchers compose over — agents never call them directly.)
+launcher composes over — agents never call them directly.)
 
 See [`docs/internals.md`](docs/internals.md) for the full protocol.
 
@@ -164,8 +165,7 @@ turns and `llm_query_batched(...)` both respect the same
 rather than read from shared client state.
 
 To let child agents drain work-conservingly after a parent reaches its
-delegation wait (`await launch_subagent(...)` / `await launch_subagents(...)`),
-enable `eager_children`:
+delegation wait (`await launch_subagents([...])`), enable `eager_children`:
 
 ```python
 agent = RLMFlow(
@@ -194,9 +194,18 @@ deterministic timestamped demo.
 turn-by-turn conversation each agent's LLM saw, with per-message metadata
 (model, token counts, timing) for auditing or replay. `graph.json` is the
 compact graph manifest for the whole run, and `context/<agent-id>/` holds
-payloads exposed as `CONTEXT`. The workspace is the saved run: reopen it
-later with `Workspace.open_path("./myproject").load_graph()` or
-`open_viewer("./myproject")`.
+payloads exposed as `CONTEXT`.
+
+User-controlled workspace files live beside that engine state. Use
+`workspace.artifacts` for safe, root-relative reads/writes:
+
+```python
+workspace.artifacts.write_text("skills/numpy-linear-algebra/SKILL.md", skill_md)
+workspace.artifacts.read_text("reports/summary.md")
+```
+
+The workspace is the saved run: reopen it later with
+`Workspace.open_path("./myproject").load_graph()` or `open_viewer("./myproject")`.
 
 ## Drop-in `LLMClient`
 
@@ -211,6 +220,34 @@ ask(RLMFlow(llm_client=..., runtime=...), "2+2?")    # full agent, same return t
 ```
 
 Nest agents by passing one `RLMFlow` as another's `llm_client`.
+
+## Prompt sections and skills
+
+The default system prompt is built from named sections. Sections can be static
+text or callables with the simple signature `section(engine, graph) -> str`.
+That makes project memory or skills ordinary workspace artifacts plus a prompt
+section that decides when to include them:
+
+```python
+def skills_section(engine, graph):
+    if engine.workspace is None:
+        return ""
+    path = "skills/numpy-linear-algebra/SKILL.md"
+    if not engine.workspace.artifacts.exists(path):
+        return ""
+    return engine.workspace.artifacts.read_text(path)
+
+prompt = DEFAULT_BUILDER.section(
+    "skills",
+    skills_section,
+    title="Skills",
+    before="tools",
+)
+```
+
+See [`examples/skills.py`](examples/skills.py), which uses the checked-in
+workspace [`examples/example-workspaces/skills-demo`](examples/example-workspaces/skills-demo)
+and a concrete NumPy linear-algebra `SKILL.md`.
 
 ## Step and inspect
 
@@ -696,8 +733,8 @@ in [`docs/internals.md`](docs/internals.md).
 - [Positioning](docs/positioning.md): when to use rlmflow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 - [Control](docs/control.md): step loop, workspace resume, rewind,
-  forks, `CONTEXT.read()` / slices, `launch_subagent` / `launch_subagents`,
-  inline-first strategy, custom tools.
+  forks, `CONTEXT.read()` / slices, `launch_subagents`, inline-first
+  strategy, custom tools.
 - [Node injection](docs/injections.md): append typed controller events to a
   running graph and commit them through `agent.step(graph)`.
 - [Observability](docs/observability.md): querying the `Graph`,
@@ -706,7 +743,8 @@ in [`docs/internals.md`](docs/internals.md).
 - [Runtimes](docs/runtimes.md): `Runtime` protocol, shipped runtimes
   (Local / Docker / Modal / E2B / Daytona), writing your own.
 - [Prompt customization](docs/prompt_customization.md): `PromptBuilder`
-  sections, deriving from the default prompt, full replacement.
+  sections, callable dynamic sections, workspace-backed skills/memory,
+  deriving from the default prompt, full replacement.
 - [Security](docs/security.md): trust model, Docker isolation knobs,
   engine-level caps, proxied tools, approval gates.
 - [Changelog](CHANGELOG.md): release-by-release changes.

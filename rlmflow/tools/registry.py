@@ -9,7 +9,7 @@ from typing import Any
 from rlmflow.tools.context import ToolContext
 
 SHOW_VARS_NAME = "SHOW_VARS"
-LAUNCHER_TOOLS = frozenset({"launch_subagent", "launch_subagents"})
+LAUNCHER_TOOLS = frozenset({"launch_subagents"})
 CONTROL_PROXY_TOOLS = frozenset({"done", "rlm_delegate", "rlm_wait"})
 HIDDEN_REPL_TOOL_NAMES = frozenset({"rlm_delegate", "rlm_wait"})
 

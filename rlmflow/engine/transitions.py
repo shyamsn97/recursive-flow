@@ -77,7 +77,20 @@ def step_llm(
     )
     append_node(engine.session, graph, llm_action)
 
-    llm_output, usage = engine.reply_to(graph, llm_action, force_final=force_final)
+    try:
+        llm_output, usage = engine.reply_to(graph, llm_action, force_final=force_final)
+    except Exception as exc:
+        output = f"{type(exc).__name__}: {exc}"
+        append_node(
+            engine.session,
+            graph,
+            ErrorOutput(
+                content=engine.format_exec_output(output),
+                error="llm_exception",
+                output=output,
+            ),
+        )
+        return
     engine.record_usage(usage)
     append_node(engine.session, graph, llm_output)
 

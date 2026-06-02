@@ -88,7 +88,7 @@ graph.edges.flows_to()                         # list[Edge] — same-agent conti
 ## Workspace persistence
 
 A workspace is the durable run. It separates per-agent state logs,
-the graph manifest, and task payloads:
+the graph manifest, task payloads, and user-controlled artifact files:
 
 ```text
 workspace/
@@ -107,6 +107,10 @@ workspace/
   context/
     root/context.txt          # CONTEXT payload + metadata
     root.child/context.txt
+  skills/
+    numpy-linear-algebra/SKILL.md  # user artifact, via workspace.artifacts
+  reports/
+    summary.md                      # user artifact, via workspace.artifacts
 ```
 
 `transcript.json` is the ground-truth record of what each agent's LLM
@@ -123,6 +127,16 @@ as the same `Graph` shape the engine emits — `flows_to` edges are
 derived from state order, `spawns` edges come straight from
 `graph.json`. See [`internals.md`](internals.md#persistence) for the
 full session/transcript/context layout.
+
+`workspace.artifacts` is the safe API for ordinary user-controlled workspace
+files. It uses the paths you choose, rejects absolute paths and `..`, and hides
+engine-owned paths like `session/`, `context/`, and `graph.json`:
+
+```python
+workspace.artifacts.write_text("skills/review/SKILL.md", skill_text)
+workspace.artifacts.read_text("reports/summary.md")
+workspace.artifacts.list("skills")
+```
 
 ## Live terminal
 

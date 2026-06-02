@@ -192,7 +192,7 @@ Or subclass `RLMFlow` and override `build_system_prompt`,
 `act + apply_one` entry point — see
 [`internal/act_apply.md`](internal/act_apply.md)).
 
-## Session And Context
+## Session, Context, And Artifacts
 
 `Workspace.session` stores the per-agent state log and the graph manifest.
 The convenience `workspace.load_graph()` is the normal way to reopen the
@@ -242,13 +242,32 @@ hits    = CONTEXT.grep(r"TODO") # lineno:line rows
 full    = CONTEXT.read()        # full payload for handoff to a child
 ```
 
-## Delegation
-
-Agents delegate through two launchers (both must be awaited):
+`Workspace.artifacts` is the user-controlled file surface for the workspace.
+It is a safe, root-relative API over ordinary workspace files; it does not force
+an `artifacts/` directory. Engine-owned paths like `session/`, `context/`, and
+`graph.json` are reserved.
 
 ```python
-# One child — returns its finish string.
-answer = await launch_subagent(query, num_steps=None, context="", *, name="subagent", model="default")
+workspace.artifacts.write_text("skills/numpy-linear-algebra/SKILL.md", skill_md)
+workspace.artifacts.write_json("reports/run.json", {"ok": True})
+
+skill = workspace.artifacts.read_text("skills/numpy-linear-algebra/SKILL.md")
+reports = workspace.artifacts.list("reports")
+```
+
+Use artifacts for durable files that are part of the project or run but are not
+the agent's live `CONTEXT`: skill files, project memory, generated reports,
+saved plans, fixtures, or other user-chosen workspace paths.
+
+## Delegation
+
+Agents delegate through one launcher, which must be awaited:
+
+```python
+# One child — still pass a one-item list, and unpack the one-item result.
+[answer] = await launch_subagents([
+    {"name": "single", "query": query, "num_steps": None, "context": ""},
+])
 
 # Many children in parallel — returns finish strings in spec order.
 results = await launch_subagents([
@@ -257,8 +276,8 @@ results = await launch_subagents([
 ])
 ```
 
-- **Sequential** dependent steps: chain `await launch_subagent(...)` calls,
-  feeding each result into the next child's `context`.
+- **Sequential** dependent steps: chain one-item `await launch_subagents([...])`
+  calls, feeding each result into the next child's `context`.
 - **Parallel** independent work: pass every spec to `launch_subagents([...])`
   in one call so the engine schedules them on its pool concurrently.
 - Pass `context=""` when the child works from the query alone (the most common

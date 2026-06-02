@@ -70,13 +70,10 @@ from rlmflow.graph import (
 )
 from rlmflow.llm import LLMClient, LLMUsage
 from rlmflow.llm_channel import LLMChannel
-from rlmflow.prompts.default import DEFAULT_BUILDER
+from rlmflow.prompts.default import DEFAULT_BUILDER, status_section, tools_section
 from rlmflow.prompts.messages import (
     DEFAULT_QUERY,
     FINAL_ANSWER_ACTION,
-    STATUS_DEPTH_MID,
-    STATUS_DEPTH_NEAR_MAX,
-    STATUS_DEPTH_ROOT,
     TRUNCATION_SESSION_HINT,
     TRUNCATION_SUMMARY,
     build_user_prompt,
@@ -93,7 +90,6 @@ from rlmflow.tools.builtins import (
     SHOW_VARS,
     make_delegate,
     make_done,
-    make_launch_subagent,
     make_launch_subagents,
     make_wait,
 )
@@ -219,6 +215,7 @@ class RLMFlow(LLMClient):
                 if self.config.llm_max_concurrency is not None
                 else self.config.max_concurrency
             ),
+            request_timeout=self.config.llm_request_timeout,
             thread_safe=llm_thread_safe,
         )
 
@@ -600,10 +597,7 @@ class RLMFlow(LLMClient):
         """Render the system prompt for the agent rooted in ``graph``."""
         if self.config.system_prompt:
             return self.config.system_prompt
-        return self.prompt_builder.build(
-            tools=self.build_tools_section(),
-            status=self.build_status_section(graph),
-        )
+        return self.prompt_builder.build(self, graph)
 
     def build_system_prompt_for(
         self,
@@ -624,49 +618,11 @@ class RLMFlow(LLMClient):
 
     def build_tools_section(self) -> str:
         """Render the tools section that lands inside the system prompt."""
-        baseline = self.config.max_depth == 0
-        tool_defs = [t for t in self.runtime.get_tool_defs() if not t.core]
-        lines = [
-            "Tool functions are already available in the REPL namespace; "
-            "do not import them from a `tools` module. Call them directly by name.",
-            "",
-        ]
-        lines += [
-            f"- `{tool_def.name}{tool_def.signature}`: {tool_def.description}"
-            for tool_def in tool_defs
-        ]
-        if len(self.llm_clients) > 1 and not baseline:
-            lines.append(
-                "\nAvailable models for `launch_subagent(model=...)` "
-                "and `llm_query_batched(model=...)`:"
-            )
-            for key in sorted(self.llm_clients):
-                desc = self.model_descriptions.get(key)
-                lines.append(f"- `{key}`: {desc}" if desc else f"- `{key}`")
-        modules = self.runtime.available_modules()
-        if modules:
-            lines.append(f"\nPre-imported: `{'`, `'.join(modules)}`")
-        return "\n".join(lines)
+        return tools_section(self, None)
 
     def build_status_section(self, graph: Graph) -> str:
         """Render the depth/status note that lands inside the system prompt."""
-        effective_max = graph.config.get("max_depth", self.config.max_depth)
-        if effective_max == 0:
-            return (
-                "Baseline mode: no sub-agents available. Do all work directly "
-                "in this REPL."
-            )
-        note = (
-            f"You are at recursion depth **{graph.depth}** of max "
-            f"**{effective_max}**."
-        )
-        if graph.depth == 0:
-            note += STATUS_DEPTH_ROOT
-        elif graph.depth >= effective_max - 1:
-            note += STATUS_DEPTH_NEAR_MAX
-        elif graph.depth > 0:
-            note += STATUS_DEPTH_MID
-        return note
+        return status_section(self, graph)
 
     # ── runtime / env ────────────────────────────────────────────────
 
@@ -709,8 +665,8 @@ class RLMFlow(LLMClient):
 
         ``runtime.env`` is the host-side dict shared with ``done`` /
         ``rlm_delegate`` closures (cleared + seeded each call). ``rlm_delegate``
-        / ``rlm_wait`` are the internal primitives the ``launch_subagent`` /
-        ``launch_subagents`` REPL launchers compose over. The same
+        / ``rlm_wait`` are the internal primitives the ``launch_subagents``
+        REPL launcher composes over. The same
         per-agent facts plus ``CONTEXT`` / ``SESSION`` are also pushed
         into the REPL namespace so user code can reference them by
         bare name.
@@ -765,7 +721,6 @@ class RLMFlow(LLMClient):
         runtime.register_tool(self.llm_query_batched, core=True)
         rlm_delegate = make_delegate(self.spawn_child, runtime.env)
         runtime.register_tool(rlm_delegate, core=True, hidden=True)
-        runtime.register_tool(make_launch_subagent(rlm_delegate, rlm_wait), core=True)
         runtime.register_tool(make_launch_subagents(rlm_delegate, rlm_wait), core=True)
 
     def format_exec_output(self, output: str) -> str:

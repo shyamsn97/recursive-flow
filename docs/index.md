@@ -14,7 +14,7 @@ Pick the doc that matches what you're trying to do.
 
 - [Control](control.md) — step loop, workspace resume, rewind,
   forks, `CONTEXT.read()` / slices, delegation via
-  `launch_subagent` / `launch_subagents`, inline-first strategy, custom tools.
+  `launch_subagents`, inline-first strategy, custom tools.
 - [Node injection](injections.md) — append typed controller events to a
   running graph, then commit them through `agent.step(graph)`.
 - [Observability](observability.md) — querying the `Graph`,
@@ -23,7 +23,8 @@ Pick the doc that matches what you're trying to do.
 - [Runtimes](runtimes.md) — `Runtime` protocol, shipped runtimes
   (Local / Docker / Modal / E2B / Daytona), writing your own.
 - [Prompt customization](prompt_customization.md) — `PromptBuilder`
-  sections, deriving from the default prompt, full replacement.
+  sections, callable dynamic sections, workspace-backed skills/memory,
+  deriving from the default prompt, full replacement.
 - [Security](security.md) — trust model, Docker isolation knobs,
   engine-level caps, proxied tools, approval gates.
 - [Example smoke runner](../examples/run_examples.py) — run the offline

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from dataclasses import dataclass
 
 from rlmflow.llm import LLMClient, LLMUsage
@@ -24,6 +24,7 @@ class LLMChannel:
         clients: dict[str, LLMClient],
         *,
         max_concurrency: int | None,
+        request_timeout: float | None = None,
         thread_safe: dict[str, bool] | None = None,
     ) -> None:
         workers = max(1, max_concurrency or 1)
@@ -41,6 +42,7 @@ class LLMChannel:
             for model, client in clients.items()
         }
         self._closed = False
+        self._request_timeout = request_timeout
 
     def call(
         self,
@@ -52,8 +54,19 @@ class LLMChannel:
         if self._closed:
             raise RuntimeError("LLMChannel is closed")
         lane = self._lane(model)
-        future = self._executor.submit(self._call_lane, lane, messages)
-        return future.result()
+        future = self._executor.submit(
+            self._call_lane,
+            lane,
+            messages,
+            self._request_timeout,
+        )
+        try:
+            return future.result(timeout=self._request_timeout)
+        except TimeoutError as exc:
+            future.cancel()
+            raise TimeoutError(
+                f"LLM request timed out after {self._request_timeout}s"
+            ) from exc
 
     def batch(
         self,
@@ -73,12 +86,21 @@ class LLMChannel:
                 self._call_lane,
                 lane,
                 [{"role": "user", "content": prompt}],
+                self._request_timeout,
             ): index
             for index, prompt in enumerate(prompts)
         }
         pairs_by_index: dict[int, tuple[str, LLMUsage]] = {}
-        for future in as_completed(futures):
-            pairs_by_index[futures[future]] = future.result()
+        try:
+            completed = as_completed(futures)
+            for future in completed:
+                pairs_by_index[futures[future]] = future.result()
+        except TimeoutError as exc:
+            for future in futures:
+                future.cancel()
+            raise TimeoutError(
+                f"LLM request timed out after {self._request_timeout}s"
+            ) from exc
         return [pairs_by_index[index] for index in range(len(prompts))]
 
     def shutdown(self) -> None:
@@ -96,11 +118,12 @@ class LLMChannel:
     def _call_lane(
         lane: LLMLane,
         messages: list[dict[str, str]],
+        timeout: float | None,
     ) -> tuple[str, LLMUsage]:
         if lane.thread_safe:
-            return lane.client.completion(messages)
+            return lane.client.completion(messages, timeout=timeout)
         with lane.lock:
-            return lane.client.completion(messages)
+            return lane.client.completion(messages, timeout=timeout)
 
 
 __all__ = ["LLMChannel"]

@@ -63,10 +63,10 @@ def check_wait_syntax(code: str) -> str | None:
     return "ERROR: " + "; ".join(checker.errors) if checker.errors else None
 
 
-# The only calls an agent may ``await`` at action-block top level. The
-# launchers are the public surface; ``rlm_wait`` is the internal primitive they
-# compose over (kept awaitable for the engine's own replay path).
-_AWAITABLE_CALLS = {"launch_subagent", "launch_subagents", "rlm_wait"}
+# The only calls an agent may ``await`` at action-block top level.
+# ``launch_subagents`` is the public surface; ``rlm_wait`` is the internal
+# primitive it composes over (kept awaitable for the engine's own replay path).
+_AWAITABLE_CALLS = {"launch_subagents", "rlm_wait"}
 
 
 def _is_awaitable_call(node: ast.AST | None) -> bool:
@@ -97,8 +97,7 @@ class _WaitSyntaxChecker(ast.NodeVisitor):
         if not _is_awaitable_call(node.value):
             self._add(
                 node,
-                "only `await launch_subagent(...)` / `await launch_subagents(...)` "
-                "is supported",
+                "only `await launch_subagents(...)` is supported",
             )
         self.await_depth += 1
         self.generic_visit(node)
@@ -107,7 +106,7 @@ class _WaitSyntaxChecker(ast.NodeVisitor):
     def visit_Yield(self, node: ast.Yield) -> None:  # noqa: N802
         self._add(
             node,
-            "use `await launch_subagent(...)`; top-level `yield` is not supported",
+            "use `await launch_subagents([...])`; top-level `yield` is not supported",
         )
 
     def visit_YieldFrom(self, node: ast.YieldFrom) -> None:  # noqa: N802
@@ -136,7 +135,7 @@ class _WaitSyntaxChecker(ast.NodeVisitor):
             if isinstance(child, ast.Await) or _is_awaitable_call(child):
                 self._add(
                     node,
-                    "`await launch_subagent(...)` is not supported in comprehensions",
+                    "`await launch_subagents(...)` is not supported in comprehensions",
                 )
                 return
 
@@ -157,7 +156,7 @@ class _WaitSyntaxChecker(ast.NodeVisitor):
             if isinstance(child, ast.Await) or _is_awaitable_call(child):
                 self._add(
                     node,
-                    "`launch_subagent(...)` is only supported at action-block "
+                    "`launch_subagents(...)` is only supported at action-block "
                     "top level",
                 )
                 return

@@ -1,0 +1,33 @@
+Build a runnable browser-based boids simulation in plain HTML/CSS/JS.
+
+Global requirements:
+- The main runnable interface is index.html.
+- Separate files: index.html, style.css, boids.js (exact filenames).
+- No build tools or external libraries.
+- Use a dark color background (CSS).
+- Do not use ES modules; wire scripts with <script src="..."></script> (no type="module").
+- Render 100s of colorful boids on a 2D <canvas>. Do not add UI/configurations—only the canvas is visible.
+- Robust, no obvious syntax/wiring errors. Use requestAnimationFrame. Handle window resizing and devicePixelRatio scaling.
+- Keep code self-contained.
+
+Behavioral specifics for boids.js (must implement):
+- Create ~250 boids by default.
+- Each boid has position and velocity; draw as a small triangle oriented to velocity.
+- Use three rules: alignment, cohesion, separation.
+- Perception radius ~50px; separation radius ~20px.
+- Limit max speed (~2.5 px/frame) and apply a max steering force (~0.05).
+- Wrap-around at edges (torus), not bouncing.
+- Colorful boids (e.g., HSV hue per boid).
+- Canvas fills the window (CSS 100vw/100vh) and is resized with DPR scaling for crisp rendering.
+
+Deliverable rule:
+- Return ONLY the full content of your target file. No markdown fences, no filenames, no commentary.
+
+Target file: style.css
+
+Requirements specific to style.css:
+- Dark background (e.g., #0b1020).
+- Make the canvas fill the viewport:
+  - html, body: height: 100%; margin: 0; background: dark color; color: #ddd;
+  - canvas: display: block; width: 100vw; height: 100vh; background: transparent;
+- Prevent scrollbars and ensure no extra margins.

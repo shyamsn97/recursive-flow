@@ -128,59 +128,36 @@ def make_delegate(
     return rlm_delegate
 
 
-def make_launch_subagent(
-    rlm_delegate: Callable[..., object], rlm_wait: Callable[..., Any]
-):
-    """Build the public single-child launcher from bound primitives."""
-
-    @tool("Launch one sub-agent and wait for its finish message. Must be awaited.")
-    async def launch_subagent(
-        query,
-        num_steps=None,
-        context="",
-        *,
-        name="subagent",
-        model="default",
-    ):
-        _handle = rlm_delegate(
-            name=name,
-            query=query,
-            context=context,
-            max_iterations=num_steps,
-            model=model,
-        )
-        if isinstance(_handle, str):
-            return _handle
-        _results = await rlm_wait(_handle)
-        return _results[0]
-
-    return launch_subagent
-
-
 def make_launch_subagents(
     rlm_delegate: Callable[..., object],
     rlm_wait: Callable[..., Any],
 ):
     """Build the public multi-child launcher from bound primitives."""
 
-    @tool("Launch many sub-agents in parallel and wait for all. Must be awaited.")
-    async def launch_subagents(specs, *, context=""):
-        """Launch many sub-agents in parallel and wait for all. Must be awaited.
+    @tool("Launch sub-agents in parallel and wait for all. Must be awaited.")
+    async def launch_subagents(specs):
+        """Launch sub-agents in parallel and wait for all. Must be awaited.
 
-        ``specs`` is a list of dicts (or bare query strings); each dict may set
+        ``specs`` is a list of dicts; each dict may set
         ``query`` (required), ``num_steps``, ``context``, ``name``, ``model``.
         Returns finish messages in the same order as ``specs``.
         """
+        if not isinstance(specs, list):
+            raise TypeError("launch_subagents(...) requires a list of dict specs")
         _results = [None] * len(specs)
         _handles = []
         _positions = []
         for _i, _spec in enumerate(specs):
-            if isinstance(_spec, str):
-                _spec = {"query": _spec}
+            if not isinstance(_spec, dict):
+                raise TypeError(
+                    "launch_subagents(...) requires every spec to be a dict"
+                )
+            if "query" not in _spec:
+                raise KeyError("launch_subagents(...) spec missing required 'query'")
             _handle = rlm_delegate(
                 name=_spec.get("name", "subagent"),
                 query=_spec["query"],
-                context=_spec.get("context", context),
+                context=_spec.get("context", ""),
                 max_iterations=_spec.get("num_steps"),
                 model=_spec.get("model", "default"),
             )
@@ -206,7 +183,6 @@ def make_launcher(
     """Build a public launcher tool by registered name."""
 
     factories = {
-        "launch_subagent": make_launch_subagent,
         "launch_subagents": make_launch_subagents,
     }
     try:
@@ -222,7 +198,6 @@ __all__ = [
     "make_delegate",
     "make_done",
     "make_launcher",
-    "make_launch_subagent",
     "make_launch_subagents",
     "make_wait",
 ]

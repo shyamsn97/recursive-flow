@@ -20,13 +20,18 @@ Each section is registered headless (no ``## Heading``) so the rendered
 prompt is byte-identical to one continuous narrative, but each piece is
 independently swappable via ``DEFAULT_BUILDER.update(name, ...)``.
 
-``tools`` and ``status`` are placeholders filled by ``RLMFlow`` at build
-time.
+``tools`` and ``status`` are dynamic sections filled from the current engine
+and graph at build time.
 """
 
 from __future__ import annotations
 
 from rlmflow.prompts.builder import PromptBuilder
+from rlmflow.prompts.messages import (
+    STATUS_DEPTH_MID,
+    STATUS_DEPTH_NEAR_MAX,
+    STATUS_DEPTH_ROOT,
+)
 
 CONTEXT_TEXT = """
 `CONTEXT` holds the task input/data. Inspect with `CONTEXT.info()`,
@@ -37,30 +42,29 @@ CONTEXT_TEXT = """
 """
 
 ROLE_TEXT = """
-Answer the user's query using the Python REPL and the provided `CONTEXT`. Use code for inspection/transforms, `llm_query_batched` for one-shot fanout, and `launch_subagent` / `launch_subagents` for recursive sub-agents. Iterate until the task is complete, then call `done(...)`.
+Answer the user's query using the Python REPL and the provided `CONTEXT`. Use code for inspection/transforms, `llm_query_batched` for one-shot fanout, and `launch_subagents` for recursive sub-agents. Iterate until the task is complete, then call `done(...)`.
 
 Available in the REPL:
 
 1. `CONTEXT` — task data. Use `info()`, `read(start, end)`, `lines(start, end)`, `grep(pattern, max_results=50)`, and `line_count()`. `read` returns `str`; `lines` returns `list[str]`.
 2. `llm_query_batched(prompts, *, model="default")` — concurrent one-shot LLM calls. Use for chunk extraction, summarization, classification, or Q&A. Takes and returns `list[str]`; each prompt can carry large payloads.
-3. `await launch_subagent(query, num_steps=None, context="", *, name="subagent", model="default")` — launch ONE recursive sub-agent and wait for its finished answer (a string). Use when a subtask needs tools, files, iteration, repair, or its own subcalls. Put data/specs in `context`; avoid `context=""` for nontrivial work.
-4. `await launch_subagents(specs)` — launch MANY sub-agents in parallel and wait for all. `specs` is a list of dicts (each: `query`, optional `num_steps`/`context`/`name`/`model`) or bare query strings. Returns their answers as a `list[str]` in order.
-5. `SESSION` — read-only run view: `tree()`, `read(agent_id)`, `messages(agent_id)`, `recent(agent_id, n=5)`, `grep(...)`, `list_agents()`.
-6. `SHOW_VARS()` — list public REPL variables and types.
-7. `print(...)` — print concise status; REPL output is truncated.
-8. `done(answer)` — finish with the final answer string. Do not call it until the task is complete.
+3. `await launch_subagents(specs)` — launch one or many recursive sub-agents and wait for all. `specs` must be a `list[dict]`; each dict requires `query` and may set `num_steps`, `context`, `name`, and `model`. Returns child answers as a `list[str]` in spec order. Put data/specs in each child `context`; avoid `context=""` for nontrivial work.
+4. `SESSION` — read-only run view: `tree()`, `read(agent_id)`, `messages(agent_id)`, `recent(agent_id, n=5)`, `grep(...)`, `list_agents()`.
+5. `SHOW_VARS()` — list public REPL variables and types.
+6. `print(...)` — print concise status; REPL output is truncated.
+7. `done(answer)` — finish with the final answer string. Do not call it until the task is complete.
 
-`launch_subagent` / `launch_subagents` must be called with `await`. Sub-agents run only when you `await`; a fast way to overlap dependent stages is `a = await launch_subagent(...)` then `b = await launch_subagent(..., context=a)`.
+`launch_subagents` must be called with `await`. Sub-agents run only when you `await`; for a single child, pass a one-item list and unpack the one-item result: `[answer] = await launch_subagents([{"query": "...", "context": data}])`.
 """
 
 STRATEGY_TEXT = """
 **Choose the right fanout:**
 - `llm_query_batched`: simple one-shot chunk work with no tools or REPL.
-- `launch_subagent` / `launch_subagents`: subtasks that need tools, files, iteration, repair, or recursive calls.
+- `launch_subagents`: subtasks that need tools, files, iteration, repair, or recursive calls. Always pass a list of dict specs, even for one child.
 
 **Break down problems:** Use the REPL to plan, branch, and combine results in code. For large contexts or independent subtasks, chunk/decompose and use `llm_query_batched` or `launch_subagents`.
 **Run independent work in parallel:** Batch prompts together, and launch independent sub-agents together with `await launch_subagents([...])`.
-**Run dependent work in stages:** When one stage needs the previous stage's output, chain `await launch_subagent(...)` calls, threading each result into the next `context=`.
+**Run dependent work in stages:** When one stage needs the previous stage's output, use one-item `await launch_subagents([...])` calls, threading each result into the next spec's `context`.
 **Orchestrate multi-artifact work:** For multiple files, components, experiments, reports, or checkable outputs, launch independent units with `launch_subagents([...])`, then integrate and verify. Put shared specs/contracts in each child `context=...`.
 **Respect delegation boundaries:** The parent coordinates, checks, and makes small obvious edits. Send substantial rewrites or repairs back to the responsible unit with failure details.
 **Huge contexts need fanout:** If `CONTEXT.info()` shows hundreds of thousands of lines or millions of tokens, split ranges into independent chunks, process them in parallel, then aggregate.
@@ -141,17 +145,20 @@ answers = llm_query_batched(prompts)
 done(final)
 ```
 
-**Example 2 — branch in code, launch a sub-agent only if needed.**
+**Example 2 — branch in code, launch one sub-agent only if needed.**
 
 ```repl
 [r] = llm_query_batched([
     "Prove sqrt 2 is irrational. Give a 1-2 sentence proof, or reply only: USE_LEMMA."
 ])
 if "USE_LEMMA" in r.upper():
-    r = await launch_subagent(
-        "Prove the lemma 'n^2 even implies n even' and then use it to show sqrt 2 is irrational.",
-        num_steps=20,
-    )
+    [r] = await launch_subagents([
+        {
+            "name": "lemma",
+            "query": "Prove the lemma 'n^2 even implies n even' and then use it to show sqrt 2 is irrational.",
+            "num_steps": 20,
+        }
+    ])
 done(r)
 ```
 
@@ -229,6 +236,52 @@ If you're unsure what variables exist, call `SHOW_VARS()` in a repl block to see
 Think carefully, then execute through the REPL and subcalls. Explicitly answer the original query in your final `done(...)`.
 """
 
+
+def tools_section(engine, graph) -> str:
+    baseline = engine.config.max_depth == 0
+    tool_defs = [t for t in engine.runtime.get_tool_defs() if not t.core]
+    lines = [
+        "Tool functions are already available in the REPL namespace; "
+        "do not import them from a `tools` module. Call them directly by name.",
+        "",
+    ]
+    lines += [
+        f"- `{tool_def.name}{tool_def.signature}`: {tool_def.description}"
+        for tool_def in tool_defs
+    ]
+    if len(engine.llm_clients) > 1 and not baseline:
+        lines.append(
+            "\nAvailable models for `launch_subagents([... model=...])` "
+            "and `llm_query_batched(model=...)`:"
+        )
+        for key in sorted(engine.llm_clients):
+            desc = engine.model_descriptions.get(key)
+            lines.append(f"- `{key}`: {desc}" if desc else f"- `{key}`")
+    modules = engine.runtime.available_modules()
+    if modules:
+        lines.append(f"\nPre-imported: `{'`, `'.join(modules)}`")
+    return "\n".join(lines)
+
+
+def status_section(engine, graph) -> str:
+    effective_max = graph.config.get("max_depth", engine.config.max_depth)
+    if effective_max == 0:
+        return (
+            "Baseline mode: no sub-agents available. Do all work directly "
+            "in this REPL."
+        )
+    note = (
+        f"You are at recursion depth **{graph.depth}** of max " f"**{effective_max}**."
+    )
+    if graph.depth == 0:
+        note += STATUS_DEPTH_ROOT
+    elif graph.depth >= effective_max - 1:
+        note += STATUS_DEPTH_NEAR_MAX
+    elif graph.depth > 0:
+        note += STATUS_DEPTH_MID
+    return note
+
+
 DEFAULT_BUILDER = (
     PromptBuilder()
     .section("role", ROLE_TEXT)
@@ -236,8 +289,8 @@ DEFAULT_BUILDER = (
     .section("format", FORMAT_TEXT)
     .section("examples", EXAMPLES_TEXT)
     .section("final", FINAL_TEXT)
-    .section("tools", title="Tools")
-    .section("status", title="Status")
+    .section("tools", tools_section, title="Tools")
+    .section("status", status_section, title="Status")
 )
 
 
@@ -249,4 +302,6 @@ __all__ = [
     "FORMAT_TEXT",
     "ROLE_TEXT",
     "STRATEGY_TEXT",
+    "status_section",
+    "tools_section",
 ]

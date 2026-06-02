@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from rlmflow.llm import LLMClient, LLMUsage
 from rlmflow.llm_channel import LLMChannel
 
@@ -24,12 +26,16 @@ class _ObservedLLM(LLMClient):
         with self.lock:
             self.active += 1
             self.max_active = max(self.max_active, self.active)
-        if prompt == "slow":
-            time.sleep(self.delay * 3)
-        else:
-            time.sleep(self.delay)
-        with self.lock:
-            self.active -= 1
+        try:
+            sleep_for = self.delay * 3 if prompt == "slow" else self.delay
+            timeout = kwargs.get("timeout")
+            if timeout is not None and sleep_for > timeout:
+                time.sleep(timeout)
+                raise TimeoutError(f"request timed out after {timeout}s")
+            time.sleep(sleep_for)
+        finally:
+            with self.lock:
+                self.active -= 1
         return prompt.upper(), LLMUsage(input_tokens=len(prompt), output_tokens=1)
 
 
@@ -120,3 +126,17 @@ def test_llm_channel_uses_per_request_usage_not_shared_last_usage():
     assert [text for text, _usage in pairs] == ["1", "2", "3"]
     assert sum(usage.input_tokens for _text, usage in pairs) == 6
     assert sum(usage.output_tokens for _text, usage in pairs) == 3
+
+
+def test_llm_channel_times_out_stuck_batch_request():
+    client = _ObservedLLM(thread_safe=True, delay=0.05)
+    channel = LLMChannel(
+        {"default": client},
+        max_concurrency=1,
+        request_timeout=0.01,
+    )
+    try:
+        with pytest.raises(TimeoutError, match="LLM request timed out"):
+            channel.batch("default", ["slow"])
+    finally:
+        channel.shutdown()

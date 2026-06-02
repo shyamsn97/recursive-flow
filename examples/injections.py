@@ -22,7 +22,6 @@ class DemoLLM(LLMClient):
     """Deterministic model so the example runs offline."""
 
     def chat(self, messages, *args, **kwargs) -> str:
-        del args, kwargs
         self.last_usage = LLMUsage(input_tokens=80, output_tokens=20)
         prompt = messages[-1]["content"]
         if "Injected controller observation" in prompt:

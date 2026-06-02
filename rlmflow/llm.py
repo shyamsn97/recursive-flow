@@ -13,22 +13,31 @@ RETRYABLE_EXC_NAMES = frozenset(
     {
         "APIConnectionError",
         "APIError",
-        "APITimeoutError",
         "InternalServerError",
         "RateLimitError",
         "RemoteProtocolError",
         "ConnectError",
+        "ReadError",
+    }
+)
+TIMEOUT_EXC_NAMES = frozenset(
+    {
+        "APITimeoutError",
         "ConnectTimeout",
         "ReadTimeout",
-        "ReadError",
+        "TimeoutError",
     }
 )
 
 
 def is_retryable(exc: BaseException) -> bool:
+    if type(exc).__name__ in TIMEOUT_EXC_NAMES:
+        return False
     if type(exc).__name__ in RETRYABLE_EXC_NAMES:
         return True
     cause = exc.__cause__
+    if cause is not None and type(cause).__name__ in TIMEOUT_EXC_NAMES:
+        return False
     return cause is not None and type(cause).__name__ in RETRYABLE_EXC_NAMES
 
 
@@ -95,9 +104,13 @@ class OpenAIClient(LLMClient):
     def completion(
         self, messages: list[dict[str, str]], *args, **kwargs
     ) -> tuple[str, LLMUsage]:
+        request_kwargs = {}
+        if kwargs.get("timeout") is not None:
+            request_kwargs["timeout"] = kwargs["timeout"]
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
+            **request_kwargs,
         )
         usage = LLMUsage()
         if resp.usage:
@@ -171,11 +184,15 @@ class AnthropicClient(LLMClient):
         self, messages: list[dict[str, str]], *args, **kwargs
     ) -> tuple[str, LLMUsage]:
         system, chat_msgs = self.split_messages(messages)
+        request_kwargs = {}
+        if kwargs.get("timeout") is not None:
+            request_kwargs["timeout"] = kwargs["timeout"]
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,
             messages=chat_msgs,
+            **request_kwargs,
         )
         usage = LLMUsage(
             input_tokens=resp.usage.input_tokens,

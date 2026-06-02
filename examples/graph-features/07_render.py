@@ -37,7 +37,7 @@ def build_graph() -> Graph:
         agent_id="root",
         seq=2,
         reply="I'll delegate the file write.",
-        code='await launch_subagent("write hello.py", name="hello")',
+        code='await launch_subagents([{"name": "hello", "query": "write hello.py"}])',
         input_tokens=120,
         output_tokens=30,
     )

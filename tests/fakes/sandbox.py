@@ -129,7 +129,6 @@ def _maybe_eval_python_dash_c(command: str) -> tuple[int, str, str] | None:
             import traceback
 
             traceback.print_exc(file=stderr)
-            del exc
             return 1, stdout.getvalue(), stderr.getvalue()
     return 0, stdout.getvalue(), stderr.getvalue()
 
@@ -209,7 +208,6 @@ class FakeDaytonaClient:
 
 class NoopLLM(LLMClient):
     def chat(self, messages, *args, **kwargs) -> str:
-        del messages, args, kwargs
         return '```repl\ndone("ok")\n```'
 
 
@@ -219,7 +217,6 @@ class NoStartRemoteRuntime(RemoteFileRuntime):
         self.touched_remote = False
 
     def send(self, msg: dict) -> None:
-        del msg
         self.touched_remote = True
         raise AssertionError("runtime should not start during child spawn")
 
@@ -228,12 +225,10 @@ class NoStartRemoteRuntime(RemoteFileRuntime):
         raise AssertionError("runtime should not start during child spawn")
 
     def exec(self, command: str, *, timeout: float | None = None) -> str:
-        del command, timeout
         self.touched_remote = True
         raise AssertionError("runtime should not exec during child spawn")
 
     def list_files(self, remote_root: str) -> list[str]:
-        del remote_root
         return []
 
 

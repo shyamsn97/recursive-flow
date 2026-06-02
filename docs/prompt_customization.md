@@ -3,7 +3,7 @@
 `RLMFlow` builds a system prompt from named sections. Most customization should
 derive from the default builder instead of replacing the whole prompt, because
 the default sections carry the REPL protocol, the
-`launch_subagent` / `launch_subagents` delegation rules,
+`launch_subagents` delegation rules,
 `CONTEXT`, `SESSION`, and the worked examples that keep recursive execution
 well-formed.
 
@@ -41,8 +41,8 @@ The default builder has seven sections, in order:
 
 | Section | Purpose |
 | --- | --- |
-| `role` | Opening contract + REPL namespace (`CONTEXT`, `llm_query_batched`, `launch_subagent`, `launch_subagents`, `SESSION`, `SHOW_VARS`, `print`, `done`). |
-| `strategy` | When to use `llm_query_batched` vs `launch_subagent` / `launch_subagents`, "break down problems", REPL-for-computation with an inline physics example, truncation + long-context guidance. |
+| `role` | Opening contract + REPL namespace (`CONTEXT`, `llm_query_batched`, `launch_subagents`, `SESSION`, `SHOW_VARS`, `print`, `done`). |
+| `strategy` | When to use `llm_query_batched` vs `launch_subagents`, "break down problems", REPL-for-computation with an inline physics example, truncation + long-context guidance. |
 | `format` | REPL block fence rules + tiny inline demo. |
 | `examples` | Five worked recipes (chunked scan, batched chunks, branch on delegate, program-style fanout, parallel fanout). |
 | `final` | `done(...)` contract, `SHOW_VARS` reminder, closing exhortation. |
@@ -52,7 +52,7 @@ The default builder has seven sections, in order:
 The first five render headless and back-to-back, so the rendered prompt reads
 as one continuous narrative; the split exists so each piece is independently
 swappable via `DEFAULT_BUILDER.update(name, ...)`. `tools` and `status` are
-filled in by `RLMFlow` at build time.
+callable sections filled from the current engine and graph at build time.
 
 ## Recommended: Derive From `DEFAULT_BUILDER`
 
@@ -130,11 +130,11 @@ prompt = DEFAULT_BUILDER.remove("project_rules")
 ### Build A Prompt From Scratch
 
 Use this when you want complete control while still using the section renderer.
-If you include sections named `tools` or `status`, `RLMFlow` fills them at
-runtime.
+If you want the standard runtime-generated tools and status blocks, include the
+built-in callable sections.
 
 ```python
-from rlmflow.prompts import PromptBuilder
+from rlmflow.prompts import PromptBuilder, status_section, tools_section
 
 prompt = (
     PromptBuilder()
@@ -148,8 +148,8 @@ prompt = (
 """,
         title="Protocol",
     )
-    .section("tools", title="Tools")
-    .section("status", title="Status")
+    .section("tools", tools_section, title="Tools")
+    .section("status", status_section, title="Status")
 )
 ```
 
@@ -175,9 +175,9 @@ You are a Python REPL agent.
 )
 ```
 
-This is the most fragile option. If the prompt omits `launch_subagent`,
-`launch_subagents`, `CONTEXT`, `SESSION`, or the `done(...)` rule, the model
-will not reliably use those features.
+This is the most fragile option. If the prompt omits `launch_subagents`,
+`CONTEXT`, `SESSION`, or the `done(...)` rule, the model will not reliably use
+those features.
 
 ## Dynamic Prompts
 
@@ -206,31 +206,163 @@ class AuditFlow(RLMFlow):
             title="Depth Rules",
             after="strategy",
         )
-        return builder.build(
-            tools=self.build_tools_section(),
-            status=self.build_status_section(graph),
-        )
+        return builder.build(self, graph)
 ```
 
-You can also override narrower hooks:
+You can also replace narrower callable sections directly:
 
 ```python
-class MyFlow(RLMFlow):
-    def build_tools_section(self) -> str:
-        tools = super().build_tools_section()
-        return tools + "\n- Prefer read-only tools before write tools."
+from rlmflow.prompts import tools_section
 
-    def build_messages(self, graph, *, force_final=False):
-        messages = super().build_messages(graph, force_final=force_final)
-        # Add or transform chat messages here.
-        return messages
+
+def careful_tools(engine, graph):
+    return tools_section(engine, graph) + "\n- Prefer read-only tools before write tools."
+
+
+prompt = DEFAULT_BUILDER.section("tools", careful_tools, title="Tools")
 ```
+
+## Callable Sections
+
+The dynamic prompt hook above works, but it is heavier than it needs to be for
+small additions like skills, memory, or project rules. A prompt section can be
+either static text or a function:
+
+```python
+def section(engine: RLMFlow, graph: Graph) -> str:
+    ...
+```
+
+The signature is intentionally just `engine, graph`. There is no context dict
+and no separate prompt context object. If a section needs workspace artifacts,
+runtime tools, model registrations, config, or the current agent id, those are
+already reachable from `engine` and `graph`.
+
+For example, the built-in tools section is equivalent to this callable section:
+
+```python
+def tools_section(engine, graph):
+    baseline = engine.config.max_depth == 0
+    tool_defs = [t for t in engine.runtime.get_tool_defs() if not t.core]
+    lines = [
+        "Tool functions are already available in the REPL namespace; "
+        "do not import them from a `tools` module. Call them directly by name.",
+        "",
+    ]
+    lines += [
+        f"- `{tool_def.name}{tool_def.signature}`: {tool_def.description}"
+        for tool_def in tool_defs
+    ]
+    if len(engine.llm_clients) > 1 and not baseline:
+        lines.append(
+            "\nAvailable models for `launch_subagents([... model=...])` "
+            "and `llm_query_batched(model=...)`:"
+        )
+        for key in sorted(engine.llm_clients):
+            desc = engine.model_descriptions.get(key)
+            lines.append(f"- `{key}`: {desc}" if desc else f"- `{key}`")
+    modules = engine.runtime.available_modules()
+    if modules:
+        lines.append(f"\nPre-imported: `{'`, `'.join(modules)}`")
+    return "\n".join(lines)
+```
+
+The built-in status section is equivalent to this:
+
+```python
+def status_section(engine, graph):
+    effective_max = graph.config.get("max_depth", engine.config.max_depth)
+    if effective_max == 0:
+        return (
+            "Baseline mode: no sub-agents available. Do all work directly "
+            "in this REPL."
+        )
+
+    note = (
+        f"You are at recursion depth **{graph.depth}** of max "
+        f"**{effective_max}**."
+    )
+    if graph.depth == 0:
+        note += STATUS_DEPTH_ROOT
+    elif graph.depth >= effective_max - 1:
+        note += STATUS_DEPTH_NEAR_MAX
+    elif graph.depth > 0:
+        note += STATUS_DEPTH_MID
+    return note
+```
+
+And a dynamic skills section becomes a small workspace-artifact reader:
+
+```python
+def skills_section(engine, graph):
+    if engine.workspace is None:
+        return ""
+
+    paths = [
+        "skills/careful-research/SKILL.md",
+        "skills/coding-style/SKILL.md",
+    ]
+    blocks = []
+    for path in paths:
+        if not engine.workspace.artifacts.exists(path):
+            continue
+        body = engine.workspace.artifacts.read_text(path).strip()
+        blocks.append(f"### `{path}`\n\n{body}")
+    return "\n\n".join(blocks)
+```
+
+Then the builder setup stays simple:
+
+```python
+prompt = (
+    DEFAULT_BUILDER
+    .section("skills", skills_section, title="Skills", before="tools")
+    .section("tools", tools_section, title="Tools")
+    .section("status", status_section, title="Status")
+)
+
+agent = RLMFlow(
+    llm_client=llm,
+    workspace=workspace,
+    runtime=runtime,
+    prompt_builder=prompt,
+)
+```
+
+This also gives a natural place for broader prompt memory:
+
+```python
+def memory_section(engine, graph):
+    if engine.workspace is None:
+        return ""
+
+    sources = {
+        "Coding preferences": "skills.md",
+        "Project soul": "openclaw/soul.md",
+    }
+    blocks = []
+    for description, path in sources.items():
+        if engine.workspace.artifacts.exists(path):
+            body = engine.workspace.artifacts.read_text(path).strip()
+            blocks.append(f"### {description}\n\n[source: `{path}`]\n\n{body}")
+    return "\n\n".join(blocks)
+```
+
+With callable sections, skills are not an engine config knob. They are ordinary
+workspace artifacts plus a prompt section that decides what to include for the
+current `engine, graph`.
+
+See [`examples/skills.py`](../examples/skills.py) for a runnable version. It
+uses a checked-in workspace at
+[`examples/example-workspaces/skills-demo`](../examples/example-workspaces/skills-demo)
+with a concrete NumPy linear-algebra `SKILL.md`, then injects that skill through
+a callable `skills` section.
 
 ## Child-Specific Prompts
 
-The easiest way to steer a child is the query you pass to `launch_subagent` /
-`launch_subagents`. Use the global prompt for stable behavior and use child
-queries for local contracts.
+The easiest way to steer a child is the query you pass in a
+`launch_subagents([...])` spec. Use the global prompt for stable behavior and
+use child queries for local contracts.
 
 ```python
 results = await launch_subagents([

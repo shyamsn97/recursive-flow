@@ -60,9 +60,8 @@ strategy becomes the ceiling.
 
 [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/)
 flip that. The setup is small: an LLM sits in a Python REPL with
-the long context bound **as a variable**, and a single extra
-surface — **`await launch_subagent(...)`** and
-**`await launch_subagents([...])`** — lets it spawn fresh sub-agents with
+the long context bound **as a variable**, and one extra
+surface — **`await launch_subagents([...])`** — lets it spawn fresh sub-agents with
 their own context windows. From there, the model decides for itself
 how to peek at the context, slice it, regex through it, or hand a
 chunk to a recursive sub-call. Nothing is summarized or delegated
@@ -113,12 +112,11 @@ context, run a search, read a passage, maybe delegate again, then
 return.
 
 In rlmflow, every
-<span class="rlm-hl-del">await launch_subagent(query, context=ctx, name=name)</span>
-call spins up a fresh sub-agent with its own REPL — bound to `ctx` as
-`CONTEXT` — runs that sub-agent's loop until it calls `done(value)`,
-and hands the value back as a `str`. A child's REPL can call
-<span class="rlm-hl-del">launch_subagent</span> /
-<span class="rlm-hl-del">launch_subagents</span> again, and so on.
+<span class="rlm-hl-del">await launch_subagents([{"query": query, "context": ctx, "name": name}])</span>
+call spins up fresh sub-agents with their own REPLs — each bound to its spec's
+`context` as `CONTEXT` — runs those sub-agent loops until they call
+`done(value)`, and hands the values back as a `list[str]`. A child's REPL can
+call <span class="rlm-hl-del">launch_subagents</span> again, and so on.
 The parent never sees any of it. Click through:
 
 <style>
@@ -307,7 +305,7 @@ done(extract_code([chunk_0, chunk_1, chunk_2]))   # all three are plain str</pre
 
   <div class="rlm-slide rlm-slide-2">
     <h4>2. A child's REPL can recursively launch children too</h4>
-    <pre><span class="rlm-hl-frame"># In launch_subagent(name="chunk_2", ...) — its sub-agent is now writing REPL.</span>
+    <pre><span class="rlm-hl-frame"># In the chunk_2 child — its sub-agent is now writing REPL.</span>
 hits   = CONTEXT.grep(r"secret|code|passcode|needle").splitlines()
 cand_a, cand_b = await <span class="rlm-hl-del">launch_subagents</span>([
     {"name": "candidate_a", "query": "Inspect candidate window A.", "context": hits[0]},
@@ -329,9 +327,9 @@ done("candidate code 84721")   # the root never sees this code ran</pre>
   <div class="rlm-slide rlm-slide-3">
     <h4>3. ...so the call stack nests delegate frames, with no fixed depth</h4>
     <pre><span class="rlm-hl-frame"># Live Python stack while candidate_b's sub-LLM is reasoning:</span>
-<span class="rlm-hl-del">launch_subagent</span>("root",         "What secret code is hidden in the haystack?", haystack)
-└── <span class="rlm-hl-del">launch_subagent</span>("chunk_2",      "Scan final third...",         final_third)
-    └── <span class="rlm-hl-del">launch_subagent</span>("candidate_b", "Inspect candidate window B.", line_77)
+<span class="rlm-hl-del">launch_subagents</span>([{"name": "root", "query": "What secret code is hidden in the haystack?", "context": haystack}])
+└── <span class="rlm-hl-del">launch_subagents</span>([{"name": "chunk_2", "query": "Scan final third...", "context": final_third}])
+    └── <span class="rlm-hl-del">launch_subagents</span>([{"name": "candidate_b", "query": "Inspect candidate window B.", "context": line_77}])
 # 3 LLM agent loops live at once, each with its own messages and CONTEXT.
 # nothing on an inner frame is visible to any frame above it.</pre>
     <div class="rlm-slide-nav">

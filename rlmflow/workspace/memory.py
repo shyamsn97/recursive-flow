@@ -25,7 +25,6 @@ class InMemoryContext(Context):
         agent_id: str = "root",
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        del metadata
         self.blobs[(agent_id, key)] = value
 
     def read(self, key: str = "context", *, agent_id: str = "root") -> str:
@@ -43,7 +42,6 @@ class InMemoryContext(Context):
         )
 
     def fork(self, new_location: object) -> Context:
-        del new_location
         out = InMemoryContext()
         out.blobs = dict(self.blobs)
         return out
@@ -87,7 +85,6 @@ class InMemorySession(Session):
         )
 
     def fork(self, new_location: object) -> Session:
-        del new_location
         out = InMemorySession()
         out.agent_dicts = {aid: dict(d) for aid, d in self.agent_dicts.items()}
         out.agent_states = {aid: list(s) for aid, s in self.agent_states.items()}

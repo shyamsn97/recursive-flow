@@ -2,8 +2,8 @@
   "root_agent_id": "root",
   "agents": [
     "root",
-    "root.make_index_html",
-    "root.make_style_css",
-    "root.make_boids_js"
+    "root.index_html",
+    "root.style_css",
+    "root.boids_js"
   ]
 }

@@ -235,7 +235,6 @@ def _launcher_repl():
     repl = REPL()
     repl.namespace["rlm_delegate"] = make_delegate(spawn_child, env)
     repl.namespace["rlm_wait"] = make_wait()
-    repl.handle({"cmd": "inject_launcher", "name": "launch_subagent"})
     repl.handle({"cmd": "inject_launcher", "name": "launch_subagents"})
     return repl
 
@@ -259,13 +258,12 @@ def test_repl_launch_subagents_suspends_and_resumes():
     assert repl.namespace["results"] == ["A", "B"]
 
 
-def test_repl_launch_subagent_single_suspends_and_unwraps_result():
-    """`await launch_subagent(...)` suspends on a single-child ``WaitRequest``
-    and returns the child's answer string (not a one-element list)."""
+def test_repl_launch_subagents_one_spec_returns_one_item_list():
+    """A one-item ``launch_subagents`` call still returns a one-item list."""
 
     repl = _launcher_repl()
     suspended, payload = repl.start(
-        'answer = await launch_subagent("solve it", name="solver")'
+        'answers = await launch_subagents([{"name": "solver", "query": "solve it"}])'
     )
     assert suspended is True
     request, _ = payload
@@ -273,7 +271,17 @@ def test_repl_launch_subagent_single_suspends_and_unwraps_result():
 
     suspended_again, _ = repl.resume(["the answer"])
     assert suspended_again is False
-    assert repl.namespace["answer"] == "the answer"
+    assert repl.namespace["answers"] == ["the answer"]
+
+
+def test_repl_launch_subagents_rejects_non_dict_specs():
+    repl = _launcher_repl()
+
+    suspended, out = repl.start('await launch_subagents(["solve it"])')
+
+    assert suspended is False
+    assert repl.errored is True
+    assert "requires every spec to be a dict" in out
 
 
 def test_internal_delegation_primitives_are_hidden_from_public_tools(tmp_path):
@@ -283,7 +291,6 @@ def test_internal_delegation_primitives_are_hidden_from_public_tools(tmp_path):
     RLMFlow(NoopLLM(), runtime=runtime, config=RLMConfig(max_depth=1))
 
     visible = {td.name for td in runtime.get_tool_defs()}
-    assert "launch_subagent" in visible
     assert "launch_subagents" in visible
     assert "rlm_delegate" not in visible
     assert "rlm_wait" not in visible
@@ -292,7 +299,6 @@ def test_internal_delegation_primitives_are_hidden_from_public_tools(tmp_path):
     assert {"rlm_delegate", "rlm_wait"} <= internal
 
     show_vars = runtime.repl._show_vars()
-    assert "launch_subagent" in show_vars
     assert "launch_subagents" in show_vars
     assert "rlm_delegate" not in show_vars
     assert "rlm_wait" not in show_vars
@@ -314,7 +320,6 @@ def test_host_proxied_tool_can_call_visible_tool_via_context(tmp_path):
             raise AssertionError("recv should not be called")
 
         def exec(self, command: str, *, timeout: float | None = None) -> str:
-            del command, timeout
             return ""
 
     @tool("Echo text.")
@@ -354,11 +359,9 @@ def test_remote_runtime_short_circuits_proxied_wait_and_consumes_ack(tmp_path):
             return self.responses.get_nowait()
 
         def exec(self, command: str, *, timeout: float | None = None) -> str:
-            del command, timeout
             return ""
 
         def list_files(self, remote_root: str) -> list[str]:
-            del remote_root
             return []
 
     runtime = InMemoryRemote()
@@ -405,7 +408,6 @@ def test_remote_runtime_consumes_wait_ack_before_prepare_side_effects(tmp_path):
             return self.responses.get_nowait()
 
         def send(self, msg: dict) -> None:
-            del msg
             self.events.append("send")
 
         def sync_workspace_to_runtime(self) -> None:
@@ -415,11 +417,9 @@ def test_remote_runtime_consumes_wait_ack_before_prepare_side_effects(tmp_path):
             self.events.append("install")
 
         def exec(self, command: str, *, timeout: float | None = None) -> str:
-            del command, timeout
             return ""
 
         def list_files(self, remote_root: str) -> list[str]:
-            del remote_root
             return []
 
     runtime = InMemoryRemote()
@@ -456,11 +456,9 @@ def test_inject_env_preserves_suspended_remote_repl(tmp_path):
             return self.responses.get_nowait()
 
         def exec(self, command: str, *, timeout: float | None = None) -> str:
-            del command, timeout
             return ""
 
         def list_files(self, remote_root: str) -> list[str]:
-            del remote_root
             return []
 
     runtime = SuspendedRemote()
@@ -519,11 +517,9 @@ def test_remote_close_ignores_already_gone_sandbox(tmp_path):
             self.closed = False
 
         def exec(self, command: str, *, timeout: float | None = None) -> str:
-            del command, timeout
             raise GoneSandboxError("sandbox already shut down")
 
         def list_files(self, remote_root: str) -> list[str]:
-            del remote_root
             raise GoneSandboxError("sandbox already shut down")
 
         def _is_sandbox_gone(self, exc: Exception) -> bool:
@@ -546,7 +542,6 @@ def test_modal_runtime_reports_gone_sandbox_with_timeout_hint(monkeypatch, tmp_p
 
     class GoneModalSandbox:
         def exec(self, *args, **kwargs):
-            del args, kwargs
             raise NotFoundError(
                 "Modal Sandbox with container ID ta-test not found. "
                 "This means this Sandbox has already shut down."
@@ -592,7 +587,6 @@ def test_modal_runtime_exec_times_out_on_stuck_stream(monkeypatch, tmp_path):
 
     class HangingModalSandbox:
         def exec(self, *args, **kwargs):
-            del args, kwargs
             return HangingProcess()
 
     monkeypatch.setitem(
@@ -695,7 +689,6 @@ def test_modal_runtime_clears_workspace_contents_not_root(tmp_path):
             self.commands: list[str] = []
 
         def exec(self, command: str, *, timeout: float | None = None) -> str:
-            del timeout
             self.commands.append(command)
             return ""
 
@@ -726,7 +719,6 @@ def test_modal_runtime_exec_uses_stream_type_pipe(monkeypatch, tmp_path):
             self.exec_kwargs: dict | None = None
 
         def exec(self, *args, **kwargs):
-            del args
             self.exec_kwargs = kwargs
             return FakeProcess()
 

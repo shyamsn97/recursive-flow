@@ -1,0 +1,8 @@
+{
+  "agent_id": "root.style_css",
+  "latest_node_id": "n_0800757b6226",
+  "seq": 8,
+  "type": "done_output",
+  "terminal": true,
+  "result": ":root {\n  color-scheme: dark;\n}\n\n*,\n*::before,\n*::after {\n  box-sizing: border-box;\n}\n\nhtml,\nbody {\n  height: 100%;\n  margin: 0;\n  padding: 0;\n  background: #0b1020;\n  color: #ddd;\n  overflow: hidden;\n}\n\ncanvas {\n  display: block;\n  width: 100vw;\n  height: 100vh;\n  background: transparent;\n  margin: 0;\n  padding: 0;\n  touch-action: none;\n}"
+}

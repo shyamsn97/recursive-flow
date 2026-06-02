@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from rlmflow.graph import WorkspaceRef, parse_node_obj
+from rlmflow.workspace.artifacts import ArtifactStore
 from rlmflow.workspace.base import BaseWorkspace, Context, Session, build_graph
 from rlmflow.workspace.context_helpers import (
     context_keys_for_agents,
@@ -184,6 +185,7 @@ class Workspace(BaseWorkspace):
         self.root.mkdir(parents=True, exist_ok=True)
         self.session = session or FileSession(self.root)
         self.context = context or FileContext(self.root)
+        self.artifacts = ArtifactStore(self.root)
         self.branch_id = branch_id
         self.uri = uri or str(self.root)
 

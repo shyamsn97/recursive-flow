@@ -1,5 +1,6 @@
 """Branch-local workspace, session, and context subsystem."""
 
+from rlmflow.workspace.artifacts import ArtifactStore
 from rlmflow.workspace.base import (
     BaseWorkspace,
     Context,
@@ -23,6 +24,7 @@ from rlmflow.workspace.sync import (
 )
 
 __all__ = [
+    "ArtifactStore",
     "BaseWorkspace",
     "Context",
     "ContextVariable",
