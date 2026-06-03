@@ -15,14 +15,10 @@ override :class:`NodeScheduler` to plug in custom policies.
 from __future__ import annotations
 
 from rlmflow.graph import Graph, is_supervising
-from rlmflow.utils.pool import Pool
 
 
 class NodeScheduler:
     """Pick the agents that can take a step right now."""
-
-    def __init__(self, pool: Pool | None = None) -> None:
-        self.pool = pool
 
     def runnable_agents(self, graph: Graph) -> list[str]:
         runnable: list[str] = []

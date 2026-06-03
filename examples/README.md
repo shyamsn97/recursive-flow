@@ -88,5 +88,7 @@ runtime = DockerRuntime(
 - `skills.py` — writes a user-authored `SKILL.md` via `workspace.artifacts` and
   renders it through a dynamic callable prompt section. Defaults to the checked-in
   `examples/example-workspaces/skills-demo` workspace and requires an OpenAI API key.
+- `tinker_agent.py` — runs `RLMFlow` with `TinkerClient` inference. Requires
+  `TINKER_API_KEY` and the `rlmflow[tinker]` optional dependencies.
 - `view_demo.py` — builds fake graph snapshots and opens the state viewer. No LLM or
   runtime needed.

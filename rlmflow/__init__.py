@@ -35,7 +35,7 @@ from rlmflow.graph import (
     is_user_query,
     retrace_steps,
 )
-from rlmflow.llm import AnthropicClient, LLMClient, LLMUsage, OpenAIClient
+from rlmflow.llm import AnthropicClient, LLMClient, LLMUsage, OpenAIClient, TinkerClient
 from rlmflow.rlm import NodeScheduler, RLMConfig, RLMFlow
 from rlmflow.runtime import Runtime
 from rlmflow.workspace import (
@@ -89,6 +89,7 @@ __all__ = [
     "Session",
     "Store",
     "SupervisingOutput",
+    "TinkerClient",
     "UserQuery",
     "WaitRequest",
     "Workspace",

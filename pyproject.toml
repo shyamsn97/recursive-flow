@@ -31,6 +31,7 @@ dependencies = [
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.20"]
+tinker = ["tinker", "tinker-cookbook"]
 dspy = ["dspy"]
 modal = ["modal"]
 e2b = ["e2b"]
@@ -46,6 +47,8 @@ image = ["plotly>=5.0", "kaleido>=0.2.1"]
 all = [
     "openai>=1.0",
     "anthropic>=0.20",
+    "tinker",
+    "tinker-cookbook",
     "dspy",
     "modal",
     "e2b",

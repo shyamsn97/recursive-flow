@@ -125,7 +125,7 @@ def _maybe_eval_python_dash_c(command: str) -> tuple[int, str, str] | None:
             if exc.code and not isinstance(exc.code, int):
                 stderr.write(str(exc.code))
             return code, stdout.getvalue(), stderr.getvalue()
-        except BaseException as exc:  # noqa: BLE001 - mirror subprocess semantics.
+        except BaseException:  # noqa: BLE001 - mirror subprocess semantics.
             import traceback
 
             traceback.print_exc(file=stderr)

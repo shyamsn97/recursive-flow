@@ -82,6 +82,7 @@ lint: ## check style with flake8
 	isort --profile black rlmflow
 	black rlmflow
 	flake8 rlmflow
+	python -m ruff check .
 
 # ── Markdown ─────────────────────────────────────────────────────────
 # Scoped to public-facing docs only.
