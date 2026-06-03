@@ -81,6 +81,12 @@ class LLMChannel:
             return []
 
         lane = self._lane(model)
+        if not lane.thread_safe:
+            return [
+                self.call(model, [{"role": "user", "content": prompt}])
+                for prompt in prompts
+            ]
+
         futures = {
             self._executor.submit(
                 self._call_lane,

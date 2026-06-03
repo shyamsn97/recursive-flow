@@ -39,6 +39,22 @@ class _ObservedLLM(LLMClient):
         return prompt.upper(), LLMUsage(input_tokens=len(prompt), output_tokens=1)
 
 
+class _OrderedUnsafeLLM(LLMClient):
+    thread_safe = False
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def chat(self, messages, *args, **kwargs) -> str:
+        text, _usage = self.completion(messages, *args, **kwargs)
+        return text
+
+    def completion(self, messages, *args, **kwargs) -> tuple[str, LLMUsage]:
+        prompt = messages[-1]["content"]
+        self.prompts.append(prompt)
+        return prompt.upper(), LLMUsage(input_tokens=len(prompt), output_tokens=1)
+
+
 def test_llm_channel_preserves_batch_order_when_calls_finish_out_of_order():
     client = _ObservedLLM(thread_safe=True, delay=0.01)
     channel = LLMChannel(
@@ -97,6 +113,21 @@ def test_llm_channel_serializes_unsafe_clients():
 
     assert [text for text, _usage in pairs] == ["A", "B", "C", "D"]
     assert client.max_active == 1
+
+
+def test_llm_channel_preserves_unsafe_client_call_order():
+    client = _OrderedUnsafeLLM()
+    channel = LLMChannel(
+        {"default": client},
+        max_concurrency=4,
+    )
+    try:
+        pairs = channel.batch("default", ["a", "b", "c", "d"])
+    finally:
+        channel.shutdown()
+
+    assert [text for text, _usage in pairs] == ["A", "B", "C", "D"]
+    assert client.prompts == ["a", "b", "c", "d"]
 
 
 class _UsageLLM(LLMClient):
