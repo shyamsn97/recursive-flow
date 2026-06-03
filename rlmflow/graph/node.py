@@ -20,7 +20,7 @@ Hierarchy::
         ├── ExecAction                  ran the LLM's fresh code
         └── ResumeAction                supervisor resumed paused code
 
-See ``docs/internal/node_model.md`` for the full spec.
+See ``docs/node_model.md`` for the public spec.
 """
 
 from __future__ import annotations

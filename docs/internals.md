@@ -97,9 +97,9 @@ types under four base classes:
 | `resume_action`      | `ResumeAction`      | `ActionNode`            | "supervisor resumed paused code"                   |
 
 Persisted graphs contain both action and observation nodes; each
-action is immediately followed by the observation it produced.
-See [`internal/node_model.md`](internal/node_model.md) for the full
-state-machine spec.
+action is immediately followed by the observation it produced. See
+[`node_model.md`](node_model.md) for the full public node taxonomy and
+wait/resume flow.
 
 ---
 
@@ -968,8 +968,8 @@ parent's code can detect it (`isinstance(h, str)`) and recover.
 
 ## Where to read next
 
-- [`internal/node_model.md`](internal/node_model.md) — full state-machine
-  spec, every legal transition, simulation walkthroughs.
+- [`node_model.md`](node_model.md) — typed graph state taxonomy,
+  action / observation alternation, delegation wait/resume flow.
 - [`control.md`](control.md) — user-facing step loop, forks, custom
   tools/prompts.
 - [`observability.md`](observability.md) — querying the `Graph` API,

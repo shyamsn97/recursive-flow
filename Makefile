@@ -84,7 +84,7 @@ lint: ## check style with flake8
 	flake8 rlmflow
 
 # ── Markdown ─────────────────────────────────────────────────────────
-# Scoped to public-facing docs only; skips docs/internal/ scratch notes.
+# Scoped to public-facing docs only.
 # Install once:  pip install mdformat mdformat-gfm
 MD_FILES := README.md CHANGELOG.md $(wildcard docs/*.md)
 

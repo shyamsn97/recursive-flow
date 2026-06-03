@@ -8,7 +8,7 @@
   query / mutation views over the subtree (``graph.agents``,
   ``graph.nodes``, ``graph.edges``).
 * :class:`Node` and its subclasses — one immutable per-state payload.
-  See :mod:`rlmflow.graph.node` and ``docs/internal/node_model.md``.
+  See :mod:`rlmflow.graph.node` and ``docs/node_model.md``.
 * :class:`WorkspaceRef`, :class:`RuntimeRef` — serializable handles to
   external systems (branch storage, durable REPL).
 * :class:`ChildHandle`, :class:`WaitRequest` — REPL protocol handles

@@ -20,6 +20,8 @@ Pick the doc that matches what you're trying to do.
 - [Observability](observability.md) — querying the `Graph`,
   workspace layout, export helpers, live tree, gantt, topology
   exports, Gradio viewer, CLI.
+- [Node model](node_model.md) — typed graph state taxonomy, action /
+  observation alternation, delegation wait/resume flow.
 - [Runtimes](runtimes.md) — `Runtime` protocol, shipped runtimes
   (Local / Docker / Modal / E2B / Daytona), writing your own.
 - [Prompt customization](prompt_customization.md) — `PromptBuilder`
@@ -37,6 +39,3 @@ Pick the doc that matches what you're trying to do.
   resume semantics, cold-start replay, persistence, and the full
   `RLMFlow` override surface. **Start here if you want to subclass
   the engine.**
-- [`internal/node_model.md`](internal/node_model.md) — full
-  state-machine spec, every legal transition, simulation
-  walkthroughs.

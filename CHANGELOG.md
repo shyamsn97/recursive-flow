@@ -109,8 +109,8 @@ each one is called out under **Breaking** below.
   `is_supervising`, `is_errored`, `is_done`, `is_resume_action`,
   `is_resumed`, `is_observation`, `is_action`, `is_code_observation`.
   `LLMOutput.code` is the source of truth for executed code;
-  `ExecAction` / `ResumeAction` carry an optional echo only.
-  Full spec: [`docs/internal/node_model.md`](docs/internal/node_model.md).
+  `ExecAction` / `ResumeAction` carry an optional echo only. See
+  [`docs/node_model.md`](docs/node_model.md).
 - **`ErrorOutput` (formerly `ErrorNode`) now distinguishes runtime
   exceptions from normal `ExecOutput`.** The REPL protocol surfaces
   an `errored` flag; `engine/transitions.py` writes `ErrorOutput`

@@ -1,8 +1,7 @@
 """OOLONG scorer — standalone, zero rlmflow dependency.
 
 Implements the scoring methodology from the OOLONG paper
-(arXiv:2511.02817, §2.3 and §3.2). See
-``docs/internal/oolong_scoring.md`` for the full derivation and links.
+(arXiv:2511.02817, §2.3 and §3.2).
 
 TL;DR:
 

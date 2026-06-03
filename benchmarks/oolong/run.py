@@ -98,8 +98,7 @@ Strategy for long-context information retrieval:
 # RLM prompt — the agent gets the question only; the long context is
 # durable on disk as ``task_NNNN.txt`` and reachable via file tools and
 # delegation. This matches the file-backed-context discipline from the
-# RLM paper (arXiv:2512.24601 §2) and the rlmflow harness doc
-# (`docs/internal/oolong_harness.md`).
+# RLM paper (arXiv:2512.24601 §2).
 RLM_PROMPT_TEMPLATE = """You are answering an OOLONG long-context aggregation question over a passage
 stored in {context_file} ({tokens} approx tokens / {bytes} bytes).
 

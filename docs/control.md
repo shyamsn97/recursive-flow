@@ -22,9 +22,8 @@ transition** for every agent that is ready to move. A single
 emitted) is therefore two `step()` rounds: an LLM half
 (`obs → LLMAction → LLMOutput`) and an exec half
 (`LLMOutput → ExecAction → CodeObservation`). This is the
-finest-grained reproducible step the engine exposes — see
-[`internal/node_model.md`](internal/node_model.md) for the full
-state-machine spec and worked simulations.
+finest-grained reproducible step the engine exposes. See
+[`node_model.md`](node_model.md) for the typed state flow.
 
 ## Eager Children
 
@@ -189,8 +188,7 @@ agent = RLMFlow(..., prompt_builder=(
 
 Or subclass `RLMFlow` and override `build_system_prompt`,
 `build_messages`, `extract_code`, or `step` (which is the public
-`act + apply_one` entry point — see
-[`internal/act_apply.md`](internal/act_apply.md)).
+`act + apply_one` entry point).
 
 ## Session, Context, And Artifacts
 

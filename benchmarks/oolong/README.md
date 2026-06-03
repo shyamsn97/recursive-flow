@@ -146,8 +146,6 @@ the shape of each recursive run.
 - [OOLONG paper](https://arxiv.org/abs/2511.02817)
 - [Official OOLONG repo](https://github.com/abertsch72/oolong)
 - [Prime Intellect OOLONG environment](https://github.com/PrimeIntellect-ai/verifiers/tree/sebastian/experiment/rlm/environments/oolong)
-- [`docs/internal/oolong_scoring.md`](../../docs/internal/oolong_scoring.md)
-- [`docs/internal/oolong_harness.md`](../../docs/internal/oolong_harness.md)
 # OOLONG / OOLONG-Pairs
 
 Long-context reasoning and aggregation — see
@@ -170,8 +168,7 @@ Hosted on Hugging Face under the `oolongbench` org:
 - [`oolongbench/oolong-real`](https://huggingface.co/datasets/oolongbench/oolong-real)
   — real conversational data.
 
-Each row exposes (see `docs/internal/oolong_scoring.md` for the full
-schema):
+Each row exposes:
 
 - `context_window_text` — the long input
 - `question` — the query, including `"Give your final answer in the
@@ -247,9 +244,8 @@ scorer; for **rlmflow scaffold** signal, this driver is enough.
 ## Metric
 
 We implement the scoring methodology from the OOLONG paper §2.3 and
-§3.2. See [`docs/internal/oolong_scoring.md`](../../docs/internal/oolong_scoring.md)
-for the derivation and sources. The scorer lives in
-[`scoring.py`](./scoring.py) as a standalone module with zero rlmflow
+§3.2. The scorer lives in [`scoring.py`](./scoring.py) as a standalone
+module with zero rlmflow
 dependencies, so other harnesses (e.g. a future lighteval task) can
 import `score_one`, `extract_answer`, `parse_gold` directly without
 pulling in the agent runtime.

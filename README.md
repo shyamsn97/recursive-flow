@@ -41,8 +41,8 @@ whole run as one recursive type:
 - **`Node`** — one immutable state in an agent's trajectory. The
   trajectory is a strict alternation of **observations** (inputs the
   system received) and **actions** (work the system did). Nine leaf
-  types under four base classes — see
-  [`docs/internal/node_model.md`](docs/internal/node_model.md):
+  types live under four base classes — see
+  [`docs/node_model.md`](docs/node_model.md):
   - Observations: `UserQuery`, `LLMOutput`, `ExecOutput`,
     `SupervisingOutput`, `ErrorOutput`, `DoneOutput`.
   - Actions: `LLMAction`, `ExecAction`, `ResumeAction`.

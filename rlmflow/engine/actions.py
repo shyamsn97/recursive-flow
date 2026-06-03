@@ -12,7 +12,7 @@ This module owns the **pure half** of that loop:
 - :class:`CallLLM` / :class:`Exec` / :class:`Resume` — the lite policy
   values (just intent + inputs not recoverable from the graph). The
   persisted :class:`~rlmflow.graph.ActionNode` carries the full
-  record of what happened. See :doc:`docs/internal/act_apply.md`.
+  record of what happened.
 - :func:`act_one` / :func:`act` — pure projection
   ``Graph -> ActionPlan``: which transition each ready agent should
   take next. No I/O, no writes, no engine state.

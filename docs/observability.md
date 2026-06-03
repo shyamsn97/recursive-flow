@@ -36,8 +36,8 @@ graph.tree()       # ASCII per-agent timeline
 deltas) — and is tagged by its `type`. Trajectories strictly
 alternate **observation** and **action** nodes; every action is
 followed by exactly one observation. Nine concrete leaf classes
-under four base classes (full spec:
-[`docs/internal/node_model.md`](internal/node_model.md)):
+live under four base classes. See [`node_model.md`](node_model.md) for
+the full flow and wait/resume semantics:
 
 | `type`                | Class                | Base                   | Carries                                                           |
 |-----------------------|----------------------|------------------------|-------------------------------------------------------------------|

@@ -4,9 +4,6 @@ Runnable benchmark harnesses for rlmflow. Each subdirectory is a
 self-contained driver for one public benchmark, with its own README,
 runner, and scoring script.
 
-See [`docs/internal/benchmarks.md`](../docs/internal/benchmarks.md)
-for the broader landscape and rationale for the picks in this directory.
-
 ## Conventions (shared across all benchmarks)
 
 - **Runtime.** Default to `LocalRuntime` for dev; pass `--docker-image
@@ -46,8 +43,6 @@ dataset flags (`--split`, `--n`, `--seed`, ...).
 
 ## Why these and not others
 
-The explicit target set is in
-[`docs/internal/benchmarks.md` §13](../docs/internal/benchmarks.md).
 Short version: reproduce the RLM paper's quartet first (OOLONG /
 OOLONG-Pairs / LongBench-v2 CodeQA / BrowseComp-Plus), then add one
 coding and one reasoning anchor for industry credibility. Everything
