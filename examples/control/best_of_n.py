@@ -4,8 +4,8 @@ Each branch is a fresh Workspace and root QueryNode, demonstrating the current
 node-first surface.
 
 Usage:
-    python examples/best_of_n.py
-    python examples/best_of_n.py --n 8
+    python examples/control/best_of_n.py
+    python examples/control/best_of_n.py --n 8
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def main() -> None:
     parser.add_argument("--n", type=int, default=8)
     parser.add_argument(
         "--root-dir",
-        default=str(Path(__file__).parent / "runs" / "best_of_n"),
+        default=str(Path(__file__).resolve().parents[1] / "runs" / "best_of_n"),
         help="where to drop per-branch workspaces (default: examples/runs/best_of_n/)",
     )
     args = parser.parse_args()

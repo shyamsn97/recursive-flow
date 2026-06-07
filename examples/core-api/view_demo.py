@@ -3,7 +3,7 @@
 No LLM or runtime needed. This builds fake RLMFlow graph snapshots to
 demonstrate the viewer UI.
 
-    python examples/view_demo.py
+    python examples/core-api/view_demo.py
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ This is deterministic and offline: `GuidedLLM` returns a root REPL block that
 must call `llm_query_batched(...)`, then answers each batched prompt itself.
 
 Run:
-    python examples/llm_query_batched.py
+    python examples/core-api/llm_query_batched.py
 """
 
 from __future__ import annotations

@@ -1,8 +1,20 @@
 # Examples
 
-Most compute examples (`summarizer.py`, `needle_haystack.py`,
-`needle_haystack_filesystem.py`, `showcase.py`, `coding-agent/agent.py`) take
-the same flags. Defaults can vary; run `--help` for the exact values.
+The examples are grouped by what they demonstrate:
+
+- [`core-api/`](core-api/) — small examples for the core API surface.
+- [`control/`](control/) — delegation, branching, forking, and graph edits.
+- [`applications/`](applications/) — concrete workloads like summarization and
+  needle-in-haystack search.
+- [`integrations/`](integrations/) — DSPy and alternate inference backends.
+- [`advanced/`](advanced/) — multi-step replay and graph surgery flows.
+- [`graph-features/`](graph-features/) — direct graph querying, mutation, and export.
+- [`sandbox/`](sandbox/) — Modal, E2B, and Daytona runtime examples.
+
+Most compute examples (`applications/summarizer.py`,
+`applications/needle_haystack.py`, `applications/needle_haystack_filesystem.py`,
+`core-api/showcase.py`, `coding-agent/agent.py`) take the same flags. Defaults can
+vary; run `--help` for the exact values.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -26,10 +38,10 @@ Then just pass `--docker-image rlmflow:local` to any example — presence of
 the flag is what enables the Docker runtime:
 
 ```bash
-python examples/summarizer.py                  --docker-image rlmflow:local
-python examples/needle_haystack.py             --docker-image rlmflow:local
-python examples/needle_haystack_filesystem.py  --docker-image rlmflow:local
-python examples/showcase.py                    --docker-image rlmflow:local
+python examples/applications/summarizer.py                 --docker-image rlmflow:local
+python examples/applications/needle_haystack.py            --docker-image rlmflow:local
+python examples/applications/needle_haystack_filesystem.py --docker-image rlmflow:local
+python examples/core-api/showcase.py                        --docker-image rlmflow:local
 python examples/coding-agent/agent.py --workspace ./proj --docker-image rlmflow:local
 ```
 
@@ -77,24 +89,11 @@ runtime = DockerRuntime(
 )
 ```
 
-## Other examples
+## Smoke runner
 
-- `run_examples.py` — manifest-driven smoke runner. By default it runs the
-  deterministic/offline examples; use `--include-optional`, `--include-live`,
-  `--include-notebooks`, `--include-sandbox`, or `--all --list` to expand or
-  inspect the suite.
-- `drop_in_llm.py` — shows that `RLMFlow` satisfies `LLMClient`, so you can nest
-  agents or swap an agent in anywhere a plain LLM is accepted. No CLI flags.
-- `advanced/replay/` — two-step replay flow: `sudoku.py` generates a real
-  Sudoku workspace, then `replay_resume.py` forks it, replaces supervising nodes
-  with prompt-based graph edits, syncs each edited graph back to its workspace,
-  and continues with a live LLM.
-- `skills.py` — writes a user-authored `SKILL.md` via `workspace.artifacts` and
-  renders it through a dynamic callable prompt section. Defaults to the checked-in
-  `examples/example-workspaces/skills-demo` workspace and requires an OpenAI API key.
-- `tinker_agent.py` — runs `RLMFlow` with `TinkerClient` inference, shows the live
-  terminal graph, and saves durable state under
-  `examples/example-workspaces/tinker-workspace`. Requires `TINKER_API_KEY` and
-  the `rlmflow[tinker]` optional dependencies.
-- `view_demo.py` — builds fake graph snapshots and opens the state viewer. No LLM or
-  runtime needed.
+`run_examples.py` is the manifest-driven smoke runner. By default it runs the
+deterministic/offline examples; use `--include-optional`, `--include-live`,
+`--include-notebooks`, `--include-sandbox`, or `--all --list` to expand or inspect
+the suite.
+
+See each subdirectory README for the examples in that group.

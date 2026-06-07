@@ -10,8 +10,8 @@ This walks through the pieces that matter after the engine refactor:
 6. Gym-style stepping with a scalar reward.
 
 Usage:
-    python examples/showcase.py
-    python examples/showcase.py --no-viz
+    python examples/core-api/showcase.py
+    python examples/core-api/showcase.py --no-viz
 """
 
 from __future__ import annotations

@@ -60,7 +60,7 @@ childa.task_1 finishes
 parent resumes when all waited-on children are done
 ```
 
-See [`examples/eager_children.py`](../examples/eager_children.py) for a
+See [`examples/control/eager_children.py`](../examples/control/eager_children.py) for a
 deterministic offline demo that prints both modes side by side.
 
 ## Workspace Resume
@@ -116,7 +116,7 @@ graph = agent.step(graph)
 ```
 
 See [`injections.md`](injections.md) for the concise guide and
-[`examples/injections.py`](../examples/injections.py) for a runnable offline demo.
+[`examples/control/injections.py`](../examples/control/injections.py) for a runnable offline demo.
 
 ## Branch workspaces
 
@@ -297,7 +297,7 @@ tightly coupled tasks where delegation adds no useful ownership boundary.
 
 ## Walkthroughs
 
-- [`examples/showcase.py`](../examples/showcase.py) — runnable
+- [`examples/core-api/showcase.py`](../examples/core-api/showcase.py) — runnable
   walkthrough of stepping, workspace persistence, session reads, time travel,
   and gym-style stepping.
 - [`examples/notebooks/coding_agent.ipynb`](../examples/notebooks/coding_agent.ipynb)

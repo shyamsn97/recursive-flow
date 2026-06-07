@@ -1,14 +1,14 @@
-"""Needle in a haystack across many files.
+"""Needle in a massive in-memory CONTEXT.
 
-Generates many files of random noise. One file contains a magic string. The
-agent uses the standard file tools to find it, delegating the search in
-parallel across batches.
+Inspired by alexzhang13/rlm-minimal's million-line magic-number demo. This
+version stores the haystack in RLMFlow's `CONTEXT` instead of writing many
+files, so the agent must use `CONTEXT.lines(...)` and parallel child agents.
 
 Usage:
-    python examples/needle_haystack_filesystem.py
-    python examples/needle_haystack_filesystem.py --no-viz
-    python examples/needle_haystack_filesystem.py --viewer
-    python examples/needle_haystack_filesystem.py --docker-image rlmflow:local
+    python examples/applications/needle_haystack.py
+    python examples/applications/needle_haystack.py --num-lines 1000000 --no-viz
+    python examples/applications/needle_haystack.py --viewer
+    python examples/applications/needle_haystack.py --docker-image rlmflow:local
 """
 
 from __future__ import annotations
@@ -22,34 +22,38 @@ from rlmflow.llm import AnthropicClient, OpenAIClient
 from rlmflow.rlm import RLMConfig, RLMFlow
 from rlmflow.runtime.docker import DockerRuntime
 from rlmflow.runtime.local import LocalRuntime
-from rlmflow.tools import FILE_TOOLS
 
 
-def generate_haystack(
-    directory: Path, num_files: int = 500, lines_per_file: int = 200
-) -> str:
-    words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
-    answer = "".join(random.choices(string.digits, k=7))
-    needle_file = random.randint(0, num_files - 1)
-    needle_line = random.randint(0, lines_per_file - 1)
+def generate_massive_context(
+    num_lines: int = 1_000_000,
+    *,
+    answer: str | None = None,
+) -> tuple[str, str, int]:
+    print(f"Generating massive context with {num_lines:,} lines...")
 
-    for i in range(num_files):
-        lines = []
-        for j in range(lines_per_file):
-            if i == needle_file and j == needle_line:
-                lines.append(f"The magic number is {answer}")
-            else:
-                n = random.randint(3, 8)
-                lines.append(" ".join(random.choice(words) for _ in range(n)))
-        (directory / f"file_{i:04d}.txt").write_text("\n".join(lines))
+    words = ["blah", "random", "text", "data", "content", "information", "sample"]
+    answer = answer or "".join(random.choices(string.digits, k=7))
 
-    print(f"Needle in file_{needle_file:04d}.txt line {needle_line}")
-    return answer
+    lines = []
+    for _ in range(num_lines):
+        n = random.randint(3, 8)
+        lines.append(" ".join(random.choice(words) for _ in range(n)))
+
+    if num_lines <= 0:
+        raise ValueError("--num-lines must be positive")
+
+    low = min(num_lines - 1, max(0, int(num_lines * 0.4)))
+    high = min(num_lines - 1, max(low, int(num_lines * 0.6)))
+    needle_line = random.randint(low, high)
+    lines[needle_line] = f"The magic number is {answer}"
+
+    print(f"Magic number inserted at line {needle_line}")
+    return "\n".join(lines), answer, needle_line
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Needle in a haystack across many files")
-    parser.add_argument("--num-files", type=int, default=500)
+    parser = argparse.ArgumentParser(description="Needle in a massive CONTEXT")
+    parser.add_argument("--num-lines", type=int, default=1_000_000)
     parser.add_argument(
         "--viewer", action="store_true", help="Open the state viewer after finishing"
     )
@@ -60,7 +64,7 @@ def main():
         default=None,
         help="If set, run agent code inside this Docker image (e.g. rlmflow:local).",
     )
-    parser.add_argument("--max-depth", type=int, default=2)
+    parser.add_argument("--max-depth", type=int, default=1)
     parser.add_argument("--max-iterations", type=int, default=15)
     parser.add_argument("--no-viz", action="store_true")
     args = parser.parse_args()
@@ -70,27 +74,23 @@ def main():
     else:
         print(">>> LOCAL RUNTIME")
 
-    workspace = Path("example-workspaces/needle-haystack-filesystem").resolve()
-    haystack_path = workspace / "haystack"
+    workspace = (
+        Path(__file__).resolve().parents[1]
+        / "example-workspaces"
+        / "needle-haystack-context"
+    )
     workspace.mkdir(parents=True, exist_ok=True)
-    haystack_path.mkdir(parents=True, exist_ok=True)
-    for stale in haystack_path.glob("*.txt"):
-        stale.unlink()
-    answer = generate_haystack(haystack_path, num_files=args.num_files)
-    print(f"Generated {args.num_files} files in {haystack_path}")
+    context, answer, needle_line = generate_massive_context(num_lines=args.num_lines)
 
     def make_runtime():
         if args.docker_image:
-            rt = DockerRuntime(
+            return DockerRuntime(
                 args.docker_image,
                 workspace=workspace,
                 mounts={str(workspace): "/workspace"},
                 workdir="/workspace",
             )
-        else:
-            rt = LocalRuntime(workspace=workspace)
-        rt.register_tools(FILE_TOOLS)
-        return rt
+        return LocalRuntime(workspace=workspace)
 
     llm = (
         AnthropicClient(args.model)
@@ -105,7 +105,10 @@ def main():
             else OpenAIClient(args.fast_model)
         )
         llm_clients = {
-            "fast": {"model": fast, "description": "Cheaper model for small sub-tasks."},
+            "fast": {
+                "model": fast,
+                "description": "Cheaper model for independent context chunks.",
+            },
         }
 
     agent = RLMFlow(
@@ -117,8 +120,9 @@ def main():
     )
 
     graph = agent.start(
-        f"There are {args.num_files} text files in haystack/. "
-        f"Exactly one line in one file matches the pattern `The magic number is <number>`. Find and return the number. There are too many files to search manually, so you should split the work into batches and delegate."
+        "I'm looking for a magic number. What is it? You cannot use CONTEXT methods, you have to just use CONTEXT.read()!",
+        context=context,
+        context_metadata={"num_lines": args.num_lines, "needle_line": needle_line},
     )
 
     if args.no_viz:
@@ -134,7 +138,6 @@ def main():
     print(f"\n{'=' * 40}")
     print(f"Actual answer:  {answer}")
     print(f"Correct:        {answer in graph.result()}")
-
     print(f"Workspace saved to {workspace}")
 
     if args.viewer:

@@ -37,7 +37,7 @@ each one is called out under **Breaking** below.
   manual viewer/interactive checks.
 - **Tinker inference client.** `TinkerClient` adapts the Tinker SDK and
   `tinker-cookbook` renderers to the `LLMClient` interface, with an optional
-  `rlmflow[tinker]` extra and a live-view example in `examples/tinker_agent.py`.
+  `rlmflow[tinker]` extra and a live-view example in `examples/integrations/tinker_agent.py`.
 - **Stricter local install checks.** `make install` now runs `ruff check .`
   through the existing lint target before installing the package.
 - **Graph replay/surgery example.** `examples/advanced/replay/` generates a

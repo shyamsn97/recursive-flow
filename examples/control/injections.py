@@ -7,7 +7,7 @@ This shows the controller workflow:
 3. Let normal scheduling continue, or inject an ``ExecAction`` to finalize now.
 
 Run:
-    python examples/injections.py
+    python examples/control/injections.py
 """
 
 from __future__ import annotations

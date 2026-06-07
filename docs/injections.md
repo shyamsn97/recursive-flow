@@ -18,7 +18,7 @@ session. `agent.step(graph2)` is the commit point: it persists the appended
 nodes as ordinary graph states, updates the transcript/message projection, and
 then continues normal scheduling.
 
-For a runnable offline demo, see [`examples/injections.py`](../examples/injections.py).
+For a runnable offline demo, see [`examples/control/injections.py`](../examples/control/injections.py).
 
 ## Inject A Controller Observation
 

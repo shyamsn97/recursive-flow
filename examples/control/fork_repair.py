@@ -4,7 +4,7 @@ Each repair attempt is a separate workspace/context branch, and the resulting
 node graphs are directly comparable.
 
 Usage:
-    python examples/fork_repair.py
+    python examples/control/fork_repair.py
 """
 
 from __future__ import annotations
@@ -122,7 +122,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compare repair branches")
     parser.add_argument(
         "--root-dir",
-        default=str(Path(__file__).parent / "runs" / "fork_repair"),
+        default=str(Path(__file__).resolve().parents[1] / "runs" / "fork_repair"),
         help="where to drop per-branch workspaces (default: examples/runs/fork_repair/)",
     )
     args = parser.parse_args()

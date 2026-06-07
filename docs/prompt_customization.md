@@ -352,7 +352,7 @@ With callable sections, skills are not an engine config knob. They are ordinary
 workspace artifacts plus a prompt section that decides what to include for the
 current `engine, graph`.
 
-See [`examples/skills.py`](../examples/skills.py) for a runnable version. It
+See [`examples/core-api/skills.py`](../examples/core-api/skills.py) for a runnable version. It
 uses a checked-in workspace at
 [`examples/example-workspaces/skills-demo`](../examples/example-workspaces/skills-demo)
 with a concrete NumPy linear-algebra `SKILL.md`, then injects that skill through

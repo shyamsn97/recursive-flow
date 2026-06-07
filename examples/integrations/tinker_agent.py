@@ -4,7 +4,7 @@ Requires Tinker credentials and optional dependencies:
 
     export TINKER_API_KEY=...
     pip install -e ".[tinker]"
-    python examples/tinker_agent.py
+    python examples/integrations/tinker_agent.py
 """
 
 from __future__ import annotations
@@ -42,7 +42,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    workspace = Workspace.create(Path(__file__).parent / "example-workspaces" / "tinker-workspace")
+    examples_root = Path(__file__).resolve().parents[1]
+    workspace = Workspace.create(examples_root / "example-workspaces" / "tinker-workspace")
     llm = TinkerClient(
         base_model=None if args.model_path else args.base_model,
         model_path=args.model_path,

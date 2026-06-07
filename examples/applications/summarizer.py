@@ -7,10 +7,10 @@ summary of each chunk on a cheap `fast` child in parallel with
 summaries into one final summary (the *reduce* step).
 
 Usage:
-    python examples/summarizer.py
-    python examples/summarizer.py --sections 40 --no-viz
-    python examples/summarizer.py --input-file path/to/doc.txt
-    python examples/summarizer.py --docker-image rlmflow:local --viewer
+    python examples/applications/summarizer.py
+    python examples/applications/summarizer.py --sections 40 --no-viz
+    python examples/applications/summarizer.py --input-file path/to/doc.txt
+    python examples/applications/summarizer.py --docker-image rlmflow:local --viewer
 """
 
 from __future__ import annotations
@@ -125,7 +125,9 @@ def main() -> None:
     else:
         document = generate_long_document(args.sections)
 
-    workspace = Path("example-workspaces/summarizer").resolve()
+    workspace = (
+        Path(__file__).resolve().parents[1] / "example-workspaces" / "summarizer"
+    )
     workspace.mkdir(parents=True, exist_ok=True)
 
     def make_runtime():

@@ -3,7 +3,7 @@
 Run with:
     export OPENAI_API_KEY=...
     pip install -e ".[openai,dspy]"
-    python examples/dspy_drop_in.py
+    python examples/integrations/dspy_drop_in.py
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from rlmflow.runtime.local import LocalRuntime
 
 
 def main() -> None:
-    workspace = Workspace.create(Path(__file__).parent / "example-workspaces" / "dspy-workspace")
+    examples_root = Path(__file__).resolve().parents[1]
+    workspace = Workspace.create(examples_root / "example-workspaces" / "dspy-workspace")
     agent = RLMFlow(
         llm_client=OpenAIClient(model="gpt-4o-mini"),
         runtime=LocalRuntime(workspace=workspace),

@@ -11,7 +11,7 @@ This example demonstrates the intended shape for user-authored skills:
    the rendered prompt before the LLM call.
 
     export OPENAI_API_KEY=...
-    python examples/skills.py --model gpt-4o-mini
+    python examples/core-api/skills.py --model gpt-4o-mini
 """
 
 from __future__ import annotations
@@ -24,7 +24,9 @@ from rlmflow.prompts.default import DEFAULT_BUILDER
 from rlmflow.runtime.local import LocalRuntime
 
 
-DEFAULT_WORKSPACE = Path(__file__).resolve().parent / "example-workspaces" / "skills-demo"
+DEFAULT_WORKSPACE = (
+    Path(__file__).resolve().parents[1] / "example-workspaces" / "skills-demo"
+)
 
 
 NUMPY_LINEAR_ALGEBRA_SKILL = """\

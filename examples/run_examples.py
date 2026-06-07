@@ -67,17 +67,17 @@ class Example:
 
 
 EXAMPLES: list[Example] = [
-    Example("injections", "examples/injections.py"),
-    Example("eager-children", "examples/eager_children.py"),
-    Example("llm-query-batched", "examples/llm_query_batched.py"),
-    Example("best-of-n", "examples/best_of_n.py", args=("--n", "4", "--root-dir", "{tmp}/best_of_n")),
+    Example("injections", "examples/control/injections.py"),
+    Example("eager-children", "examples/control/eager_children.py"),
+    Example("llm-query-batched", "examples/core-api/llm_query_batched.py"),
+    Example("best-of-n", "examples/control/best_of_n.py", args=("--n", "4", "--root-dir", "{tmp}/best_of_n")),
     Example(
         "fork-repair",
-        "examples/fork_repair.py",
+        "examples/control/fork_repair.py",
         args=("--root-dir", "{tmp}/fork_repair"),
         modules=("pytest",),
     ),
-    Example("showcase", "examples/showcase.py", args=("--no-viz",)),
+    Example("showcase", "examples/core-api/showcase.py", args=("--no-viz",)),
     Example("graph-query", "examples/graph-features/01_query.py"),
     Example("graph-navigate", "examples/graph-features/02_navigate.py"),
     Example("graph-mutate", "examples/graph-features/03_mutate.py"),
@@ -105,14 +105,14 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "view-demo",
-        "examples/view_demo.py",
+        "examples/core-api/view_demo.py",
         category="manual",
         modules=("gradio", "plotly"),
         note="opens the interactive viewer",
     ),
     Example(
         "drop-in-llm",
-        "examples/drop_in_llm.py",
+        "examples/core-api/drop_in_llm.py",
         category="live",
         env=("OPENAI_API_KEY",),
         modules=("openai",),
@@ -120,7 +120,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "summarizer",
-        "examples/summarizer.py",
+        "examples/applications/summarizer.py",
         category="live",
         args=("--sections", "6", "--no-viz", "--max-iterations", "8"),
         env=("OPENAI_API_KEY",),
@@ -129,7 +129,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "needle-haystack",
-        "examples/needle_haystack.py",
+        "examples/applications/needle_haystack.py",
         category="live",
         args=("--num-lines", "2000", "--no-viz", "--max-iterations", "8"),
         env=("OPENAI_API_KEY",),
@@ -138,7 +138,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "needle-haystack-filesystem",
-        "examples/needle_haystack_filesystem.py",
+        "examples/applications/needle_haystack_filesystem.py",
         category="live",
         args=("--num-files", "50", "--no-viz", "--max-iterations", "8"),
         env=("OPENAI_API_KEY",),
@@ -147,7 +147,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "dspy-drop-in",
-        "examples/dspy_drop_in.py",
+        "examples/integrations/dspy_drop_in.py",
         category="live",
         env=("OPENAI_API_KEY",),
         modules=("dspy", "openai"),

@@ -16,7 +16,7 @@ This enables two patterns:
 
 Run with:
     export OPENAI_API_KEY=...
-    python examples/drop_in_llm.py
+    python examples/core-api/drop_in_llm.py
 """
 
 from __future__ import annotations

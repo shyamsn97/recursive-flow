@@ -1,7 +1,7 @@
 """Demonstrate `eager_children=True` work-conserving child scheduling.
 
 Run:
-    python examples/eager_children.py
+    python examples/control/eager_children.py
 
 The key thing to watch in the output:
 
