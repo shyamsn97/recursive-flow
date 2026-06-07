@@ -664,6 +664,7 @@ or `--include-sandbox` as needed. Most live examples share flags like
 | [`showcase.py`](examples/core-api/showcase.py) | `Graph` snapshots, workspace persistence, session reads, time travel, gym-style stepping. |
 | [`drop_in_llm.py`](examples/core-api/drop_in_llm.py) | `RLMFlow` as an `LLMClient`. Nested agents. |
 | [`dspy_drop_in.py`](examples/integrations/dspy_drop_in.py) | Use an `RLMFlow` agent as the LM behind a DSPy program. |
+| [`mcp_weather.py`](examples/integrations/mcp_weather.py) | Start a local MCP weather server backed by Open-Meteo, delegate city forecasts, and combine the packing advice. |
 | [`tinker_agent.py`](examples/integrations/tinker_agent.py) | Run the live terminal graph view with `TinkerClient` inference. |
 | [`sandbox/`](examples/sandbox/) | Build a small web app whose Python code runs inside Modal, E2B, and Daytona sandboxes. |
 | [`coding-agent/agent.py`](examples/coding-agent/agent.py) | Interactive coding agent that writes and edits files. |
@@ -727,9 +728,7 @@ scaling / label-normalization flags (`--marker-mult`, `--text-mult`,
 - [~] `ModalRuntime` / `E2BRuntime` / `DaytonaRuntime` — full support: native SDK file transfer, real-sandbox CI, depth>1 delegation, heavier example
 - [~] Depth × breadth sweep (accuracy vs `max_depth`) on an OOLONG/BABILong subset
 - [~] [RAO](https://apga.github.io/RAO/) (recursive agent optimization) support
-- [ ] OOLONG-Pairs harness — pairwise aggregation where flat LLMs fall over
-- [ ] Fork/resume determinism test in CI to guard the replay machinery
-- [ ] LongBench-v2 CodeQA + SWE-bench adapter for coding-agent credibility
+- [ ] OOLONG, LongBench-v2, CodeQA, SWE-bench benchmarks
 
 ## Docs
 

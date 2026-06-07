@@ -33,6 +33,7 @@ openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.20"]
 tinker = ["tinker", "tinker-cookbook"]
 dspy = ["dspy"]
+mcp = ["mcp"]
 modal = ["modal"]
 e2b = ["e2b"]
 daytona = ["daytona-sdk"]
@@ -50,6 +51,7 @@ all = [
     "tinker",
     "tinker-cookbook",
     "dspy",
+    "mcp",
     "modal",
     "e2b",
     "daytona-sdk",

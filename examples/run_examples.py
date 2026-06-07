@@ -154,6 +154,16 @@ EXAMPLES: list[Example] = [
         timeout=300,
     ),
     Example(
+        "mcp-weather",
+        "examples/integrations/mcp_weather.py",
+        category="live",
+        args=("--no-viz", "--max-iterations", "8"),
+        env=("OPENAI_API_KEY",),
+        modules=("mcp", "openai"),
+        timeout=300,
+        note="uses Open-Meteo through a local MCP server",
+    ),
+    Example(
         "advanced-replay-sudoku",
         "examples/advanced/replay/sudoku.py",
         category="live",
