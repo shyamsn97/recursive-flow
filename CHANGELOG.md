@@ -40,9 +40,10 @@ each one is called out under **Breaking** below.
   `rlmflow[tinker]` extra and a live-view example in `examples/tinker_agent.py`.
 - **Stricter local install checks.** `make install` now runs `ruff check .`
   through the existing lint target before installing the package.
-- **Graph repair example.** `examples/advanced/replay_resume.py` loads the
-  needle-haystack trace, injects a hanging child action, replaces it with a
-  fixed result, and continues with a live LLM.
+- **Graph replay/surgery example.** `examples/advanced/replay/` generates a
+  real Sudoku run, forks it, replaces supervising nodes with prompt-based graph
+  edits, syncs each edited graph to its branch workspace, and continues with a
+  live LLM.
 - **Simpler iteration defaults.** `RLMConfig.max_iterations` is unbounded by
   default (`None`), while delegated children use the global
   `child_max_iterations=20` engine policy by default.

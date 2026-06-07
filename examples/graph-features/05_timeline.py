@@ -10,8 +10,8 @@ This script:
   2. prints the final persisted node log,
   3. calls ``retrace_steps(graph)`` and shows the inferred snapshots.
 
-For graph repair after a bad child result, see
-``examples/advanced/replay_resume.py``.
+For replay and graph surgery on a saved run, see
+``examples/advanced/replay/replay_resume.py``.
 
 Run:
     python examples/graph-features/05_timeline.py

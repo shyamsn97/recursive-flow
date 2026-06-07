@@ -671,7 +671,7 @@ or `--include-sandbox` as needed. Most live examples share flags like
 | [`needle_haystack_filesystem.py`](examples/needle_haystack_filesystem.py) | Needle-in-a-haystack across many files with custom tools and `runtime_factory`. |
 | [`summarizer.py`](examples/summarizer.py) | Recursive map-reduce summarization over a long document — `launch_subagents` fan-out + stateful combine. |
 | [`eager_children.py`](examples/eager_children.py) | `eager_children=True` vs `False` — how child scheduling overlaps. |
-| [`advanced/replay_resume.py`](examples/advanced/replay_resume.py) | Graph repair demo: inject a hanging child action, replace it with a fixed result, and continue with a live LLM. |
+| [`advanced/replay/`](examples/advanced/replay/) | Replay/graph-surgery demo: generate a real Sudoku workspace, fork it, replace supervising nodes, sync each edited graph to the branch workspace, and continue with a live LLM. |
 | [`fork_repair.py`](examples/fork_repair.py) | Fork a workspace into independent repair branches and run tests in each. |
 | [`best_of_n.py`](examples/best_of_n.py) | Run N independent workspace branches and pick the best result. |
 | [`autoresearch/`](examples/autoresearch/) | Karpathy-style hill-climbing research loop with custom `@tool`s and delegation. |
