@@ -7,7 +7,7 @@ implementation details out of the façade.
 
 from __future__ import annotations
 
-from rlmflow.engine.actions import CallLLM, Exec, Resume
+from rlmflow.engine.actions import CallLLM, Exec, Resume, RunPendingExec
 from rlmflow.engine.replay import (
     can_resume,
     replay_to_suspension,
@@ -55,6 +55,8 @@ def apply_one(engine, action) -> None:
         )
     elif isinstance(action, Exec):
         engine.step_exec(graph, cur)
+    elif isinstance(action, RunPendingExec):
+        engine._run_exec(graph, cur, cur.code)
     elif isinstance(action, Resume):
         engine.step_after_supervising(graph, cur)
 

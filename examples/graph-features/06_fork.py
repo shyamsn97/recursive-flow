@@ -112,12 +112,12 @@ def main() -> None:
         banner("the source workspace is unchanged")
         main_loaded = Workspace.open_path(main_ws.root).load_graph()
         print(f"main result still : {main_loaded.result()!r}")
-        print(f"main state count  : {len(main_loaded.nodes)}")
+        print(f"main state count  : {len(main_loaded.all_nodes)}")
 
         banner("compare branches by result")
         for ws in (main_ws, a, b):
             g = Workspace.open_path(ws.root).load_graph()
-            print(f"  branch={ws.branch_id:<8} states={len(g.nodes):>2} "
+            print(f"  branch={ws.branch_id:<8} nodes={len(g.all_nodes):>2} "
                   f"result={g.result()!r}")
 
 

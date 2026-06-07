@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from pathlib import Path
@@ -99,6 +100,31 @@ class FileSession(Session):
         self.store.append_jsonl(path, state)
         self._write_latest(state)
 
+    def rewrite_graph(self, graph) -> None:
+        agent_ids = [agent.agent_id for agent in graph.walk()]
+        self.store.write_json(
+            "graph.json",
+            {
+                "root_agent_id": graph.agent_id,
+                "agents": agent_ids,
+            },
+        )
+        for agent in graph.walk():
+            safe = _safe_name(agent.agent_id, default="root")
+            self.store.write_json(f"session/{safe}/agent.json", agent.meta_dict())
+            lines = [
+                json.dumps(node.model_dump(mode="json"), ensure_ascii=False)
+                for node in agent.nodes
+            ]
+            text = "\n".join(lines)
+            if text:
+                text += "\n"
+            self.store.write_text(f"session/{safe}/session.jsonl", text)
+            if agent.nodes:
+                self._write_latest(agent.nodes[-1])
+            else:
+                self.store.remove(f"session/{safe}/latest.json")
+
     def read_transcript(self, agent_id: str) -> dict[str, Any] | None:
         path = f"session/{_safe_name(agent_id, default='root')}/transcript.json"
         if not self.store.exists(path):
@@ -126,7 +152,7 @@ class FileSession(Session):
         return build_graph(
             root_agent_id=manifest["root_agent_id"],
             agent_dicts=agent_dicts,
-            agent_states=agent_states,
+            agent_nodes=agent_states,
         )
 
     def _load_manifest(self) -> dict[str, Any]:
@@ -232,6 +258,13 @@ class Workspace(BaseWorkspace):
     def commit(self) -> None:
         """Local filesystem workspaces are already durable."""
 
+    def prune_graph_payloads(self, graph) -> None:
+        """Remove per-agent payload dirs for agents absent from ``graph``."""
+
+        agent_ids = [agent.agent_id for agent in graph.walk()]
+        _prune_agent_dirs(self.root / "session", agent_ids)
+        _prune_agent_dirs(self.root / "context", agent_ids)
+
     def fork(
         self,
         new_location: str | Path | None = None,
@@ -249,7 +282,13 @@ class Workspace(BaseWorkspace):
             shutil.rmtree(new_root)
         new_root.mkdir(parents=True, exist_ok=True)
 
-        reserved = {"session", "context", "graph.json", "trace", "checkpoint.json"}
+        reserved = {
+            "session",
+            "context",
+            "graph.json",
+            "trace",
+            "checkpoint.json",
+        }
         for item in self.root.iterdir():
             if item.name in reserved:
                 continue
@@ -259,12 +298,16 @@ class Workspace(BaseWorkspace):
             else:
                 shutil.copy2(item, dst)
 
-        return type(self)(
+        forked = type(self)(
             new_root,
             session=self.session.fork(new_root),
             context=self.context.fork(new_root),
             branch_id=branch_id,
         )
+        graph = forked.session.load_graph()
+        if graph.nodes or graph.children:
+            forked.sync_graph(graph)
+        return forked
 
 
 def _branch_id_from_location(location: str | Path) -> str:
@@ -272,6 +315,15 @@ def _branch_id_from_location(location: str | Path) -> str:
     if "://" in text:
         return text.rsplit("/", 1)[-1] or "branch"
     return Path(text).name or "branch"
+
+
+def _prune_agent_dirs(base: Path, agent_ids: list[str]) -> None:
+    if not base.exists():
+        return
+    keep = {_safe_name(agent_id, default="root") for agent_id in agent_ids}
+    for child in base.iterdir():
+        if child.is_dir() and child.name not in keep:
+            shutil.rmtree(child)
 
 
 __all__ = ["FileContext", "FileSession", "Workspace"]

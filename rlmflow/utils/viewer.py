@@ -97,7 +97,11 @@ ViewSource: TypeAlias = BaseWorkspace | str | Path | Graph | Iterable[Graph]
 
 
 def _looks_like_graph_dump(data: Any) -> bool:
-    return isinstance(data, dict) and "agent_id" in data and "states" in data
+    return (
+        isinstance(data, dict)
+        and "agent_id" in data
+        and ("nodes" in data or "states" in data)
+    )
 
 
 def _load_graphs_from_path(path: str | Path) -> list[Graph]:
@@ -153,11 +157,11 @@ def _visible_signature(graph: Graph) -> tuple:
     sig: list[tuple[str, tuple[str, ...]]] = []
     for sub in graph.walk():
         next_in: dict[str, Node] = {}
-        for prev, nxt in zip(sub.states[:-1], sub.states[1:]):
+        for prev, nxt in zip(sub.nodes[:-1], sub.nodes[1:]):
             next_in[prev.id] = nxt
         kinds = tuple(
             _display_kind(n)
-            for n in sub.states
+            for n in sub.nodes
             if not is_bookkeeping(n, next_in.get(n.id))
         )
         sig.append((sub.agent_id, kinds))
@@ -219,7 +223,7 @@ def agent_transcript(source: ViewSource, *, include_system: bool = True) -> str:
         parts.append(f"--- system ---\n{graph.system_prompt.strip()}")
     if graph.query:
         parts.append(f"--- query ---\n{graph.query.strip()}")
-    for state in graph.states:
+    for state in graph.nodes:
         rendered = _render_state_transcript(state)
         if rendered is not None:
             parts.append(rendered)
@@ -241,7 +245,7 @@ def graph_session(source: ViewSource, *, include_system: bool = False) -> str:
             parts.append(f"--- [{aid}] system ---\n{sub.system_prompt.strip()}")
         if sub.query:
             parts.append(f"--- [{aid}] query ---\n{sub.query.strip()}")
-        for state in sub.states:
+        for state in sub.nodes:
             rendered = _render_state_transcript(state, agent_id=aid)
             if rendered is not None:
                 parts.append(rendered)
@@ -318,9 +322,9 @@ def graph_tree(source: ViewSource) -> str:
             head += f" — {_short(g.query, 60)}"
         lines.append(head)
 
-        state_ids = {s.id for s in g.states}
+        state_ids = {s.id for s in g.nodes}
         sup_for_agent: dict[str, str] = {}
-        for s in g.states:
+        for s in g.nodes:
             if is_supervising(s):
                 for aid in s.waiting_on:
                     sup_for_agent[aid] = s.id
@@ -336,7 +340,7 @@ def graph_tree(source: ViewSource) -> str:
             else:
                 unplaced.append(child)
 
-        for s in g.states:
+        for s in g.nodes:
             lines.append(f"{indent}  - [{s.seq:>2}] {_label(s)}")
             for child in attach_at.get(s.id, []):
                 walk(child, indent + "    ")
@@ -469,11 +473,13 @@ def _build_graph_figure(
     # slider stay in sync.
     next_in_agent: dict[str, Node] = {}
     for sub in graph.walk():
-        states = sub.states
+        states = sub.nodes
         for prev, nxt in zip(states[:-1], states[1:]):
             next_in_agent[prev.id] = nxt
 
-    nodes = [n for n in graph.nodes if not is_bookkeeping(n, next_in_agent.get(n.id))]
+    nodes = [
+        n for n in graph.all_nodes if not is_bookkeeping(n, next_in_agent.get(n.id))
+    ]
     by_id: dict[str, Node] = {n.id: n for n in nodes}
     # Two kinds of outgoing edges per node:
     #   chain_child[n]: at most one — the next state of the SAME agent (flows_to).
@@ -505,7 +511,7 @@ def _build_graph_figure(
     # collapsed action nodes don't punch holes in the chain.
     for sub in graph.walk():
         prev_id: str | None = None
-        for s in sub.states:
+        for s in sub.nodes:
             if s.id not in by_id:
                 continue
             if prev_id is not None:
@@ -518,7 +524,7 @@ def _build_graph_figure(
     visible_predecessor: dict[str, str | None] = {}
     for sub in graph.walk():
         prev_visible: str | None = None
-        for s in sub.states:
+        for s in sub.nodes:
             visible_predecessor[s.id] = prev_visible
             if s.id in by_id:
                 prev_visible = s.id
@@ -1240,7 +1246,7 @@ document.addEventListener("keydown", (event) => {
 
 def _state_table_html(graph: Graph) -> str:
     rows: list[str] = []
-    for node in graph.nodes:
+    for node in graph.all_nodes:
         detail = (
             getattr(node, "result", "")
             or ", ".join(getattr(node, "waiting_on", []) or [])
@@ -1484,7 +1490,7 @@ def open_viewer(source: ViewSource, **launch_kwargs: Any):
         step_arg, node_id = payload[0], payload[1]
         step = _coerce_step(step_arg)
         graph = graphs[step]
-        node = graph.nodes.find(node_id)
+        node = graph.all_nodes.find(node_id)
         if node is None:
             return "<i style='color:#8b949e'>(node not visible at this step)</i>"
         return _state_detail_html(node, graph)
@@ -1494,7 +1500,7 @@ def open_viewer(source: ViewSource, **launch_kwargs: Any):
         "<i style='color:#8b949e'>Click any node above to see its full payload.</i>"
     )
 
-    total_nodes = sum(len(g.nodes) for g in graphs)
+    total_nodes = sum(len(g.all_nodes) for g in graphs)
 
     with gr.Blocks(title="RLMFlow Viewer", fill_height=True) as demo:
         gr.Markdown(
@@ -1814,8 +1820,8 @@ def _state_detail_html(state: Node, graph: Graph) -> str:
         parts.append("<h5>agent query</h5>")
         parts.append(f"<pre>{_esc_html(agent.query)}</pre>")
 
-    parts.append(f"<h5>states ({len(agent.states)})</h5>" "<div class='state-blocks'>")
-    for s in agent.states:
+    parts.append(f"<h5>states ({len(agent.nodes)})</h5>" "<div class='state-blocks'>")
+    for s in agent.nodes:
         parts.append(_render_state_block(s, selected=s.id == state.id))
     parts.append("</div>")
 

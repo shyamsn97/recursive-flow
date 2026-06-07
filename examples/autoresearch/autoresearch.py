@@ -716,13 +716,13 @@ def main() -> None:
         t0 = time.monotonic()
         seen: set[str] = set()
         graph = flow.start(query)
-        for node in graph.nodes:
+        for node in graph.all_nodes:
             if node.id not in seen:
                 _print_event(node, t0)
                 seen.add(node.id)
         while not graph.finished:
             graph = flow.step(graph)
-            for node in graph.nodes:
+            for node in graph.all_nodes:
                 if node.id not in seen:
                     _print_event(node, t0)
                     seen.add(node.id)

@@ -47,8 +47,8 @@ Answer the user's query using the Python REPL and the provided `CONTEXT`. Use co
 Available in the REPL:
 
 1. `CONTEXT` — task data. Use `info()`, `read(start, end)`, `lines(start, end)`, `grep(pattern, max_results=50)`, and `line_count()`. `read` returns `str`; `lines` returns `list[str]`.
-2. `llm_query_batched(prompts, *, model="default")` — concurrent one-shot LLM calls. Use for chunk extraction, summarization, classification, or Q&A. Takes and returns `list[str]`; each prompt can carry large payloads.
-3. `await launch_subagents(specs)` — launch one or many recursive sub-agents and wait for all. `specs` must be a `list[dict]`; each dict requires `query` and may set `num_steps`, `context`, `name`, and `model`. Returns child answers as a `list[str]` in spec order. Put data/specs in each child `context`; avoid `context=""` for nontrivial work.
+2. `llm_query_batched(prompts, *, model="default", temperature=None, top_p=None, max_tokens=None, stop=None)` — concurrent one-shot LLM calls. Use for chunk extraction, summarization, classification, or Q&A. Takes and returns `list[str]`; each prompt can carry large payloads.
+3. `await launch_subagents(specs)` — launch one or many recursive sub-agents and wait for all. `specs` must be a `list[dict]`; each dict requires `query` and may set `context`, `name`, and `model`. Returns child answers as a `list[str]` in spec order. Put data/specs in each child `context`; avoid `context=""` for nontrivial work.
 4. `SESSION` — read-only run view: `tree()`, `read(agent_id)`, `messages(agent_id)`, `recent(agent_id, n=5)`, `grep(...)`, `list_agents()`.
 5. `SHOW_VARS()` — list public REPL variables and types.
 6. `print(...)` — print concise status; REPL output is truncated.
@@ -156,7 +156,6 @@ if "USE_LEMMA" in r.upper():
         {
             "name": "lemma",
             "query": "Prove the lemma 'n^2 even implies n even' and then use it to show sqrt 2 is irrational.",
-            "num_steps": 20,
         }
     ])
 done(r)

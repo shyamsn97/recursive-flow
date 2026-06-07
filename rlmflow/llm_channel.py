@@ -48,6 +48,7 @@ class LLMChannel:
         self,
         model: str,
         messages: list[dict[str, str]],
+        **llm_kwargs,
     ) -> tuple[str, LLMUsage]:
         """Run one model request through the shared channel."""
 
@@ -59,6 +60,7 @@ class LLMChannel:
             lane,
             messages,
             self._request_timeout,
+            llm_kwargs,
         )
         try:
             return future.result(timeout=self._request_timeout)
@@ -72,6 +74,7 @@ class LLMChannel:
         self,
         model: str,
         prompts: list[str],
+        **llm_kwargs,
     ) -> list[tuple[str, LLMUsage]]:
         """Run prompts through the shared channel and preserve input order."""
 
@@ -83,7 +86,7 @@ class LLMChannel:
         lane = self._lane(model)
         if not lane.thread_safe:
             return [
-                self.call(model, [{"role": "user", "content": prompt}])
+                self.call(model, [{"role": "user", "content": prompt}], **llm_kwargs)
                 for prompt in prompts
             ]
 
@@ -93,6 +96,7 @@ class LLMChannel:
                 lane,
                 [{"role": "user", "content": prompt}],
                 self._request_timeout,
+                llm_kwargs,
             ): index
             for index, prompt in enumerate(prompts)
         }
@@ -125,11 +129,15 @@ class LLMChannel:
         lane: LLMLane,
         messages: list[dict[str, str]],
         timeout: float | None,
+        llm_kwargs: dict,
     ) -> tuple[str, LLMUsage]:
+        request_kwargs = dict(llm_kwargs)
+        if timeout is not None:
+            request_kwargs["timeout"] = timeout
         if lane.thread_safe:
-            return lane.client.completion(messages, timeout=timeout)
+            return lane.client.completion(messages, **request_kwargs)
         with lane.lock:
-            return lane.client.completion(messages, timeout=timeout)
+            return lane.client.completion(messages, **request_kwargs)
 
 
 __all__ = ["LLMChannel"]

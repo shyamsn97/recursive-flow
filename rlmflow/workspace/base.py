@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import posixpath
 import re
 import shutil
@@ -15,6 +17,34 @@ from rlmflow.workspace.sync import engine_state_path, excluded, sync_lock_for
 
 if TYPE_CHECKING:
     from rlmflow.workspace.artifacts import ArtifactStore
+
+
+def graph_with_workspace(graph: Graph, workspace: BaseWorkspace) -> Graph:
+    """Return a graph copy stamped with ``workspace`` refs."""
+
+    out = graph.copy(deep=True)
+    ref = WorkspaceRef(root=str(workspace.root), branch_id=workspace.branch_id)
+    for agent in out.walk():
+        agent.workspace = ref
+        agent.branch_id = workspace.branch_id
+    return out
+
+
+def graph_fingerprint(graph: Graph) -> str:
+    """Deterministic hash of graph-owned durable state."""
+
+    payload = {
+        "root_agent_id": graph.agent_id,
+        "agents": [
+            {
+                "meta": agent.meta_dict(),
+                "nodes": [node.model_dump(mode="json") for node in agent.nodes],
+            }
+            for agent in graph.walk()
+        ],
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
 
 
 class ContextVariable:
@@ -103,6 +133,9 @@ class Session(ABC):
 
     @abstractmethod
     def write_state(self, state: Node) -> None: ...
+
+    @abstractmethod
+    def rewrite_graph(self, graph: Graph) -> None: ...
 
     @abstractmethod
     def read_transcript(self, agent_id: str) -> dict[str, Any] | None: ...
@@ -224,6 +257,51 @@ class BaseWorkspace(ABC):
     def ref(self) -> WorkspaceRef:
         return WorkspaceRef(root=str(self.root), branch_id=self.branch_id)
 
+    def sync_graph(
+        self,
+        graph: Graph,
+        *,
+        prune: bool = True,
+        restamp: bool = True,
+    ) -> Graph:
+        """Make durable graph-owned workspace state match ``graph``."""
+
+        synced = graph_with_workspace(graph, self) if restamp else graph.copy(deep=True)
+        self.session.rewrite_graph(synced)
+        if prune:
+            self.prune_graph_payloads(synced)
+        self._remember_graph_fingerprint(graph_fingerprint(synced))
+        return self.session.load_graph()
+
+    def sync_graph_if_changed(self, graph: Graph) -> Graph:
+        """Sync ``graph`` only if it differs from this workspace's graph."""
+
+        candidate = graph_with_workspace(graph, self)
+        candidate_hash = graph_fingerprint(candidate)
+        if getattr(self, "_graph_fingerprint", None) == candidate_hash:
+            return self.session.load_graph()
+
+        persisted = self.session.load_graph()
+        persisted_hash = graph_fingerprint(persisted)
+        if persisted_hash == candidate_hash:
+            self._remember_graph_fingerprint(persisted_hash)
+            return persisted
+
+        return self.sync_graph(candidate, restamp=False)
+
+    def mark_graph_synced(self, graph: Graph) -> Graph:
+        """Record that ``graph`` is this workspace's current durable graph."""
+
+        synced = graph_with_workspace(graph, self)
+        self._remember_graph_fingerprint(graph_fingerprint(synced))
+        return graph
+
+    def prune_graph_payloads(self, graph: Graph) -> None:
+        """Remove graph-owned payloads for agents absent from ``graph``."""
+
+    def _remember_graph_fingerprint(self, fingerprint: str) -> None:
+        self._graph_fingerprint = fingerprint
+
     def load_graph(self) -> Graph:
         """Load the current graph snapshot from this workspace's session."""
         return self.session.load_graph()
@@ -245,4 +323,6 @@ __all__ = [
     "ContextVariable",
     "Session",
     "build_graph",
+    "graph_fingerprint",
+    "graph_with_workspace",
 ]

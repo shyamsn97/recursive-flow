@@ -87,7 +87,7 @@ class SessionVariable:
                         matches.append(f"{agent.agent_id}:query:{line.strip()[:160]}")
                         if len(matches) >= max_results:
                             return "\n".join(matches)
-            for state in agent.states:
+            for state in agent.nodes:
                 for field in self._SEARCH_FIELDS:
                     text = getattr(state, field, "") or ""
                     if not text:
@@ -163,7 +163,7 @@ def _messages_from_graph(agent: Graph) -> list[dict[str, str]]:
     msgs: list[dict[str, str]] = []
     if agent.system_prompt:
         msgs.append({"role": "system", "content": agent.system_prompt})
-    msgs.extend(project_state_messages(agent.states, skip_empty=True))
+    msgs.extend(project_state_messages(agent.nodes, skip_empty=True))
     return msgs
 
 

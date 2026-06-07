@@ -1,0 +1,8 @@
+{
+  "agent_id": "root.batch-6",
+  "latest_node_id": "n_706b46fec312",
+  "seq": 8,
+  "type": "done_output",
+  "terminal": true,
+  "result": "haystack/file_0332.txt\t7515168"
+}

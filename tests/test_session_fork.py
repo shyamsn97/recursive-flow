@@ -15,6 +15,7 @@ from rlmflow import (
 )
 from rlmflow.llm import LLMClient
 from rlmflow.workspace import ContextVariable, FileContext, FileSession, FileStore
+from rlmflow.workspace import graph_fingerprint
 
 
 class DummyLLM(LLMClient):
@@ -102,7 +103,7 @@ def test_file_session_fork_copies_existing_state(tmp_path: Path):
     graph = dst.load_graph()
 
     assert "root" in graph
-    assert graph.states[0].id == root_state.id
+    assert graph.nodes[0].id == root_state.id
     assert (tmp_path / "b2" / "graph.json").exists()
 
 
@@ -139,7 +140,7 @@ def test_file_session_fork_handles_empty_source(tmp_path: Path):
     src = FileSession(tmp_path / "empty")
     dst = src.fork(tmp_path / "b2")
     graph = dst.load_graph()
-    assert not graph.states
+    assert not graph.nodes
     assert not graph.children
     assert (tmp_path / "b2").exists()
 
@@ -189,6 +190,31 @@ def test_context_fork_isolates_subsequent_writes(tmp_path: Path):
     dst.write("context", "diverged")
     assert src.read("context") == "shared context"
     assert dst.read("context") == "diverged"
+
+
+def test_workspace_sync_graph_prunes_payloads_and_caches_fingerprint(tmp_path: Path):
+    workspace = Workspace.create(tmp_path / "workspace", branch_id="repair")
+    stale = Graph(agent_id="root.stale", depth=1, parent_agent_id="root")
+    workspace.session.write_agent(stale)
+    workspace.session.write_state(UserQuery(agent_id="root.stale", seq=0))
+    workspace.context.write("context", "stale context", agent_id="root.stale")
+    workspace.path("notes.txt").write_text("keep me", encoding="utf-8")
+
+    graph = Graph(
+        agent_id="root",
+        nodes=[UserQuery(agent_id="root", seq=0, content="root")],
+    )
+
+    synced = workspace.sync_graph(graph)
+
+    assert list(synced.agents) == ["root"]
+    assert synced.workspace is not None
+    assert synced.workspace.root == str(workspace.root)
+    assert synced.branch_id == "repair"
+    assert workspace._graph_fingerprint == graph_fingerprint(synced)
+    assert not (workspace.root / "session" / "root.stale").exists()
+    assert not (workspace.root / "context" / "root.stale").exists()
+    assert workspace.path("notes.txt").read_text(encoding="utf-8") == "keep me"
 
 
 # ── RLMFlow start round-trip ────────────────────────────────────────

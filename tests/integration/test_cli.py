@@ -63,7 +63,7 @@ def _write_workspace(path: Path, final: Graph) -> Path:
         agent_dir.mkdir(parents=True)
         (agent_dir / "agent.json").write_text(json.dumps(sub.meta_dict()))
         (agent_dir / "session.jsonl").write_text(
-            "\n".join(s.model_dump_json() for s in sub.states) + "\n"
+            "\n".join(s.model_dump_json() for s in sub.nodes) + "\n"
         )
     return path
 

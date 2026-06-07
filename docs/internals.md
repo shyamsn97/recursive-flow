@@ -55,7 +55,7 @@ in `engine/*`. No middle category, no kwarg bags.**
 A `Graph` is a recursive structure. `graph[other_aid]` returns the
 `Graph` rooted at any descendant agent; per-agent invariants live as
 flat fields on `Graph` itself; sub-agents live in `graph.children`;
-the agent's trajectory lives in `graph.states`.
+the agent's trajectory lives in `graph.nodes`.
 
 ```python
 graph.agent_id         # str
@@ -68,12 +68,12 @@ graph.runtime          # RuntimeRef | None
 graph.parent_agent_id  # str | None
 graph.parent_node_id   # str | None — the ActionNode id that delegated us
 
-graph.states           # list[Node]  — this agent's trajectory
+graph.nodes           # list[Node]  — this agent's trajectory
 graph.children         # dict[str, Graph]  — direct sub-agents
 
 # subtree views
 graph.agents           # Mapping[agent_id, Graph]
-graph.nodes            # every Node in the subtree (queryable)
+graph.all_nodes            # every Node in the subtree (queryable)
 graph.edges            # derived flows_to / spawns edges
 ```
 
@@ -142,7 +142,7 @@ def step(self, graph):
     - `Exec(agent_id)` — agent rests at an `LLMOutput`.
     - `Resume(agent_id)` — agent rests at a `SupervisingOutput`
       whose children have all settled.
-    - `None` — terminal, empty, or stray half-written state.
+    - `None` — terminal, empty, or stray half-written node.
 
 - **Apply (I/O).** `self.apply_one(action)` materializes one
   `Action` against the persisted graph. Reloads the graph from
@@ -208,7 +208,7 @@ def step_llm(self, graph, last, *, force_final, model=None):
 Writes `LLMAction` *first*, then calls `reply_to` to talk to the
 model, then writes `LLMOutput`. The action-before-call ordering means
 `build_messages` (called inside `reply_to`) sees the action in
-`graph.states` for the in-progress turn — that's why the
+`graph.nodes` for the in-progress turn — that's why the
 `CONTINUE_ACTION` nudge gates on `LLMOutput` count, not `LLMAction`
 count.
 
@@ -219,7 +219,9 @@ executor. The channel owns the run-wide LLM concurrency cap
 (`RLMConfig.llm_max_concurrency`, falling back to the normal engine
 concurrency when unset), preserves batch result order, and uses
 per-request `LLMClient.completion(...) -> (text, usage)` so usage
-accounting never reads a racy shared `last_usage`.
+accounting never reads a racy shared `last_usage`. Batched one-shot
+queries forward common sampling kwargs (`temperature`, `top_p`,
+`max_tokens`, `stop`) through the same channel.
 
 #### `step_exec` — exec half
 
@@ -564,7 +566,7 @@ root
 ```
 
 Data location: `results` lives in the root REPL.
-`ResumeAction`/`ExecOutput` are trace/UI state — they're **not** a
+`ResumeAction`/`ExecOutput` are trace/UI nodes — they're **not** a
 prompt payload.
 
 #### Step 4 — next LLM turn
@@ -687,7 +689,7 @@ order.
 
 ## Persistence
 
-A workspace is the durable run. It separates per-agent state logs,
+A workspace is the durable run. It separates per-agent node logs,
 the graph manifest, and task payloads:
 
 ```text
@@ -697,7 +699,7 @@ workspace/
     root/
       agent.json              # per-agent invariants written once
       session.jsonl           # one Node per line, in seq order
-      latest.json             # cached summary of the latest state
+      latest.json             # cached summary of the latest node
       transcript.json         # full LLM chat history for this agent
     root.child/
       agent.json
@@ -724,9 +726,9 @@ workspace/
   inside `reply_to()`, and from `record_terminal()` when an agent
   finishes via `done(...)`. **Append-only**: each call adds just the
   new messages since the last call, never rewrites the prefix.
-- `session.load_graph()` — rehydrate the persisted state as the same
+- `session.load_graph()` — rehydrate the persisted node log as the same
   `Graph` shape the engine emits. `flows_to` edges are derived from
-  state order; `spawns` edges come straight from `graph.json`.
+  node order; `spawns` edges come straight from `graph.json`.
 
 ### Transcripts
 
@@ -922,10 +924,12 @@ retry.
 ### Max iterations
 
 `act_one` checks `iteration_count(graph)` (count of `LLMAction`
-nodes) against `graph.config["max_iterations"]`. When exhausted, it
-emits `CallLLM(force_final=True)`. `build_messages` swaps the
-trailing `CONTINUE_ACTION` for `FINAL_ANSWER_ACTION`, which strongly
-nudges the model to call `done(...)`.
+nodes) against `graph.config["max_iterations"]` only when that value is
+not `None`. By default root agents are unbounded (`max_iterations=None`) and
+children use `child_max_iterations=20`. When a configured cap is exhausted,
+`act_one` emits `CallLLM(force_final=True)`. `build_messages` swaps the trailing
+`CONTINUE_ACTION` for `FINAL_ANSWER_ACTION`, which strongly nudges the model to
+call `done(...)`.
 
 ### Terminate
 
@@ -968,7 +972,7 @@ parent's code can detect it (`isinstance(h, str)`) and recover.
 
 ## Where to read next
 
-- [`node_model.md`](node_model.md) — typed graph state taxonomy,
+- [`node_model.md`](node_model.md) — typed graph node taxonomy,
   action / observation alternation, delegation wait/resume flow.
 - [`control.md`](control.md) — user-facing step loop, forks, custom
   tools/prompts.

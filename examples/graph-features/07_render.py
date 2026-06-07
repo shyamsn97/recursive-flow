@@ -67,11 +67,11 @@ def build_graph() -> Graph:
             "parent_node_id": root_reply.id,
             "query": "write hello.py",
         },
-        states=[hello_q, hello_reply, hello_exec, hello_done],
+        nodes=[hello_q, hello_reply, hello_exec, hello_done],
     )
     return Graph.from_meta_dict(
         {"agent_id": "root", "depth": 0, "query": "write hello world"},
-        states=[root_q, root_call, root_reply, root_exec, root_sup, root_done],
+        nodes=[root_q, root_call, root_reply, root_exec, root_sup, root_done],
         children={"root.hello": hello},
     )
 

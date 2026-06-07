@@ -28,15 +28,15 @@ def append_node(session: Session, graph: Graph, node: Node) -> Node:
     ``agent_id`` or ``seq`` themselves — pass a node with the payload
     fields populated and this helper assigns identity.
 
-    Also mirrors the new node into the local ``graph.states`` list so
+    Also mirrors the new node into the local ``graph.nodes`` list so
     consecutive appends within one step compute ``seq`` correctly without
     needing to reload from the session between calls.
     """
-    next_seq = (graph.states[-1].seq + 1) if graph.states else 0
+    next_seq = (graph.nodes[-1].seq + 1) if graph.nodes else 0
     fields_dict = node.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
     fixed = node.__class__(agent_id=graph.agent_id, seq=next_seq, **fields_dict)
     session.write_state(fixed)
-    graph.states.append(fixed)
+    graph.nodes.append(fixed)
     return fixed
 
 
@@ -60,7 +60,7 @@ def create_pool(config: "RLMConfig", pool: Pool | Callable | None = None) -> Poo
 
 def iteration_count(graph: Graph) -> int:
     """How many :class:`LLMAction` nodes the agent has emitted so far."""
-    return sum(is_llm_action(s) for s in graph.states)
+    return sum(is_llm_action(s) for s in graph.nodes)
 
 
 def budget_exceeded(graph: Graph, max_budget: int | None) -> int | None:

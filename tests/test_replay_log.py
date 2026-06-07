@@ -24,7 +24,7 @@ def test_file_session_round_trips_states_through_load_graph(tmp_path):
 
     graph = session.load_graph()
     assert "root" in graph
-    states = graph.states
+    states = graph.nodes
     assert [s.id for s in states] == [q.id, r.id]
     assert states[-1].result == "done"
 
@@ -50,8 +50,8 @@ def test_in_memory_session_fork_isolates_subsequent_writes():
     forked = source.fork(None)
     forked.write_state(UserQuery(agent_id="root", seq=1, content="forked"))
 
-    src_contents = [s.content for s in source.load_graph().states]
-    dst_contents = [s.content for s in forked.load_graph().states]
+    src_contents = [s.content for s in source.load_graph().nodes]
+    dst_contents = [s.content for s in forked.load_graph().nodes]
     assert src_contents == ["source"]
     assert dst_contents == ["source", "forked"]
 

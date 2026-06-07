@@ -7,7 +7,7 @@ Everything you need to debug a run lives in the `Graph` snapshot returned by eve
 A `Graph` is a recursive structure: it represents **one agent**, and
 `graph[other_aid]` returns the `Graph` rooted at any descendant agent.
 Per-agent invariants live as flat fields on `Graph` itself; sub-agents
-live in `graph.children`; trajectory lives in `graph.states`.
+live in `graph.children`; trajectory lives in `graph.nodes`.
 
 ```python
 graph.agent_id     # str — this agent's id
@@ -20,18 +20,18 @@ graph.runtime      # RuntimeRef | None
 graph.model        # str | None — concrete model name (if set)
 graph.parent_agent_id / graph.parent_node_id
 
-graph.states       # list[Node] — this agent's trajectory (seq order)
+graph.nodes       # list[Node] — this agent's trajectory (seq order)
 graph.children     # dict[str, Graph] — direct sub-agents
 
 # subtree views (every agent / node / edge in the recursion)
 graph.agents       # Mapping[agent_id, Graph]
-graph.nodes        # every Node in the subtree (iterable, queryable)
+graph.all_nodes        # every Node in the subtree (iterable, queryable)
 graph.edges        # derived flows_to / spawns edges
 
 graph.tree()       # ASCII per-agent timeline
 ```
 
-`Node` carries only what changes per turn — the state payload
+`Node` carries only what changes per turn — the node payload
 (`content`, `code`, `output`, `reply`, `result`, `error`, token
 deltas) — and is tagged by its `type`. Trajectories strictly
 alternate **observation** and **action** nodes; every action is
@@ -58,9 +58,9 @@ Use `isinstance(n, CodeObservation)` for "any code result"
 
 ```python
 graph.tree()                                   # ASCII render
-graph.current()                                # latest state on the root agent
+graph.current()                                # latest node on the root agent
 graph.result()                                 # terminal answer
-graph.finished                                 # root agent's current state is terminal
+graph.finished                                 # root agent's current node and descendants are terminal
 graph.tokens()                                 # (in, out) — recursive by default
 graph.tokens(recursive=False)                  # (in, out) — just this agent
 
@@ -69,17 +69,17 @@ graph.agents["root.scanner_api"]               # same, but explicit
 graph.children                                 # dict[str, Graph] of spawned children
 graph.parent_id                                # str | None — id of the spawning agent
 
-graph.agents[aid].states                       # ordered list[Node] for one agent
+graph.agents[aid].nodes                       # ordered list[Node] for one agent
 graph.agents[aid].result()                     # the latest DoneOutput payload
 graph.agents[aid].tokens()                     # (in, out) for that subtree
 
-graph.nodes                                    # iterate every node (agent then seq)
-graph.nodes.find("n_abc...")                   # bare Node lookup by id
-graph.nodes.errors()                           # list[ErrorOutput]
-graph.nodes.results()                          # list[DoneOutput]
-graph.nodes.supervising()                      # list[SupervisingOutput]
-graph.nodes.where(type="llm_output", agent_id="root")  # kwargs match attrs
-graph.nodes.where(lambda n: n.type == "error_output")  # or pass a predicate
+graph.all_nodes                                    # iterate every node (agent then seq)
+graph.all_nodes.find("n_abc...")                   # bare Node lookup by id
+graph.all_nodes.errors()                           # list[ErrorOutput]
+graph.all_nodes.results()                          # list[DoneOutput]
+graph.all_nodes.supervising()                      # list[SupervisingOutput]
+graph.all_nodes.where(type="llm_output", agent_id="root")  # kwargs match attrs
+graph.all_nodes.where(lambda n: n.type == "error_output")  # or pass a predicate
 
 graph.edges.spawns()                           # list[Edge] — cross-agent delegation
 graph.edges.flows_to()                         # list[Edge] — same-agent continuity
@@ -87,7 +87,7 @@ graph.edges.flows_to()                         # list[Edge] — same-agent conti
 
 ## Workspace persistence
 
-A workspace is the durable run. It separates per-agent state logs,
+A workspace is the durable run. It separates per-agent node logs,
 the graph manifest, task payloads, and user-controlled artifact files:
 
 ```text
@@ -97,7 +97,7 @@ workspace/
     root/
       agent.json              # per-agent invariants written once
       session.jsonl           # one Node per line, in seq order
-      latest.json             # cached summary of the latest state
+      latest.json             # cached summary of the latest node
       transcript.json         # exact LLM conversation + per-message metadata
     root.child/
       agent.json
@@ -122,9 +122,9 @@ debugging prompt issues, replaying a turn under a different model, or
 auditing context growth. Read it via the `Session` API
 (`session.read_transcript(agent_id)`).
 
-`Workspace.open_path(...).load_graph()` rehydrates the persisted state
+`Workspace.open_path(...).load_graph()` rehydrates the persisted node log
 as the same `Graph` shape the engine emits — `flows_to` edges are
-derived from state order, `spawns` edges come straight from
+derived from node order, `spawns` edges come straight from
 `graph.json`. See [`internals.md`](internals.md#persistence) for the
 full session/transcript/context layout.
 
@@ -151,7 +151,7 @@ Or just `print(graph.tree())` in a step loop.
 
 ## Gantt swimlane
 
-One row per agent, one column per step, colored by state type. Makes
+One row per agent, one column per step, colored by node type. Makes
 parallelism and the critical path obvious at a glance.
 
 ```python

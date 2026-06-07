@@ -23,7 +23,7 @@ emitted) is therefore two `step()` rounds: an LLM half
 (`obs → LLMAction → LLMOutput`) and an exec half
 (`LLMOutput → ExecAction → CodeObservation`). This is the
 finest-grained reproducible step the engine exposes. See
-[`node_model.md`](node_model.md) for the typed state flow.
+[`node_model.md`](node_model.md) for the typed node flow.
 
 ## Eager Children
 
@@ -40,7 +40,7 @@ agent = RLMFlow(
     runtime=...,
     config=RLMConfig(
         max_depth=2,
-        max_iterations=30,
+        child_max_iterations=20,
         max_concurrency=8,
         eager_children=True,
     ),
@@ -74,7 +74,7 @@ while not graph.finished:
     graph = agent.step(graph)
 ```
 
-The workspace session is the saved-run state.
+The workspace session is the saved run log.
 
 ## Rewind
 
@@ -137,7 +137,7 @@ while not graph.finished:
     graph = agent.step(graph)
 ```
 
-The engine reads from `graph.states`, appends new states through the
+The engine reads from `graph.nodes`, appends new nodes through the
 session, and produces a fresh snapshot on every `step`. There is no
 in-memory node graph to keep in sync with disk.
 
@@ -192,7 +192,7 @@ Or subclass `RLMFlow` and override `build_system_prompt`,
 
 ## Session, Context, And Artifacts
 
-`Workspace.session` stores the per-agent state log and the graph manifest.
+`Workspace.session` stores the per-agent node log and the graph manifest.
 The convenience `workspace.load_graph()` is the normal way to reopen the
 current snapshot:
 
@@ -264,7 +264,7 @@ Agents delegate through one launcher, which must be awaited:
 ```python
 # One child — still pass a one-item list of dict specs, and unpack the result.
 [answer] = await launch_subagents([
-    {"name": "single", "query": query, "num_steps": None, "context": data},
+    {"name": "single", "query": query, "context": data},
 ])
 
 # Many children in parallel — returns finish strings in spec order.

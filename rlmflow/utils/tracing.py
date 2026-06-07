@@ -19,7 +19,7 @@ def json_logs(graph: Graph, path: str | Path) -> Path:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("w", encoding="utf-8") as f:
-        for node in graph.nodes:
+        for node in graph.all_nodes:
             f.write(json.dumps(node.to_dict(), default=str) + "\n")
     return p
 

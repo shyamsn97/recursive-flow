@@ -33,7 +33,7 @@ def inject(
             raise ValueError(
                 f"cannot queue multiple pending actions for {sub.agent_id!r}"
             )
-        sub.states.append(fixed)
+        sub.nodes.append(fixed)
     return out
 
 
@@ -78,7 +78,7 @@ def node_for_injection(sub: Any, node: Node) -> Node:
         exclude={"id", "agent_id", "seq"},
         mode="python",
     )
-    next_seq = (sub.states[-1].seq + 1) if sub.states else 0
+    next_seq = (sub.nodes[-1].seq + 1) if sub.nodes else 0
     return node.__class__(
         agent_id=sub.agent_id,
         seq=next_seq,

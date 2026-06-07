@@ -85,10 +85,15 @@ runtime = DockerRuntime(
   inspect the suite.
 - `drop_in_llm.py` — shows that `RLMFlow` satisfies `LLMClient`, so you can nest
   agents or swap an agent in anywhere a plain LLM is accepted. No CLI flags.
+- `advanced/replay_resume.py` — loads the needle-haystack trace, injects a
+  hanging child action, replaces it with a fixed result, and continues with a
+  live LLM.
 - `skills.py` — writes a user-authored `SKILL.md` via `workspace.artifacts` and
   renders it through a dynamic callable prompt section. Defaults to the checked-in
   `examples/example-workspaces/skills-demo` workspace and requires an OpenAI API key.
-- `tinker_agent.py` — runs `RLMFlow` with `TinkerClient` inference. Requires
-  `TINKER_API_KEY` and the `rlmflow[tinker]` optional dependencies.
+- `tinker_agent.py` — runs `RLMFlow` with `TinkerClient` inference, shows the live
+  terminal graph, and saves durable state under
+  `examples/example-workspaces/tinker-workspace`. Requires `TINKER_API_KEY` and
+  the `rlmflow[tinker]` optional dependencies.
 - `view_demo.py` — builds fake graph snapshots and opens the state viewer. No LLM or
   runtime needed.

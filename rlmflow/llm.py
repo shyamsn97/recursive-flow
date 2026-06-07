@@ -107,6 +107,9 @@ class OpenAIClient(LLMClient):
         request_kwargs = {}
         if kwargs.get("timeout") is not None:
             request_kwargs["timeout"] = kwargs["timeout"]
+        for key in ("temperature", "top_p", "max_tokens", "stop"):
+            if kwargs.get(key) is not None:
+                request_kwargs[key] = kwargs[key]
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
@@ -187,9 +190,15 @@ class AnthropicClient(LLMClient):
         request_kwargs = {}
         if kwargs.get("timeout") is not None:
             request_kwargs["timeout"] = kwargs["timeout"]
+        max_tokens = kwargs.get("max_tokens", self.max_tokens)
+        for key in ("temperature", "top_p"):
+            if kwargs.get(key) is not None:
+                request_kwargs[key] = kwargs[key]
+        if kwargs.get("stop") is not None:
+            request_kwargs["stop_sequences"] = kwargs["stop"]
         resp = self.client.messages.create(
             model=self.model,
-            max_tokens=self.max_tokens,
+            max_tokens=max_tokens,
             system=system,
             messages=chat_msgs,
             **request_kwargs,

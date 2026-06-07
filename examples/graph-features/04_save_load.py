@@ -52,7 +52,7 @@ def main() -> None:
         banner("1. Graph.save / Graph.load — single-file JSON")
         g = Graph.from_meta_dict(
             {"agent_id": "root", "depth": 0, "query": "hi"},
-            states=[
+            nodes=[
                 UserQuery(agent_id="root", seq=0, content="hi"),
                 DoneOutput(agent_id="root", seq=1, result="hello"),
             ],
@@ -65,8 +65,8 @@ def main() -> None:
         print(f"identical roundtrip: {g.to_dict() == loaded.to_dict()}")
 
         # Peek at the JSON shape so you know what's persisted.
-        print("\nfirst-state JSON keys:")
-        first = json.loads(path.read_text())["states"][0]
+        print("\nfirst-node JSON keys:")
+        first = json.loads(path.read_text())["nodes"][0]
         for k, v in first.items():
             print(f"  {k:<10} {v!r}")
 
@@ -90,8 +90,8 @@ def main() -> None:
         reloaded = workspace.load_graph()
         print(f"\nload_graph(): agents={list(reloaded.agents)} "
               f"result={reloaded.result()!r}")
-        print(f"states match in-memory: "
-              f"{[n.type for n in reloaded.nodes] == [n.type for n in graph.nodes]}")
+        print(f"nodes match in-memory: "
+              f"{[n.type for n in reloaded.all_nodes] == [n.type for n in graph.all_nodes]}")
 
 
 if __name__ == "__main__":

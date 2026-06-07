@@ -75,7 +75,7 @@ def _error_graph() -> Graph:
         depth=1,
         parent_agent_id="root",
         parent_node_id=root_query.id,
-        states=(
+        nodes=(
             ErrorOutput(
                 agent_id="root.child",
                 seq=0,
@@ -87,7 +87,7 @@ def _error_graph() -> Graph:
     return Graph(
         agent_id="root",
         query="boom",
-        states=(root_query,),
+        nodes=(root_query,),
         children={"root.child": child},
     )
 
@@ -237,7 +237,7 @@ def test_json_logs_writes_one_line_per_state(tmp_path):
     final = _run(_agent(), "jsonl-test")[-1]
     p = json_logs(final, tmp_path / "states.jsonl")
     lines = p.read_text(encoding="utf-8").strip().splitlines()
-    assert len(lines) == len(final.nodes)
+    assert len(lines) == len(final.all_nodes)
     for line in lines:
         assert '"id":' in line
         assert '"type":' in line

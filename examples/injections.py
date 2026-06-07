@@ -36,7 +36,7 @@ def banner(title: str) -> None:
 
 
 def state_types(graph) -> list[str]:
-    return [state.type for state in graph.states]
+    return [state.type for state in graph.nodes]
 
 
 def assert_types(graph, expected: list[str]) -> None:
@@ -47,7 +47,7 @@ def assert_types(graph, expected: list[str]) -> None:
 def print_states(label: str, graph) -> None:
     print(f"\n{label}")
     print("state types:", " -> ".join(state_types(graph)))
-    for state in graph.states:
+    for state in graph.nodes:
         print(f"{state.seq}: {state.type}")
 
 
@@ -74,7 +74,7 @@ def observation_injection() -> None:
     assert_types(graph, ["user_query"])
     assert_types(injected, ["user_query", "exec_output"])
 
-    extra = injected.states[-1]
+    extra = injected.nodes[-1]
     extra_keys = set(extra.to_dict())
     assert isinstance(extra, ExecOutput)
     assert "injected" not in extra_keys

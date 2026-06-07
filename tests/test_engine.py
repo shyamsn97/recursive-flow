@@ -29,6 +29,7 @@ from rlmflow import (
     LLMUsage,
     RLMConfig,
     RLMFlow,
+    UserQuery,
     Workspace,
     is_done,
     is_errored,
@@ -45,13 +46,13 @@ from tests.helpers import StaticLLM, make_agent, run_to_completion
 
 def _types(g: Graph) -> list[str]:
     """Trajectory types in order — strict obs/action alternation."""
-    return [s.type for s in g.states]
+    return [s.type for s in g.nodes]
 
 
 def _assert_seqs_monotonic(g: Graph) -> None:
     """Every agent in the subtree has seq 0..n-1 with no gaps or dupes."""
     for sub in g.walk():
-        seqs = [s.seq for s in sub.states]
+        seqs = [s.seq for s in sub.nodes]
         assert seqs == list(range(len(seqs))), (
             f"{sub.agent_id}: seqs={seqs} (expected 0..{len(seqs) - 1})"
         )
@@ -68,12 +69,12 @@ def _assert_spawn_links(g: Graph, spawner_seq: int | None = None) -> None:
     """
     if not g.children:
         return
-    valid_ids = {s.id for s in g.states}
+    valid_ids = {s.id for s in g.nodes}
     for child in g.children.values():
         assert child.parent_agent_id == g.agent_id
         assert child.parent_node_id in valid_ids
         if spawner_seq is not None:
-            assert child.parent_node_id == g.states[spawner_seq].id
+            assert child.parent_node_id == g.nodes[spawner_seq].id
 
 
 _StaticLLM = StaticLLM
@@ -90,7 +91,7 @@ def test_start_records_query_node_at_seq_zero():
     assert graph.root_agent_id == "root"
     assert graph.query == "say ok"
     assert _types(graph) == ["user_query"]
-    assert graph.states[0].seq == 0
+    assert graph.nodes[0].seq == 0
 
 
 def test_step_drives_one_shot_to_result():
@@ -104,6 +105,53 @@ def test_step_drives_one_shot_to_result():
     assert is_done(graph.current())
     assert graph.result() == "ok"
     assert _types(graph) == ["user_query", "llm_action", "llm_output", "exec_action", "done_output"]
+
+
+def test_step_skips_workspace_sync_when_graph_fingerprint_matches(tmp_path, monkeypatch):
+    workspace = Workspace.create(tmp_path)
+    agent = RLMFlow(
+        StaticLLM('```repl\ndone("ok")\n```'),
+        workspace=workspace,
+        config=RLMConfig(max_iterations=3),
+    )
+    graph = agent.start("say ok")
+    calls = 0
+    original = workspace.sync_graph
+
+    def counting_sync(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(workspace, "sync_graph", counting_sync)
+
+    agent.step(graph)
+
+    assert calls == 0
+
+
+def test_step_syncs_workspace_when_graph_fingerprint_differs(tmp_path, monkeypatch):
+    workspace = Workspace.create(tmp_path)
+    agent = RLMFlow(
+        StaticLLM('```repl\ndone("ok")\n```'),
+        workspace=workspace,
+        config=RLMConfig(max_iterations=3),
+    )
+    graph = agent.start("old query")
+    edited = graph.replace_last_observation("root", UserQuery(content="edited query"))
+    calls = 0
+    original = workspace.sync_graph
+
+    def counting_sync(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(workspace, "sync_graph", counting_sync)
+
+    agent.step(edited)
+
+    assert calls == 1
 
 
 def test_graph_inject_returns_new_graph_with_appended_node():
@@ -400,8 +448,8 @@ def test_llm_query_batched_uses_shared_channel_and_records_batch_usage():
         def __init__(self) -> None:
             self.calls = []
 
-        def batch(self, model, prompts):
-            self.calls.append((model, prompts))
+        def batch(self, model, prompts, **kwargs):
+            self.calls.append((model, prompts, kwargs))
             return [
                 (prompt.upper(), LLMUsage(input_tokens=index + 1, output_tokens=1))
                 for index, prompt in enumerate(prompts)
@@ -411,8 +459,25 @@ def test_llm_query_batched_uses_shared_channel_and_records_batch_usage():
     channel = _FakeChannel()
     agent.llm_channel = channel
 
-    assert agent.llm_query_batched(["alpha", "beta"]) == ["ALPHA", "BETA"]
-    assert channel.calls == [("default", ["alpha", "beta"])]
+    assert agent.llm_query_batched(
+        ["alpha", "beta"],
+        temperature=0.2,
+        top_p=0.9,
+        max_tokens=64,
+        stop="DONE",
+    ) == ["ALPHA", "BETA"]
+    assert channel.calls == [
+        (
+            "default",
+            ["alpha", "beta"],
+            {
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "max_tokens": 64,
+                "stop": "DONE",
+            },
+        )
+    ]
     assert agent.last_usage == LLMUsage(input_tokens=3, output_tokens=2)
 
 
@@ -680,7 +745,7 @@ def test_tight_pattern_records_resume_before_result():
     _assert_seqs_monotonic(g)
     _assert_spawn_links(g)
 
-    sup = next(s for s in g.states if is_supervising(s))
+    sup = next(s for s in g.nodes if is_supervising(s))
     assert set(sup.waiting_on) == {"root.child"}
     assert g.result() == "p:c"
 
@@ -886,7 +951,7 @@ def test_tight_pattern_with_many_siblings_shares_one_supervising():
         "resume_action", "done_output",
     ]
     assert set(g.children) == {f"root.c{i}" for i in range(n)}
-    sup = next(s for s in g.states if is_supervising(s))
+    sup = next(s for s in g.nodes if is_supervising(s))
     assert set(sup.waiting_on) == set(g.children)
     _assert_seqs_monotonic(g)
     _assert_spawn_links(g)
@@ -1032,7 +1097,7 @@ def test_intra_agent_loop_then_delegation():
         "resume_action", "done_output",
     ]
     _assert_seqs_monotonic(g)
-    assert g["root.child"].parent_node_id == g.states[7].id
+    assert g["root.child"].parent_node_id == g.nodes[7].id
 
 
 # ── recursive depth ──────────────────────────────────────────────────
@@ -1084,7 +1149,7 @@ def test_depth_three_chain_each_level_records_supervising():
             "llm_action", "llm_output", "exec_action", "supervising_output",
             "resume_action", "done_output",
         ]
-        sup = next(s for s in sub.states if is_supervising(s))
+        sup = next(s for s in sub.nodes if is_supervising(s))
         assert set(sup.waiting_on) == {aid + ".child"}
     assert _types(g[chain[-1]]) == ["user_query", "llm_action", "llm_output", "exec_action", "done_output"]
     _assert_seqs_monotonic(g)
@@ -1173,7 +1238,7 @@ def test_depth_five_mixed_branching_tree():
             "llm_action", "llm_output", "exec_action", "supervising_output",
             "resume_action", "done_output",
         ], aid
-            sup = next(s for s in sub.states if is_supervising(s))
+            sup = next(s for s in sub.nodes if is_supervising(s))
             assert set(sup.waiting_on) == set(sub.children)
         assert sub.depth == aid.count(".")
     _assert_seqs_monotonic(g)
@@ -1219,7 +1284,7 @@ def test_launch_subagents_one_spec_runs_through_engine():
             if "leaf task" in convo:
                 return '```repl\ndone("leaf-answer")\n```'
             return (
-                '```repl\n[r] = await launch_subagents([{"query": "leaf task", "num_steps": 5}])\n'
+                '```repl\n[r] = await launch_subagents([{"query": "leaf task"}])\n'
                 'done("parent:" + r)\n```'
             )
 
@@ -1242,7 +1307,7 @@ def test_launch_subagents_parallel_returns_ordered_results():
                 return '```repl\ndone("B")\n```'
             return (
                 '```repl\nrs = await launch_subagents('
-                '[{"query": "task a", "num_steps": 5}, {"query": "task b", "num_steps": 5}])\n'
+                '[{"query": "task a"}, {"query": "task b"}])\n'
                 'done("|".join(rs))\n```'
             )
 
@@ -1294,6 +1359,80 @@ def test_max_iterations_forces_final_answer_turn():
 
     assert final.result() == "final answer"
     assert llm.calls == 2
+
+
+def test_default_iteration_config_is_unbounded_root_and_bounded_children(tmp_path):
+    workspace = Workspace.create(tmp_path / "ws")
+    agent = RLMFlow(
+        _StaticLLM('```repl\ndone("ok")\n```'),
+        workspace=workspace,
+        config=RLMConfig(max_depth=1),
+    )
+    graph = agent.start("parent")
+
+    assert graph.config["max_iterations"] is None
+    assert graph.config["child_max_iterations"] == 20
+
+    handle = agent.spawn_child(
+        "root",
+        graph.current().id,
+        name="child",
+        query="child",
+        context="",
+    )
+
+    child = agent.session.load_graph().agents[handle.agent_id]
+    assert child.config["max_iterations"] == 20
+
+
+def test_child_iteration_config_is_global_engine_policy(tmp_path):
+    workspace = Workspace.create(tmp_path / "ws")
+    agent = RLMFlow(
+        _StaticLLM('```repl\ndone("ok")\n```'),
+        workspace=workspace,
+        config=RLMConfig(max_depth=1, child_max_iterations=7),
+    )
+    graph = agent.start("parent")
+
+    first = agent.spawn_child(
+        "root",
+        graph.current().id,
+        name="first",
+        query="child",
+        context="",
+    )
+    second = agent.spawn_child(
+        "root",
+        graph.current().id,
+        name="second",
+        query="child",
+        context="",
+    )
+
+    loaded = agent.session.load_graph()
+    assert loaded.agents[first.agent_id].config["max_iterations"] == 7
+    assert loaded.agents[second.agent_id].config["max_iterations"] == 7
+
+
+def test_child_iteration_config_can_be_unbounded_globally(tmp_path):
+    workspace = Workspace.create(tmp_path / "ws")
+    agent = RLMFlow(
+        _StaticLLM('```repl\ndone("ok")\n```'),
+        workspace=workspace,
+        config=RLMConfig(max_depth=1, child_max_iterations=None),
+    )
+    graph = agent.start("parent")
+
+    handle = agent.spawn_child(
+        "root",
+        graph.current().id,
+        name="child",
+        query="child",
+        context="",
+    )
+
+    child = agent.session.load_graph().agents[handle.agent_id]
+    assert child.config["max_iterations"] is None
 
 
 def test_terminate_marks_every_running_agent():
@@ -1354,7 +1493,7 @@ def test_no_code_block_records_error_node():
 
     agent = RLMFlow(_Mute(), runtime=LocalRuntime(), config=RLMConfig(max_iterations=5, max_depth=0))
     g = _run(agent, agent.start("p"))
-    assert any(is_errored(s) and s.error == "no_code_block" for s in g.states)
+    assert any(is_errored(s) and s.error == "no_code_block" for s in g.nodes)
 
 
 def test_no_code_block_keeps_action_in_trajectory():
@@ -1382,12 +1521,12 @@ def test_no_code_block_keeps_action_in_trajectory():
         "llm_action", "llm_output", "exec_action", "error_output",
         "llm_action", "llm_output", "exec_action", "done_output",
     ]
-    bad_output = g.states[2]
+    bad_output = g.nodes[2]
     assert bad_output.code == ""
     assert "Sure!" in bad_output.reply
-    empty_exec = g.states[3]
+    empty_exec = g.nodes[3]
     assert empty_exec.type == "exec_action" and empty_exec.code == ""
-    err = g.states[4]
+    err = g.nodes[4]
     assert is_errored(err) and err.error == "no_code_block"
     _assert_seqs_monotonic(g)
 
@@ -1425,7 +1564,7 @@ def test_resume_node_does_not_inject_child_result_into_prompt():
     g = _run(agent, agent.start("parent task"))
 
     assert g.result() == f"parent:{secret}"
-    resume = next(s for s in g.states if is_resumed(s))
+    resume = next(s for s in g.nodes if is_resumed(s))
     assert resume.resumed_from == ["root.child"]
     assert resume.output == stdout_marker
     assert stdout_marker in resume.content
@@ -1665,11 +1804,11 @@ def test_graph_node_filters_separate_errors_results_and_predicates():
     agent = RLMFlow(_Stumbling(), runtime=LocalRuntime(), config=RLMConfig(max_iterations=5, max_depth=0))
     g = _run(agent, agent.start("p"))
 
-    errors = g.nodes.errors()
-    results = g.nodes.results()
-    llm_actions = g.nodes.where(type="llm_action")
-    llm_outputs = g.nodes.where(type="llm_output")
-    on_root = g.nodes.where(lambda e: e.agent_id == "root")
+    errors = g.all_nodes.errors()
+    results = g.all_nodes.results()
+    llm_actions = g.all_nodes.where(type="llm_action")
+    llm_outputs = g.all_nodes.where(type="llm_output")
+    on_root = g.all_nodes.where(lambda e: e.agent_id == "root")
 
     assert errors and all(is_errored(e) for e in errors)
     assert results and all(is_done(r) for r in results)

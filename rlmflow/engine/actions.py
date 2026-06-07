@@ -31,6 +31,7 @@ from rlmflow.engine.config import RLMConfig
 from rlmflow.engine.seq import iteration_count
 from rlmflow.graph import (
     ErrorOutput,
+    ExecAction,
     ExecOutput,
     Graph,
     UserQuery,
@@ -70,6 +71,13 @@ class Exec:
 
 
 @dataclass(frozen=True, slots=True)
+class RunPendingExec:
+    """Plan to run an already-committed ``ExecAction``."""
+
+    agent_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class Resume:
     """Plan to resume a paused generator with settled child results.
 
@@ -81,7 +89,7 @@ class Resume:
     agent_id: str
 
 
-Action = CallLLM | Exec | Resume
+Action = CallLLM | Exec | RunPendingExec | Resume
 ActionPlan = dict[str, Action]
 
 
@@ -115,10 +123,15 @@ def act_one(
     if is_llm_output(cur):
         return Exec(agent_id=graph.agent_id)
 
+    if isinstance(cur, ExecAction):
+        return RunPendingExec(agent_id=graph.agent_id)
+
     if isinstance(cur, (UserQuery, ExecOutput, ErrorOutput)):
         iters = iteration_count(graph)
         max_iter = graph.config.get("max_iterations", config.max_iterations)
-        force_final = iters >= max_iter or graph.agent_id in terminate_requested
+        force_final = (
+            max_iter is not None and iters >= max_iter
+        ) or graph.agent_id in terminate_requested
         return CallLLM(agent_id=graph.agent_id, force_final=force_final)
 
     # Stray ActionNode without its paired observation — half-written

@@ -30,12 +30,15 @@ class NodeScheduler:
             cur = agent.current()
             if cur is None:
                 return
+            if cur.terminal:
+                for child in agent.children.values():
+                    if not child.finished:
+                        visit(child.agent_id)
+                return
             if is_supervising(cur):
-                waiting = [
-                    graph.agents[child_aid]
-                    for child_aid in cur.waiting_on
-                    if child_aid in graph.agents
-                ]
+                if any(child_aid not in graph.agents for child_aid in cur.waiting_on):
+                    return
+                waiting = [graph.agents[child_aid] for child_aid in cur.waiting_on]
                 if all(child.finished for child in waiting):
                     runnable.append(aid)
                     return

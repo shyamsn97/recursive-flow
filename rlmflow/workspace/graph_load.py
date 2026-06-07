@@ -11,7 +11,7 @@ def build_graph(
     *,
     root_agent_id: str,
     agent_dicts: dict[str, dict[str, Any]],
-    agent_states: dict[str, tuple[Node, ...]],
+    agent_nodes: dict[str, tuple[Node, ...]],
 ) -> Graph:
     """Recover the recursive :class:`Graph` from flat per-agent dicts."""
 
@@ -24,11 +24,11 @@ def build_graph(
 
     def build(aid: str) -> Graph:
         data = agent_dicts.get(aid, {"agent_id": aid})
-        states = agent_states.get(aid, ())
+        nodes = agent_nodes.get(aid, ())
         children = {
             child_aid: build(child_aid) for child_aid in children_by_parent.get(aid, [])
         }
-        return Graph.from_meta_dict(data, states=states, children=children)
+        return Graph.from_meta_dict(data, nodes=nodes, children=children)
 
     if root_agent_id not in agent_dicts:
         return Graph(agent_id=root_agent_id)

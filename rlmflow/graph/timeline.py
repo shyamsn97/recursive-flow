@@ -87,7 +87,7 @@ def retrace_steps(graph: Graph) -> list[Graph]:
         snap = graph.copy(deep=True)
         for sub in snap.walk():
             keep = counts.get(sub.agent_id, 0)
-            del sub.states[keep:]
+            del sub.nodes[keep:]
         snapshots.append(snap)
     return snapshots
 
@@ -102,7 +102,7 @@ def _execution_ticks(graph: Graph) -> list[list[tuple[str, int]]]:
     interleaving where every runnable agent runs its next step in
     parallel.
     """
-    states = {aid: list(sub.states) for aid, sub in graph.agents.items()}
+    states = {aid: list(sub.nodes) for aid, sub in graph.agents.items()}
 
     # child_aid -> (parent_aid, idx of the SupervisingOutput that
     # spawned it). First match wins so a child re-listed in a later

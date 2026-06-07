@@ -55,6 +55,21 @@ class _OrderedUnsafeLLM(LLMClient):
         return prompt.upper(), LLMUsage(input_tokens=len(prompt), output_tokens=1)
 
 
+class _KwargsLLM(LLMClient):
+    thread_safe = True
+
+    def __init__(self) -> None:
+        self.kwargs: list[dict] = []
+
+    def chat(self, messages, *args, **kwargs) -> str:
+        text, _usage = self.completion(messages, *args, **kwargs)
+        return text
+
+    def completion(self, messages, *args, **kwargs) -> tuple[str, LLMUsage]:
+        self.kwargs.append(dict(kwargs))
+        return messages[-1]["content"], LLMUsage(input_tokens=1, output_tokens=1)
+
+
 def test_llm_channel_preserves_batch_order_when_calls_finish_out_of_order():
     client = _ObservedLLM(thread_safe=True, delay=0.01)
     channel = LLMChannel(
@@ -68,6 +83,44 @@ def test_llm_channel_preserves_batch_order_when_calls_finish_out_of_order():
 
     assert [text for text, _usage in pairs] == ["SLOW", "FAST"]
     assert client.max_active == 2
+
+
+def test_llm_channel_forwards_sampling_kwargs_to_batch_requests():
+    client = _KwargsLLM()
+    channel = LLMChannel(
+        {"default": client},
+        max_concurrency=2,
+        request_timeout=5,
+    )
+    try:
+        pairs = channel.batch(
+            "default",
+            ["a", "b"],
+            temperature=0.2,
+            top_p=0.9,
+            max_tokens=128,
+            stop=["DONE"],
+        )
+    finally:
+        channel.shutdown()
+
+    assert [text for text, _usage in pairs] == ["a", "b"]
+    assert client.kwargs == [
+        {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": 128,
+            "stop": ["DONE"],
+            "timeout": 5,
+        },
+        {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": 128,
+            "stop": ["DONE"],
+            "timeout": 5,
+        },
+    ]
 
 
 def test_llm_channel_global_cap_holds_across_nested_callers():

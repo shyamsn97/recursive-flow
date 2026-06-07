@@ -27,7 +27,7 @@ Each step:
 3. append new nodes,
 4. return a freshly loaded `Graph`.
 
-Engine never mutates `Graph.states` directly.
+Engine never mutates `Graph.nodes` directly.
 
 ### Node meanings are strict
 
@@ -247,7 +247,7 @@ Replace `_record_state` with a plain function:
 
 ```python
 def append_node(session: Session, graph: Graph, node: Node) -> Node:
-    next_seq = graph.states[-1].seq + 1 if graph.states else 0
+    next_seq = graph.nodes[-1].seq + 1 if graph.nodes else 0
     fields = node.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
     fixed = node.__class__(agent_id=graph.agent_id, seq=next_seq, **fields)
     session.write_state(fixed)
@@ -513,7 +513,7 @@ Move it out of the class. New module-level function at the top of the file
 
 ```python
 def append_node(session: Session, graph: Graph, node: Node) -> Node:
-    next_seq = (graph.states[-1].seq + 1) if graph.states else 0
+    next_seq = (graph.nodes[-1].seq + 1) if graph.nodes else 0
     fields = node.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
     fixed = node.__class__(agent_id=graph.agent_id, seq=next_seq, **fields)
     session.write_state(fixed)

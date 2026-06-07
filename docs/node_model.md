@@ -170,7 +170,7 @@ Use the predicate helpers from `rlmflow.graph` when inspecting traces:
 ```python
 from rlmflow.graph import is_code_observation, is_done, is_supervising
 
-for node in graph.nodes:
+for node in graph.all_nodes:
     if is_supervising(node):
         print(node.agent_id, "waiting on", node.waiting_on)
     elif is_code_observation(node):

@@ -14,7 +14,7 @@ all through the same clean coding interface.
 
 **rlmflow** turns that recursive run into a live execution graph. Every
 query, action, observation, child call, wait, resume, and result is a
-typed state you can inspect, step, retrace, resume, fork, and branch into
+typed node you can inspect, step, retrace, resume, fork, and branch into
 new workspaces. It is for people building long-context agents, recursive
 coding agents, and research loops where the execution trace needs to be
 as controllable as the final answer is useful. Each `start` / `step`
@@ -34,11 +34,11 @@ whole run as one recursive type:
 - **`Graph`** — one agent snapshot. Carries the agent's run-invariants
   flat on itself (`agent_id`, `depth`, `query`, `system_prompt`,
   `config`, `workspace`, `runtime`, `model`, `branch_id`,
-  `parent_agent_id`, `parent_node_id`), plus its `states` trajectory
+  `parent_agent_id`, `parent_node_id`), plus its `nodes` trajectory
   and a `children: dict[str, Graph]` of sub-agents. Cross-agent
   navigation is `graph[other_aid]`; subtree views are `graph.agents`,
-  `graph.nodes`, `graph.edges`.
-- **`Node`** — one immutable state in an agent's trajectory. The
+  `graph.all_nodes`, `graph.edges`.
+- **`Node`** — one immutable node in an agent's trajectory. The
   trajectory is a strict alternation of **observations** (inputs the
   system received) and **actions** (work the system did). Nine leaf
   types live under four base classes — see
@@ -100,6 +100,7 @@ UserQuery(root)
 pip install rlmflow               # core
 pip install rlmflow[openai]       # + OpenAI client
 pip install rlmflow[anthropic]    # + Anthropic client
+pip install rlmflow[tinker]       # + Tinker inference client
 pip install rlmflow[dspy]         # + DSPy adapter
 pip install rlmflow[sandbox]      # + Modal, E2B, and Daytona runtimes
 pip install rlmflow[viewer]       # + Gradio viewer (plotly)
@@ -113,6 +114,9 @@ From source:
 git clone https://github.com/shyamsn97/rlmflow && cd rlmflow
 pip install -e .
 ```
+
+For local development, `make install` runs cleanup, formatting/lint checks
+including `ruff check .`, then installs the package.
 
 ## Quick start
 
@@ -140,7 +144,7 @@ agent = RLMFlow(
     llm_client=OpenAIClient("gpt-5"),
     runtime=runtime,
     workspace=workspace,
-    config=RLMConfig(max_depth=2, max_iterations=30),
+    config=RLMConfig(max_depth=2),
     llm_clients={ # additional llm clients to be chosen to delegate
         "fast": {
             "model": OpenAIClient("gpt-5-mini"),
@@ -159,10 +163,18 @@ print(graph.result())
 open_viewer(workspace)
 ```
 
+By default, root agents are not capped by an iteration count
+(`max_iterations=None`), while delegated children get a smaller cap
+(`child_max_iterations=20`). Set `max_iterations` when you want a total root
+run cap, and set `child_max_iterations` when you want a different default for
+children.
+
 All model calls for a run share one scheduler channel. Normal agent LLM
 turns and `llm_query_batched(...)` both respect the same
 `RLMConfig.llm_max_concurrency` cap, and usage is recorded per request
-rather than read from shared client state.
+rather than read from shared client state. `llm_query_batched(...)` also
+accepts common sampling kwargs: `temperature`, `top_p`, `max_tokens`, and
+`stop`.
 
 To let child agents drain work-conservingly after a parent reaches its
 delegation wait (`await launch_subagents([...])`), enable `eager_children`:
@@ -173,7 +185,7 @@ agent = RLMFlow(
     runtime=runtime,
     config=RLMConfig(
         max_depth=2,
-        max_iterations=30,
+        child_max_iterations=20,
         max_concurrency=8,
         llm_max_concurrency=4,
         eager_children=True,
@@ -189,7 +201,7 @@ sibling is still running `task_1`. See
 deterministic timestamped demo.
 
 `Workspace.create("./myproject")` writes a debuggable workspace as it runs:
-`session/<agent-id>/` holds the per-agent state log (`session.jsonl`,
+`session/<agent-id>/` holds the per-agent node log (`session.jsonl`,
 `agent.json`, `latest.json`) plus `transcript.json` — the exact
 turn-by-turn conversation each agent's LLM saw, with per-message metadata
 (model, token counts, timing) for auditing or replay. `graph.json` is the
@@ -289,14 +301,14 @@ observation. The graph is queryable in plain Python:
 ```python
 graph.tree()                                  # ASCII render
 graph["root.scanner_api"]                     # sub-Graph rooted at that agent
-graph.agents["root.scanner_api"].states       # state trajectory for one agent
+graph.agents["root.scanner_api"].nodes       # node trajectory for one agent
 graph.children                                # dict[str, Graph] for child agents
-graph.nodes.find("n_abc...")                  # bare Node lookup by id
-graph.nodes.errors()                          # every ErrorOutput across agents
-graph.nodes.results()                         # every DoneOutput across agents
-graph.nodes.supervising()                     # every SupervisingOutput across agents
-graph.nodes.where(type="llm_output", agent_id="root")  # kwargs match Node attrs
-graph.nodes.where(lambda n: n.type == "exec_output")    # or pass a predicate
+graph.all_nodes.find("n_abc...")                  # bare Node lookup by id
+graph.all_nodes.errors()                          # every ErrorOutput across agents
+graph.all_nodes.results()                         # every DoneOutput across agents
+graph.all_nodes.supervising()                     # every SupervisingOutput across agents
+graph.all_nodes.where(type="llm_output", agent_id="root")  # kwargs match Node attrs
+graph.all_nodes.where(lambda n: n.type == "exec_output")    # or pass a predicate
 graph.to_dict()                               # full JSON-serializable payload
 ```
 
@@ -325,8 +337,8 @@ graph = graph.inject(
 graph = agent.step(graph)  # executes the action and writes DoneOutput
 ```
 
-Injected nodes become ordinary graph states with the same shape as organic
-states. See
+Injected nodes become ordinary graph nodes with the same shape as organic
+nodes. See
 [`docs/injections.md`](docs/injections.md) and
 [`examples/injections.py`](examples/injections.py).
 
@@ -367,7 +379,7 @@ that graph. Normal runs are viewed from their workspace.
 ![](docs/static/gradio_ui.png)
 
 `open_viewer(workspace)` launches a small browser app for inspecting a
-saved workspace — tree, summary, and raw state JSON side by side:
+saved workspace — tree, summary, and raw node JSON side by side:
 
 ```python
 from rlmflow.utils.viewer import open_viewer
@@ -380,7 +392,7 @@ From the CLI: `rlmflow view ./myproject --port 7861`.
 ### Live terminal tree
 
 `rlmflow.utils.viz.live(agent, graph)` drives the step loop and renders a
-Rich tree as states are produced. The boids run (`Create a simple boids
+Rich tree as nodes are produced. The boids run (`Create a simple boids
 simulation in plain HTML and JavaScript, split each component into
 separate files`) settles to:
 
@@ -460,7 +472,7 @@ print(error_summary(graph))             # ErrorOutput counts grouped by kind
 print(message_stream("root.boid_js", graph))     # rendered transcript for one agent
 print(report_md(graphs, title="run"))   # full Markdown report
 gantt_html(graphs, "run.html")          # standalone HTML swimlane
-json_logs(graph, "run.jsonl")           # one state per line
+json_logs(graph, "run.jsonl")           # one node per line
 ```
 
 ### Image, GIF, and HTML exports
@@ -652,21 +664,23 @@ or `--include-sandbox` as needed. Most live examples share flags like
 | [`showcase.py`](examples/showcase.py) | `Graph` snapshots, workspace persistence, session reads, time travel, gym-style stepping. |
 | [`drop_in_llm.py`](examples/drop_in_llm.py) | `RLMFlow` as an `LLMClient`. Nested agents. |
 | [`dspy_drop_in.py`](examples/dspy_drop_in.py) | Use an `RLMFlow` agent as the LM behind a DSPy program. |
+| [`tinker_agent.py`](examples/tinker_agent.py) | Run the live terminal graph view with `TinkerClient` inference. |
 | [`sandbox/`](examples/sandbox/) | Build a small web app whose Python code runs inside Modal, E2B, and Daytona sandboxes. |
 | [`coding-agent/agent.py`](examples/coding-agent/agent.py) | Interactive coding agent that writes and edits files. |
 | [`needle_haystack.py`](examples/needle_haystack.py) | Needle-in-a-haystack over a massive in-memory `CONTEXT`, using parallel child chunks. |
 | [`needle_haystack_filesystem.py`](examples/needle_haystack_filesystem.py) | Needle-in-a-haystack across many files with custom tools and `runtime_factory`. |
 | [`summarizer.py`](examples/summarizer.py) | Recursive map-reduce summarization over a long document — `launch_subagents` fan-out + stateful combine. |
 | [`eager_children.py`](examples/eager_children.py) | `eager_children=True` vs `False` — how child scheduling overlaps. |
+| [`advanced/replay_resume.py`](examples/advanced/replay_resume.py) | Graph repair demo: inject a hanging child action, replace it with a fixed result, and continue with a live LLM. |
 | [`fork_repair.py`](examples/fork_repair.py) | Fork a workspace into independent repair branches and run tests in each. |
 | [`best_of_n.py`](examples/best_of_n.py) | Run N independent workspace branches and pick the best result. |
 | [`autoresearch/`](examples/autoresearch/) | Karpathy-style hill-climbing research loop with custom `@tool`s and delegation. |
-| [`graph-features/`](examples/graph-features/) | Offline tour of the `Graph` API: query, navigate, mutate, save/load, replay, fork, render. |
+| [`graph-features/`](examples/graph-features/) | Offline tour of the `Graph` API: query, navigate, mutate, save/load, timeline retrace, fork, render. |
 | [`run_examples.py`](examples/run_examples.py) | Manifest-driven smoke runner for offline, optional, live, sandbox, and notebook examples. |
 | [`view_demo.py`](examples/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
 | [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, and inspect the workspace/viewer. Requires a live LLM. |
-| [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | Every visualization against the saved fixture: inline tree, Plotly graph, HTML stepper, topology renders (mermaid/dot/d2/sequence), step-indexed timeline, per-state detail, cost & reports, run-vs-run comparison, CLI equivalents. |
-| [`notebooks/node_basics.ipynb`](examples/notebooks/node_basics.ipynb) | `Graph` query API tour — `graph[aid]`, `graph.nodes`, `graph.nodes.find`, `graph.nodes.where`, `graph.nodes.results`/`errors`, per-agent tokens, `session.load_graph`, state streaming with `tee` / `json_logs`. |
+| [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | Every visualization against the saved fixture: inline tree, Plotly graph, HTML stepper, topology renders (mermaid/dot/d2/sequence), step-indexed timeline, per-node detail, cost & reports, run-vs-run comparison, CLI equivalents. |
+| [`notebooks/node_basics.ipynb`](examples/notebooks/node_basics.ipynb) | `Graph` query API tour — `graph[aid]`, `graph.all_nodes`, `graph.all_nodes.find`, `graph.all_nodes.where`, `graph.all_nodes.results`/`errors`, per-agent tokens, `session.load_graph`, node streaming with `tee` / `json_logs`. |
 
 ## Benchmarks
 

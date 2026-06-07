@@ -31,14 +31,14 @@ def test_workspace_session_records_states_for_branch(tmp_path: Path):
 
     assert final.result() == "ok"
     assert reloaded.branch_id == "b1"
-    assert [s.type for s in reloaded.states] == [
+    assert [s.type for s in reloaded.nodes] == [
         "user_query",
         "llm_action",
         "llm_output",
         "exec_action",
         "done_output",
     ]
-    assert reloaded.states[-1].type == "done_output"
+    assert reloaded.nodes[-1].type == "done_output"
 
 
 def test_workspace_fork_copies_user_files_session_and_context(tmp_path: Path):
@@ -73,7 +73,7 @@ def test_workspace_fork_isolates_subsequent_session_writes(tmp_path: Path):
     )
     _run(source_engine, source_engine.start("source"))
     source_state_count = sum(
-        len(agent.states) for agent in source.session.load_graph().agents.values()
+        len(agent.nodes) for agent in source.session.load_graph().agents.values()
     )
 
     forked = source.fork(new_branch_id="b2", new_dir=tmp_path / "b2")
@@ -85,10 +85,10 @@ def test_workspace_fork_isolates_subsequent_session_writes(tmp_path: Path):
     _run(fork_engine, fork_engine.start("fork"))
 
     src_after = sum(
-        len(g.states) for g in source.session.load_graph().agents.values()
+        len(g.nodes) for g in source.session.load_graph().agents.values()
     )
     dst_after = sum(
-        len(g.states) for g in forked.session.load_graph().agents.values()
+        len(g.nodes) for g in forked.session.load_graph().agents.values()
     )
     assert src_after == source_state_count
     assert dst_after > source_state_count

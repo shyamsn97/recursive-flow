@@ -103,7 +103,6 @@ def make_delegate(
         name: str,
         query: str,
         context: str | list[str],
-        max_iterations: int | None = None,
         model: str = "default",
     ) -> ChildHandle | str:
         queue = replay_queue(env)
@@ -121,7 +120,6 @@ def make_delegate(
             name,
             query,
             context_text,
-            max_iterations=max_iterations,
             model=model,
         )
 
@@ -138,8 +136,8 @@ def make_launch_subagents(
     async def launch_subagents(specs):
         """Launch sub-agents in parallel and wait for all. Must be awaited.
 
-        ``specs`` is a list of dicts; each dict may set
-        ``query`` (required), ``num_steps``, ``context``, ``name``, ``model``.
+        ``specs`` is a list of dicts; each dict may set ``query`` (required),
+        ``context``, ``name``, and ``model``.
         Returns finish messages in the same order as ``specs``.
         """
         if not isinstance(specs, list):
@@ -158,7 +156,6 @@ def make_launch_subagents(
                 name=_spec.get("name", "subagent"),
                 query=_spec["query"],
                 context=_spec.get("context", ""),
-                max_iterations=_spec.get("num_steps"),
                 model=_spec.get("model", "default"),
             )
             if isinstance(_handle, str):

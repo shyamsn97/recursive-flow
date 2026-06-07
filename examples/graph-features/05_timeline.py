@@ -1,22 +1,20 @@
-"""Retracing a real engine run with ``retrace_steps(graph)``.
+"""Reconstruct timeline snapshots with ``retrace_steps(graph)``.
 
-The replay system is genuinely driven by the engine. Every call to
-``RLMFlow.step()`` bumps an internal counter; every node it appends is
-stamped with that counter as its ``Node.iteration`` field. ``history()``
-just buckets states by iteration and snapshots the cumulative graph
-after each bucket.
+This is visualization/time-travel retrace, not cold-start runtime replay.
+It does not run Python code, call the LLM, or resume suspended coroutines.
+It walks the already-recorded final graph and reconstructs stable snapshots
+for viewers/exporters.
 
 This script:
   1. runs the real engine end-to-end with a tiny scripted LLM,
-  2. prints the iteration stamps the engine wrote,
-3. calls ``retrace_steps(graph)`` and shows the snapshots line up with the
-     engine's actual scheduling rounds.
+  2. prints the final persisted node log,
+  3. calls ``retrace_steps(graph)`` and shows the inferred snapshots.
 
-Two children advance in parallel during the same step, which shows up as
-both children's results landing in the same iteration bucket.
+For graph repair after a bad child result, see
+``examples/advanced/replay_resume.py``.
 
 Run:
-    python examples/graph-features/05_replay.py
+    python examples/graph-features/05_timeline.py
 """
 
 from __future__ import annotations
@@ -52,9 +50,9 @@ class ScriptedLLM(LLMClient):
 
 
 def banner(title: str) -> None:
-    print("\n" + "─" * 60)
+    print("\n" + "-" * 60)
     print(title)
-    print("─" * 60)
+    print("-" * 60)
 
 
 def current_type(subgraph) -> str:
@@ -71,20 +69,22 @@ def main() -> None:
             config=RLMConfig(max_depth=1, max_iterations=5, max_concurrency=2),
         )
 
-        banner("running the engine — one tick per step()")
+        banner("running the engine - one tick per step()")
         graph = engine.start("split into A and B")
         tick = 0
         while not graph.finished:
             tick += 1
             graph = engine.step(graph)
-            print(f"step {tick}: agents=" + ", ".join(
-                f"{aid}:{current_type(sub)}"
-                for aid, sub in graph.agents.items()
-            ))
+            print(
+                f"step {tick}: agents="
+                + ", ".join(
+                    f"{aid}:{current_type(sub)}" for aid, sub in graph.agents.items()
+                )
+            )
         print(f"\nfinal result: {graph.result()!r}")
 
-        banner("iteration stamps written by the engine")
-        for n in graph.nodes:
+        banner("final persisted node log")
+        for n in graph.all_nodes:
             tag = (
                 getattr(n, "result", None)
                 or getattr(n, "content", None)
@@ -92,19 +92,18 @@ def main() -> None:
                 or ""
             )
             preview = tag.splitlines()[0][:50] if tag else ""
-            iteration = getattr(n, "iteration", "-")
-            print(f"  iter={iteration}  {n.agent_id:<7} {n.type:<12} {preview!r}")
+            print(f"  {n.agent_id:<7} seq={n.seq:<2} {n.type:<18} {preview!r}")
 
-        banner("retrace_steps(graph) — one snapshot per stable transition")
+        banner("retrace_steps(graph) - one snapshot per stable transition")
         snapshots = retrace_steps(graph)
-        print(f"{len(snapshots)} snapshots ({tick} engine ticks)\n")
+        print(f"{len(snapshots)} snapshots reconstructed from {tick} engine ticks\n")
         for i, snap in enumerate(snapshots, start=1):
             agents = ", ".join(
                 f"{aid}:{current_type(sub)}" for aid, sub in snap.agents.items()
             )
-            print(f"snapshot {i}  states={len(snap.nodes)}  ({agents})")
+            print(f"snapshot {i}  nodes={len(snap.all_nodes)}  ({agents})")
 
-        banner("the parallel snapshot — both children advance together")
+        banner("the parallel snapshot - both children advance together")
         for snap in snapshots:
             kids = [s for aid, s in snap.agents.items() if aid != "root"]
             if kids and all(k.finished for k in kids):

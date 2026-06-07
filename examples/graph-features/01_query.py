@@ -2,7 +2,7 @@
 
 Builds a small recursive Graph by hand and walks every read-side surface:
 
-- ``graph.nodes`` — flat NodesView over every state in the subtree
+- ``graph.all_nodes`` — flat NodesView over every state in the subtree
 - ``graph.agents`` — Mapping[agent_id, sub-Graph] over the subtree
 - ``graph.edges`` — derived flow + spawn edges
 - ``.where(...)`` / ``.queries()`` / ``.actions()`` / ``.errors()`` filters
@@ -87,7 +87,7 @@ def build_graph() -> Graph:
             "parent_agent_id": "root",
             "parent_node_id": root_reply.id,
         },
-        states=[write_q, write_done],
+        nodes=[write_q, write_done],
     )
     test = Graph.from_meta_dict(
         {
@@ -96,11 +96,11 @@ def build_graph() -> Graph:
             "parent_agent_id": "root",
             "parent_node_id": root_reply.id,
         },
-        states=[test_q, test_err, test_call, test_reply, test_exec, test_done],
+        nodes=[test_q, test_err, test_call, test_reply, test_exec, test_done],
     )
     return Graph.from_meta_dict(
         {"agent_id": "root", "depth": 0, "query": "ship a tiny package"},
-        states=[root_q, root_call, root_reply, root_exec, root_sup, root_resume, root_done],
+        nodes=[root_q, root_call, root_reply, root_exec, root_sup, root_resume, root_done],
         children={"root.write": write, "root.test": test},
     )
 
@@ -116,26 +116,26 @@ def main() -> None:
 
     banner("flat views over the whole subtree")
     print(f"agents : {list(g.agents)}")
-    print(f"nodes  : {len(g.nodes)} states")
+    print(f"nodes  : {len(g.all_nodes)} states")
     print(f"edges  : {len(g.edges)}  ({len(g.edges.flows_to())} flows_to, "
           f"{len(g.edges.spawns())} spawns)")
 
-    banner("filters on graph.nodes")
-    print(f"queries     : {len(g.nodes.queries())}")
+    banner("filters on graph.all_nodes")
+    print(f"queries     : {len(g.all_nodes.queries())}")
     action_count = (
-        len(g.nodes.llm_actions())
-        + len(g.nodes.exec_actions())
-        + len(g.nodes.resume_actions())
+        len(g.all_nodes.llm_actions())
+        + len(g.all_nodes.exec_actions())
+        + len(g.all_nodes.resume_actions())
     )
     print(f"actions     : {action_count}")
-    print(f"errors      : {[n.error for n in g.nodes.errors()]}")
-    print(f"results     : {[n.result for n in g.nodes.results()]}")
+    print(f"errors      : {[n.error for n in g.all_nodes.errors()]}")
+    print(f"results     : {[n.result for n in g.all_nodes.results()]}")
 
-    long_replies = g.nodes.where(lambda n: getattr(n, "reply", "") and len(n.reply) > 20)
+    long_replies = g.all_nodes.where(lambda n: getattr(n, "reply", "") and len(n.reply) > 20)
     print(f"long replies: {len(long_replies)}")
 
     banner("graph.find by id")
-    sup = g.nodes.where(type="supervising_output")[0]
+    sup = g.all_nodes.where(type="supervising_output")[0]
     found = g.find(sup.id)
     print(f"find({sup.id[:10]}…) -> {type(found).__name__} agent={found.agent_id}")
 

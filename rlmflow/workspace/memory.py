@@ -66,6 +66,16 @@ class InMemorySession(Session):
     def write_state(self, state) -> None:
         self.agent_states.setdefault(state.agent_id, []).append(state)
 
+    def rewrite_graph(self, graph) -> None:
+        self.root_agent_id = graph.agent_id
+        self.agent_dicts = {agent.agent_id: agent.meta_dict() for agent in graph.walk()}
+        self.agent_states = {
+            agent.agent_id: list(agent.nodes) for agent in graph.walk()
+        }
+        self.agent_transcripts = {
+            aid: self.agent_transcripts.get(aid, {}) for aid in self.agent_dicts
+        }
+
     def read_transcript(self, agent_id: str) -> dict[str, Any] | None:
         existing = self.agent_transcripts.get(agent_id)
         if not existing:
@@ -81,7 +91,7 @@ class InMemorySession(Session):
         return build_graph(
             root_agent_id=self.root_agent_id,
             agent_dicts=self.agent_dicts,
-            agent_states={aid: tuple(s) for aid, s in self.agent_states.items()},
+            agent_nodes={aid: tuple(s) for aid, s in self.agent_states.items()},
         )
 
     def fork(self, new_location: object) -> Session:

@@ -33,6 +33,10 @@ class Store(ABC):
         """List stored paths under ``prefix``."""
 
     @abstractmethod
+    def remove(self, path: str, *, recursive: bool = False) -> None:
+        """Remove ``path`` if it exists."""
+
+    @abstractmethod
     def fork(self, new_location: object) -> Store:
         """Return a deep copy of this store."""
 
@@ -98,6 +102,18 @@ class FileStore(Store):
             if path.is_file()
         )
 
+    def remove(self, path: str, *, recursive: bool = False) -> None:
+        target = self.path(path)
+        if not target.exists():
+            return
+        if target.is_dir():
+            if not recursive:
+                target.rmdir()
+                return
+            shutil.rmtree(target)
+            return
+        target.unlink()
+
     def fork(self, new_location: object) -> Store:
         dst = Path(new_location).resolve()
         if dst.exists():
@@ -129,6 +145,15 @@ class MemoryStore(Store):
 
     def list(self, prefix: str = "") -> list[str]:
         return sorted(path for path in self.values if path.startswith(prefix))
+
+    def remove(self, path: str, *, recursive: bool = False) -> None:
+        if recursive:
+            prefix = path.rstrip("/") + "/"
+            for key in list(self.values):
+                if key == path or key.startswith(prefix):
+                    del self.values[key]
+            return
+        self.values.pop(path, None)
 
     def fork(self, new_location: object) -> Store:
         out = MemoryStore()

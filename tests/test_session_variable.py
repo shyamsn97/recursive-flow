@@ -400,7 +400,7 @@ def test_session_variable_injected_via_inject_env(tmp_path: Path):
         workspace=workspace,
     )
     graph = flow.start("hi")
-    runtime = flow.inject_env(graph, graph.states[0])
+    runtime = flow.inject_env(graph, graph.nodes[0])
 
     ns = runtime.repl.namespace
     assert "SESSION" in ns

@@ -95,7 +95,7 @@ def to_mermaid(graph: Graph, *, include_results: bool = True) -> str:
     transitions: list[str] = []
     roots = _root_nodes(graph)
 
-    for state in graph.nodes:
+    for state in graph.all_nodes:
         nid = _sanitize(state.id)
         declarations.append(
             f'    state "{_escape_mermaid(_state_label(state))}" as {nid}'
@@ -105,7 +105,7 @@ def to_mermaid(graph: Graph, *, include_results: bool = True) -> str:
     for edge in graph.edges:
         transitions.append(f"    {_sanitize(edge.from_)} --> {_sanitize(edge.to)}")
     if include_results:
-        for state in graph.nodes:
+        for state in graph.all_nodes:
             res = _state_result_text(state)
             if res:
                 transitions.append(
@@ -125,7 +125,7 @@ def to_dot(graph: Graph, *, include_results: bool = True) -> str:
         '    node [shape=box, style="rounded,filled", fontname="Helvetica"];',
         '    edge [fontname="Helvetica", fontsize=10];',
     ]
-    for state in graph.nodes:
+    for state in graph.all_nodes:
         nid = _sanitize(state.id)
         kind = _kind(state)
         color = _NODE_COLOR.get(kind, "#8b949e")
@@ -153,7 +153,7 @@ def to_dot(graph: Graph, *, include_results: bool = True) -> str:
 
 def to_mermaid_flowchart(graph: Graph, *, include_results: bool = True) -> str:
     lines = ["flowchart TD"]
-    for state in graph.nodes:
+    for state in graph.all_nodes:
         nid = _sanitize(state.id)
         agent = state.agent_id or "root"
         kind = _kind(state)
@@ -183,7 +183,7 @@ def to_mermaid_sequence(graph: Graph) -> str:
         lines.append(f"    participant {_sanitize(aid)} as {aid}")
 
     spawns = graph.edges.spawns()
-    by_id = {e.id: e for e in graph.nodes}
+    by_id = {e.id: e for e in graph.all_nodes}
     for edge in spawns:
         parent = by_id.get(edge.from_)
         child = by_id.get(edge.to)
@@ -213,7 +213,7 @@ _D2_STYLES = {
 
 def to_d2(graph: Graph, *, include_results: bool = True) -> str:
     lines: list[str] = []
-    for state in graph.nodes:
+    for state in graph.all_nodes:
         nid = _sanitize(state.id)
         agent = state.agent_id or "root"
         kind = _kind(state)
@@ -235,7 +235,7 @@ def to_d2(graph: Graph, *, include_results: bool = True) -> str:
 def _root_nodes(graph: Graph) -> list[Node]:
     """Nodes with no incoming edge — used as ``[*] --> X`` Mermaid roots."""
     targets = {edge.to for edge in graph.edges}
-    return [n for n in graph.nodes if n.id not in targets]
+    return [n for n in graph.all_nodes if n.id not in targets]
 
 
 __all__ = [

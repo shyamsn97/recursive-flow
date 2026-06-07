@@ -168,7 +168,7 @@ def graph_usage(graph: Graph | None) -> dict[str, Any]:
         }
 
     agents = list(graph.walk())
-    nodes = [node for agent in agents for node in agent.states]
+    nodes = [node for agent in agents for node in agent.nodes]
     input_tokens = sum(int(getattr(node, "input_tokens", 0) or 0) for node in nodes)
     output_tokens = sum(int(getattr(node, "output_tokens", 0) or 0) for node in nodes)
     return {

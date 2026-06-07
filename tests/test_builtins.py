@@ -29,9 +29,12 @@ def test_rlm_delegate_is_keyword_only():
     assert params["name"].kind is Parameter.KEYWORD_ONLY
     assert params["query"].kind is Parameter.KEYWORD_ONLY
     assert params["context"].kind is Parameter.KEYWORD_ONLY
+    assert "max_iterations" not in params
 
     with pytest.raises(TypeError):
         delegate("child", "task", "")
+    with pytest.raises(TypeError):
+        delegate(name="child", query="task", context="payload", max_iterations=1)
 
     handle = delegate(name="child", query="task", context="payload")
     assert handle.agent_id == "root.child"

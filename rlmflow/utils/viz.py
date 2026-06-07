@@ -257,7 +257,7 @@ h1 {{ font-size: 14px; color: #8b949e; font-weight: 500; margin: 0 0 12px; }}
 def error_summary(source: ViewSource) -> str:
     """Group every :class:`ErrorOutput` in ``source`` by ``error`` kind."""
     graph = _resolve_latest_graph(source)
-    errors = [e for e in graph.nodes if is_errored(e)]
+    errors = [e for e in graph.all_nodes if is_errored(e)]
     if not errors:
         return "(no errors)"
     by_kind: Counter[str] = Counter()
@@ -286,7 +286,7 @@ def code_log(
         return "(no code blocks)"
     graph = graphs[-1]
 
-    nodes = list(graph.nodes)
+    nodes = list(graph.all_nodes)
     if agent_id:
         nodes = [n for n in nodes if n.agent_id == agent_id]
 
@@ -415,7 +415,7 @@ def report_md(
         parts.append(f"**Budget:** {budget_burndown(graphs, max_budget)}")
     current = final.current()
     parts.append(f"**Outcome:** {current.type if current else 'empty'}")
-    errors = [e for e in final.nodes if is_errored(e)]
+    errors = [e for e in final.all_nodes if is_errored(e)]
     if errors:
         parts.append(f"**Errors:** {len(errors)}")
 
@@ -458,7 +458,7 @@ def bench_table(
         final = graphs[-1]
         agents = len(final.agents)
         tokens = final.total_tokens()
-        errors = sum(1 for e in final.nodes if is_errored(e))
+        errors = sum(1 for e in final.all_nodes if is_errored(e))
         cur = final.current()
         outcome = (
             "done"
@@ -515,7 +515,7 @@ def tee(
 
 def _webhook_payload(graph: Graph, *, title: str) -> dict[str, str]:
     inp, out = graph.tokens()
-    errors = sum(1 for e in graph.nodes if is_errored(e))
+    errors = sum(1 for e in graph.all_nodes if is_errored(e))
     body = (
         f"*{title}*\n"
         f"agents: {len(graph.agents)}  "

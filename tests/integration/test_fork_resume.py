@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from rlmflow import (
+    DoneOutput,
     Graph,
     LLMClient,
     LLMUsage,
@@ -195,7 +196,7 @@ def _parent_at_second_supervise(graph: Graph) -> bool:
     parent = graph.agents.get("root")
     if parent is None:
         return False
-    supervises = [s for s in parent.states if is_supervising(s)]
+    supervises = [s for s in parent.nodes if is_supervising(s)]
     if len(supervises) < 2:
         return False
     cur = parent.current()
@@ -230,3 +231,234 @@ def test_fork_resume_replays_through_multiple_yields(tmp_path: Path):
         forked_graph = new_engine.step(forked_graph)
 
     assert forked_graph.result() == "p:A+B"
+
+
+# ── nested supervising tree fork-resume ───────────────────────────────
+
+
+ROOT_REPLY_NESTED = (
+    "```repl\n"
+    "results = await launch_subagents([\n"
+    '    {"name": "mid", "query": "mid task"},\n'
+    "])\n"
+    'done("root saw " + results[0])\n'
+    "```"
+)
+MID_REPLY_NESTED = (
+    "```repl\n"
+    "results = await launch_subagents([\n"
+    '    {"name": "leaf", "query": "leaf task"},\n'
+    "])\n"
+    'done("mid saw " + results[0])\n'
+    "```"
+)
+LEAF_REPLY_NESTED = '```repl\ndone("leaf done")\n```'
+
+
+def _nested_scripted() -> _ScriptedLLM:
+    return _ScriptedLLM(
+        [
+            ('"leaf task"', LEAF_REPLY_NESTED),
+            ('"mid task"', MID_REPLY_NESTED),
+            ("", ROOT_REPLY_NESTED),
+        ]
+    )
+
+
+def _nested_mid_supervising_with_leaf_done(graph: Graph) -> bool:
+    if not {"root", "root.mid", "root.mid.leaf"} <= set(graph.agents):
+        return False
+    root = graph.agents["root"]
+    mid = graph.agents["root.mid"]
+    leaf = graph.agents["root.mid.leaf"]
+    root_cur = root.current()
+    mid_cur = mid.current()
+    return (
+        is_supervising(root_cur)
+        and root_cur.waiting_on == ["root.mid"]
+        and is_supervising(mid_cur)
+        and mid_cur.waiting_on == ["root.mid.leaf"]
+        and leaf.finished
+        and leaf.result() == "leaf done"
+    )
+
+
+def _nested_source_at_leaf_done(tmp_path: Path) -> tuple[Workspace, Graph]:
+    source = Workspace.create(tmp_path / "nested-source", branch_id="source")
+    engine = RLMFlow(
+        llm_client=_nested_scripted(),
+        workspace=source,
+        config=RLMConfig(max_depth=3, max_iterations=8),
+    )
+    graph = engine.start("nested replay")
+    graph = _step_until(engine, graph, _nested_mid_supervising_with_leaf_done)
+    return source, graph
+
+
+def test_fresh_engine_resumes_nested_child_supervisor_without_deleting_leaf(
+    tmp_path: Path,
+):
+    source, graph = _nested_source_at_leaf_done(tmp_path)
+    assert _nested_mid_supervising_with_leaf_done(graph)
+
+    forked = source.fork(new_branch_id="fork", new_dir=tmp_path / "nested-fork")
+    forked_graph = forked.session.load_graph()
+    original_agents = list(forked_graph.agents)
+    original_leaf_state_count = len(forked_graph.agents["root.mid.leaf"].nodes)
+
+    fresh_engine = RLMFlow(
+        llm_client=_nested_scripted(),
+        workspace=forked,
+        config=RLMConfig(max_depth=3, max_iterations=8),
+    )
+
+    forked_graph = fresh_engine.step(forked_graph)
+
+    assert list(forked_graph.agents) == original_agents
+    assert len(forked_graph.agents["root.mid.leaf"].nodes) == original_leaf_state_count
+    assert forked_graph.agents["root.mid.leaf"].result() == "leaf done"
+    assert forked_graph.agents["root.mid"].result() == "mid saw leaf done"
+    assert is_supervising(forked_graph.agents["root"].current())
+
+    source_graph = source.session.load_graph()
+    assert is_supervising(source_graph.agents["root.mid"].current())
+
+
+def test_fresh_engine_resumes_nested_child_then_root_supervisor(tmp_path: Path):
+    source, graph = _nested_source_at_leaf_done(tmp_path)
+    assert _nested_mid_supervising_with_leaf_done(graph)
+
+    forked = source.fork(new_branch_id="fork", new_dir=tmp_path / "nested-fork")
+    fresh_engine = RLMFlow(
+        llm_client=_nested_scripted(),
+        workspace=forked,
+        config=RLMConfig(max_depth=3, max_iterations=8),
+    )
+
+    forked_graph = forked.session.load_graph()
+    forked_graph = fresh_engine.step(forked_graph)
+    assert forked_graph.agents["root.mid"].result() == "mid saw leaf done"
+    assert is_supervising(forked_graph.agents["root"].current())
+
+    forked_graph = fresh_engine.step(forked_graph)
+
+    assert forked_graph.finished
+    assert forked_graph.result() == "root saw mid saw leaf done"
+    assert list(forked_graph.agents) == ["root", "root.mid", "root.mid.leaf"]
+
+    source_graph = source.session.load_graph()
+    assert is_supervising(source_graph.agents["root"].current())
+    assert is_supervising(source_graph.agents["root.mid"].current())
+
+
+# ── nested injection repair + cold-start replay ───────────────────────
+
+
+ROOT_REPLY_REPAIR = (
+    "```repl\n"
+    "results = await launch_subagents([\n"
+    '    {"name": "planner", "query": "planner task"},\n'
+    "])\n"
+    'done("root accepted: " + results[0])\n'
+    "```"
+)
+PLANNER_REPLY_REPAIR = (
+    "```repl\n"
+    "results = await launch_subagents([\n"
+    '    {"name": "worker", "query": "worker task"},\n'
+    "])\n"
+    'done("planner accepted: " + results[0])\n'
+    "```"
+)
+WORKER_REPLY_REPAIR = (
+    "```repl\n"
+    'print("worker saw malformed payload")\n'
+    'raise KeyError("missing field: answer")\n'
+    "```"
+)
+
+
+def _repair_scripted() -> _ScriptedLLM:
+    return _ScriptedLLM(
+        [
+            ('"worker task"', WORKER_REPLY_REPAIR),
+            ('"planner task"', PLANNER_REPLY_REPAIR),
+            ("", ROOT_REPLY_REPAIR),
+        ]
+    )
+
+
+def _nested_worker_error_reached(graph: Graph) -> bool:
+    if not {"root", "root.planner", "root.planner.worker"} <= set(graph.agents):
+        return False
+    root = graph.agents["root"].current()
+    planner = graph.agents["root.planner"].current()
+    worker = graph.agents["root.planner.worker"].current()
+    return (
+        is_supervising(root)
+        and root.waiting_on == ["root.planner"]
+        and is_supervising(planner)
+        and planner.waiting_on == ["root.planner.worker"]
+        and worker is not None
+        and worker.type == "error_output"
+    )
+
+
+def test_injected_worker_fix_resumes_nested_supervisors_on_fresh_engine(
+    tmp_path: Path,
+):
+    source = Workspace.create(tmp_path / "repair-source", branch_id="source")
+    source_engine = RLMFlow(
+        llm_client=_repair_scripted(),
+        workspace=source,
+        config=RLMConfig(max_depth=3, max_iterations=8),
+    )
+
+    graph = source_engine.start("nested repair")
+    graph = _step_until(source_engine, graph, _nested_worker_error_reached)
+
+    forked = source.fork(new_branch_id="repair", new_dir=tmp_path / "repair-fork")
+    forked_graph = forked.session.load_graph()
+    original_agents = list(forked_graph.agents)
+    original_worker_state_count = len(
+        forked_graph.agents["root.planner.worker"].nodes
+    )
+
+    forked_graph = forked_graph.inject(
+        target="root.planner.worker",
+        node=DoneOutput(
+            result="fixed worker result",
+            content="Injected repair: fixed worker result",
+            output="operator injected a fixed worker result",
+        ),
+    )
+    forked.session.write_state(forked_graph.agents["root.planner.worker"].current())
+
+    fresh_engine = RLMFlow(
+        llm_client=_repair_scripted(),
+        workspace=forked,
+        config=RLMConfig(max_depth=3, max_iterations=8),
+    )
+
+    forked_graph = forked.session.load_graph()
+    forked_graph = fresh_engine.step(forked_graph)
+    assert forked_graph.agents["root.planner"].result() == (
+        "planner accepted: fixed worker result"
+    )
+    assert is_supervising(forked_graph.agents["root"].current())
+
+    forked_graph = fresh_engine.step(forked_graph)
+    assert forked_graph.finished
+    assert forked_graph.result() == (
+        "root accepted: planner accepted: fixed worker result"
+    )
+    assert list(forked_graph.agents) == original_agents
+    assert (
+        len(forked_graph.agents["root.planner.worker"].nodes)
+        == original_worker_state_count + 1
+    )
+
+    source_graph = source.session.load_graph()
+    assert source_graph.agents["root.planner.worker"].current().type == "error_output"
+    assert is_supervising(source_graph.agents["root"].current())
+    assert is_supervising(source_graph.agents["root.planner"].current())

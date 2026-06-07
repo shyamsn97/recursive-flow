@@ -39,7 +39,7 @@ def build_graph() -> Graph:
             "parent_agent_id": "root.write",
             "parent_node_id": writer_action.id,
         },
-        states=[linter_q, linter_done],
+        nodes=[linter_q, linter_done],
     )
     writer = Graph.from_meta_dict(
         {
@@ -48,7 +48,7 @@ def build_graph() -> Graph:
             "parent_agent_id": "root",
             "parent_node_id": root_action.id,
         },
-        states=[writer_q, writer_action],
+        nodes=[writer_q, writer_action],
         children={"root.write.linter": linter},
     )
     tester = Graph.from_meta_dict(
@@ -58,11 +58,11 @@ def build_graph() -> Graph:
             "parent_agent_id": "root",
             "parent_node_id": root_action.id,
         },
-        states=[test_q, test_done],
+        nodes=[test_q, test_done],
     )
     return Graph.from_meta_dict(
         {"agent_id": "root", "depth": 0, "query": "ship pkg"},
-        states=[root_q, root_action],
+        nodes=[root_q, root_action],
         children={"root.write": writer, "root.test": tester},
     )
 
@@ -83,9 +83,9 @@ def main() -> None:
 
     banner("indexing by id")
     writer = g["root.write"]
-    print(f"g['root.write']        -> depth={writer.depth} states={len(writer.states)}")
+    print(f"g['root.write']        -> depth={writer.depth} nodes={len(writer.nodes)}")
     linter = g["root.write.linter"]
-    print(f"g['root.write.linter'] -> depth={linter.depth} states={len(linter.states)}")
+    print(f"g['root.write.linter'] -> depth={linter.depth} nodes={len(linter.nodes)}")
     print(f"'root.test' in g       -> {'root.test' in g}")
     print(f"'root.missing' in g    -> {'root.missing' in g}")
 
@@ -98,7 +98,7 @@ def main() -> None:
     for sub in g.walk():
         indent = "  " * sub.depth
         tip = sub.current()
-        print(f"{indent}{sub.agent_id}  ({len(sub.states)} states, tip="
+        print(f"{indent}{sub.agent_id}  ({len(sub.nodes)} states, tip="
               f"{tip.type if tip else 'empty'})")
 
     banner("parent links")

@@ -72,6 +72,10 @@ EXAMPLES: list[Example] = [
     Example("llm-query-batched", "examples/llm_query_batched.py"),
     Example("best-of-n", "examples/best_of_n.py", args=("--n", "4", "--root-dir", "{tmp}/best_of_n")),
     Example(
+        "replay-resume",
+        "examples/advanced/replay_resume.py",
+    ),
+    Example(
         "fork-repair",
         "examples/fork_repair.py",
         args=("--root-dir", "{tmp}/fork_repair"),
@@ -82,7 +86,7 @@ EXAMPLES: list[Example] = [
     Example("graph-navigate", "examples/graph-features/02_navigate.py"),
     Example("graph-mutate", "examples/graph-features/03_mutate.py"),
     Example("graph-save-load", "examples/graph-features/04_save_load.py"),
-    Example("graph-replay", "examples/graph-features/05_replay.py"),
+    Example("graph-timeline", "examples/graph-features/05_timeline.py"),
     Example("graph-fork", "examples/graph-features/06_fork.py"),
     Example("graph-render", "examples/graph-features/07_render.py"),
     Example(

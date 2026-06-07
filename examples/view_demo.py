@@ -97,7 +97,7 @@ def snapshot(
         }
         return Graph.from_meta_dict(
             {**meta, "parent_node_id": spawn_states.get(aid)},
-            states=states,
+            nodes=states,
             children=kids,
         )
 
@@ -158,7 +158,7 @@ g1 = snapshot(
         "root.style_css": [child_style_q],
         "root.script_js": [child_script_q],
     },
-    spawn_states=FIRST_SPAWNS,
+    spawn_nodes=FIRST_SPAWNS,
 )
 
 
@@ -217,7 +217,7 @@ g2 = snapshot(
         "root.script_js.renderer": [sub_render_q],
         "root.script_js.controls": [sub_controls_q],
     },
-    spawn_states=SECOND_SPAWNS,
+    spawn_nodes=SECOND_SPAWNS,
 )
 
 
@@ -251,7 +251,7 @@ g3 = snapshot(
         "root.script_js.renderer": [sub_render_q, sub_render_done],
         "root.script_js.controls": [sub_controls_q, sub_controls_err],
     },
-    spawn_states=SECOND_SPAWNS,
+    spawn_nodes=SECOND_SPAWNS,
 )
 
 
@@ -284,7 +284,7 @@ g4 = snapshot(
         "root.script_js.renderer": [sub_render_q, sub_render_done],
         "root.script_js.controls": [sub_controls_q, sub_controls_err, sub_controls_done],
     },
-    spawn_states=SECOND_SPAWNS,
+    spawn_nodes=SECOND_SPAWNS,
 )
 
 g5 = snapshot(
@@ -297,7 +297,7 @@ g5 = snapshot(
         "root.script_js.renderer": [sub_render_q, sub_render_done],
         "root.script_js.controls": [sub_controls_q, sub_controls_err, sub_controls_done],
     },
-    spawn_states=SECOND_SPAWNS,
+    spawn_nodes=SECOND_SPAWNS,
 )
 
 

@@ -118,14 +118,14 @@ def main() -> None:
         loaded = workspace.load_graph()
         print(
             f"Loaded graph with {len(loaded.agents)} agents and "
-            f"{len(loaded.nodes)} states from {workspace.root}"
+            f"{len(loaded.all_nodes)} states from {workspace.root}"
         )
         print(loaded.tree())
 
         banner("3. Session layout")
         reloaded = workspace.load_graph()
         print(
-            f"Persisted {len(reloaded.nodes)} states across "
+            f"Persisted {len(reloaded.all_nodes)} states across "
             f"{len(reloaded.agents)} agents in {workspace.root / 'session'}"
         )
         print("Latest state per agent:")
@@ -146,7 +146,7 @@ def main() -> None:
         banner("5. Graph summary")
         inp, out = final.tokens()
         print(f"Agents:  {len(final.agents)}")
-        print(f"States:  {len(final.nodes)}")
+        print(f"States:  {len(final.all_nodes)}")
         print(f"Tokens:  {inp + out:,} ({inp:,} in / {out:,} out)")
         print(f"Final:   {final.current().type if final.current() else '(empty)'}")
 

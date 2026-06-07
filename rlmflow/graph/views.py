@@ -17,7 +17,7 @@ class Edge(NamedTuple):
 
 
 class NodesView:
-    """``graph.nodes`` — flat view over every node in the subtree."""
+    """``graph.all_nodes`` — flat view over every node in the subtree."""
 
     __slots__ = ("_g",)
 
@@ -26,7 +26,7 @@ class NodesView:
 
     def _iter(self) -> Iterator[Any]:
         for g in self._g.walk():
-            yield from g.states
+            yield from g.nodes
 
     def __iter__(self) -> Iterator[Any]:
         return self._iter()
@@ -45,7 +45,7 @@ class NodesView:
 
     def _locate(self, node_id: str) -> tuple[Any, int]:
         for g in self._g.walk():
-            for i, s in enumerate(g.states):
+            for i, s in enumerate(g.nodes):
                 if s.id == node_id:
                     return g, i
         raise KeyError(node_id)
@@ -53,19 +53,19 @@ class NodesView:
     def replace(self, node_id: str, new_node: Any) -> Any:
         """Find a node anywhere in the subtree and swap it in place."""
         g, i = self._locate(node_id)
-        g.states[i] = new_node
+        g.nodes[i] = new_node
         return new_node
 
     def update(self, node_id: str, **changes: Any) -> Any:
         """Apply ``changes`` to the node with ``node_id`` anywhere in subtree."""
         g, i = self._locate(node_id)
-        g.states[i] = g.states[i].update(**changes)
-        return g.states[i]
+        g.nodes[i] = g.nodes[i].update(**changes)
+        return g.nodes[i]
 
     def remove(self, node_id: str) -> Any:
         """Drop a node from the subtree by id and return it."""
         g, i = self._locate(node_id)
-        return g.states.pop(i)
+        return g.nodes.pop(i)
 
     def where(
         self,
@@ -159,14 +159,14 @@ class EdgesView:
     def _build(self) -> list[Edge]:
         out: list[Edge] = []
         for g in self._g.walk():
-            for prev, curr in zip(g.states, g.states[1:]):
+            for prev, curr in zip(g.nodes, g.nodes[1:]):
                 out.append(Edge(from_=prev.id, to=curr.id, kind="flows_to"))
             for child in g.children.values():
-                if child.parent_node_id and child.states:
+                if child.parent_node_id and child.nodes:
                     out.append(
                         Edge(
                             from_=child.parent_node_id,
-                            to=child.states[0].id,
+                            to=child.nodes[0].id,
                             kind="spawns",
                         )
                     )

@@ -117,7 +117,7 @@ def _final_parallel(tmp_path):
 
 
 def _state_count(graph: Graph) -> int:
-    return sum(1 for _ in graph.nodes)
+    return sum(1 for _ in graph.all_nodes)
 
 
 # ── retrace_steps ────────────────────────────────────────────────────
@@ -142,7 +142,7 @@ def test_retrace_steps_first_snapshot_is_root_user_query(tmp_path):
     first = steps[0]
 
     assert _state_count(first) == 1
-    only = next(iter(first.nodes))
+    only = next(iter(first.all_nodes))
     assert only.type == "user_query"
     assert only.agent_id == graph.agent_id
 
@@ -156,9 +156,9 @@ def test_retrace_steps_respects_spawn_dependency(tmp_path):
     child_id = next(iter(graph.children))
     for snap in steps:
         child = snap.children.get(child_id)
-        if child and child.states:
+        if child and child.nodes:
             sup_present = any(
-                s.type == "supervising_output" for s in snap.states
+                s.type == "supervising_output" for s in snap.nodes
             )
             assert sup_present, "child appeared before parent supervised"
             return
@@ -173,7 +173,7 @@ def test_retrace_steps_resume_waits_for_all_children(tmp_path):
     # resume. In every snapshot that contains the resume, all three
     # children must already be terminal.
     for snap in steps:
-        states = list(snap.states)
+        states = list(snap.nodes)
         for i, s in enumerate(states):
             if i == 0 or states[i - 1].type != "supervising_output":
                 continue
@@ -181,7 +181,7 @@ def test_retrace_steps_resume_waits_for_all_children(tmp_path):
             for child_aid in sup.waiting_on:
                 child = snap.children.get(child_aid)
                 assert child is not None
-                last = child.states[-1] if child.states else None
+                last = child.nodes[-1] if child.nodes else None
                 assert last is not None and last.terminal, (
                     f"resume emitted before child {child_aid!r} finished"
                 )
@@ -199,12 +199,12 @@ def test_retrace_steps_advances_concurrent_siblings_in_lockstep(tmp_path):
 
     child_ids = sorted(graph.children)
     assert len(child_ids) == 3
-    final_counts = {aid: len(graph.children[aid].states) for aid in child_ids}
+    final_counts = {aid: len(graph.children[aid].nodes) for aid in child_ids}
 
     prev = {aid: 0 for aid in child_ids}
     parallel_ticks = 0
     for snap in steps:
-        cur = {aid: len(snap.children[aid].states) for aid in child_ids}
+        cur = {aid: len(snap.children[aid].nodes) for aid in child_ids}
         delta = {aid: cur[aid] - prev[aid] for aid in child_ids}
         # Pre-spawn (root running alone) and post-resume ticks add no
         # child states — skip those. We only enforce the lockstep
@@ -250,7 +250,7 @@ def test_all_siblings_user_query_appears_in_one_tick(tmp_path):
     sup_tick_idx = None
     for i, tick in enumerate(ticks):
         for aid, idx in tick:
-            s = graph.agents[aid].states[idx]
+            s = graph.agents[aid].nodes[idx]
             if s.type == "supervising_output" and aid == graph.agent_id:
                 sup_tick_idx = i
                 break
@@ -268,7 +268,7 @@ def test_all_siblings_user_query_appears_in_one_tick(tmp_path):
     # Every event in that tick is each child's first state.
     for aid, idx in spawn_tick:
         assert idx == 0
-        assert graph.agents[aid].states[0].type == "user_query"
+        assert graph.agents[aid].nodes[0].type == "user_query"
 
 
 def test_critical_path_equals_longest_child_not_sum(tmp_path):
@@ -283,14 +283,14 @@ def test_critical_path_equals_longest_child_not_sum(tmp_path):
         i
         for i, tick in enumerate(ticks)
         for aid, idx in tick
-        if graph.agents[aid].states[idx].type == "supervising_output"
+        if graph.agents[aid].nodes[idx].type == "supervising_output"
         and aid == graph.agent_id
     )
     resume_tick_idx = next(
         i
         for i, tick in enumerate(ticks)
         for aid, idx in tick
-        if graph.agents[aid].states[idx].type == "resume_action"
+        if graph.agents[aid].nodes[idx].type == "resume_action"
         and aid == graph.agent_id
     )
 
@@ -349,7 +349,7 @@ def test_mismatched_sibling_lengths_run_in_parallel():
     )
 
     short = G(agent_id="root.short", depth=1)
-    short.states = [
+    short.nodes = [
         UserQuery(agent_id="root.short", seq=0, content="task short"),
         LLMAction(agent_id="root.short", seq=1, model="x"),
         LLMOutput(agent_id="root.short", seq=2, code="done('ok')"),
@@ -358,7 +358,7 @@ def test_mismatched_sibling_lengths_run_in_parallel():
     ]
 
     long = G(agent_id="root.long", depth=1)
-    long.states = [
+    long.nodes = [
         UserQuery(agent_id="root.long", seq=0, content="task long"),
         # Turn 1 — produces an ExecOutput, agent loops.
         LLMAction(agent_id="root.long", seq=1, model="x"),
@@ -373,7 +373,7 @@ def test_mismatched_sibling_lengths_run_in_parallel():
     ]
 
     root = G(agent_id="root", depth=0)
-    root.states = [
+    root.nodes = [
         UserQuery(agent_id="root", seq=0, content="kick"),
         LLMAction(agent_id="root", seq=1, model="x"),
         LLMOutput(agent_id="root", seq=2, code="..."),
@@ -391,7 +391,7 @@ def test_mismatched_sibling_lengths_run_in_parallel():
         i
         for i, tick in enumerate(ticks)
         for aid, idx in tick
-        if aid == "root" and root.states[idx].type == "supervising_output"
+        if aid == "root" and root.nodes[idx].type == "supervising_output"
     )
 
     # Tick right after supervising should contain BOTH children
@@ -439,7 +439,7 @@ def test_finished_children_drop_out_of_subsequent_ticks(tmp_path):
     _, graph = _final_parallel(tmp_path)
     ticks = _execution_ticks(graph)
 
-    final_lens = {aid: len(c.states) for aid, c in graph.children.items()}
+    final_lens = {aid: len(c.nodes) for aid, c in graph.children.items()}
     cumulative: dict[str, int] = {aid: 0 for aid in graph.children}
     for tick in ticks:
         for aid, idx in tick:

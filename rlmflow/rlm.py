@@ -108,25 +108,15 @@ from rlmflow.workspace import (
 def _child_config(
     parent: Graph,
     *,
-    max_iterations: int | None,
-    default_max_iterations: int,
     child_max_iterations: int | None,
 ) -> dict[str, Any]:
     """Derive the per-child config dict from ``parent.config``.
 
-    ``max_iterations`` (caller override) wins if set. Otherwise
-    ``child_max_iterations`` (engine default for children). Otherwise
-    a third of the parent's max iterations, floored at 1.
+    Child iteration caps are engine policy, not model-controlled tool args.
+    Children do not inherit a fraction of the parent's iteration limit; root
+    and child budgets are independent knobs.
     """
-    child_iters = (
-        max_iterations
-        or child_max_iterations
-        or max(
-            1,
-            parent.config.get("max_iterations", default_max_iterations) // 3,
-        )
-    )
-    return {**parent.config, "max_iterations": child_iters}
+    return {**parent.config, "max_iterations": child_max_iterations}
 
 
 class RLMFlow(LLMClient):
@@ -277,7 +267,10 @@ class RLMFlow(LLMClient):
                 )
             ),
         )
-        return self.session.load_graph()
+        graph = self.session.load_graph()
+        if self.workspace is not None:
+            self.workspace.mark_graph_synced(graph)
+        return graph
 
     def run(self, query: str | None = None, **kwargs) -> str:
         graph = self.start(query, **kwargs)
@@ -311,6 +304,75 @@ class RLMFlow(LLMClient):
         Returns a freshly-loaded :class:`Graph` snapshot.
         """
         return scheduling.step(self, graph)
+
+    def for_graph(self, graph: Graph) -> RLMFlow:
+        """Return an engine bound to ``graph``'s workspace, if any."""
+
+        ref = graph.workspace
+        if ref is None:
+            return self
+        if (
+            self.workspace is not None
+            and Path(ref.root).resolve() == self.workspace.root
+        ):
+            return self
+        return self.with_workspace(Workspace.create(ref.root, branch_id=ref.branch_id))
+
+    def with_workspace(self, workspace: Workspace) -> RLMFlow:
+        """Return a sibling engine using ``workspace`` as durable state."""
+
+        if self.workspace is not None and workspace.root == self.workspace.root:
+            return self
+        llm_clients = {
+            key: {
+                "model": client,
+                **(
+                    {"description": self.model_descriptions[key]}
+                    if key in self.model_descriptions
+                    else {}
+                ),
+            }
+            for key, client in self.llm_clients.items()
+            if key != "default" or client is not self.llm_client
+        }
+        return type(self)(
+            self.llm_client,
+            config=self.config,
+            runtime_factory=self.runtime_factory,
+            llm_clients=llm_clients,
+            pool=self.pool,
+            prompt_builder=self.prompt_builder,
+            workspace=workspace,
+            node_scheduler=self.node_scheduler,
+        )
+
+    def commit_graph(
+        self,
+        graph: Graph,
+        *,
+        fork: bool = False,
+        new_location: str | Path | None = None,
+        branch_id: str | None = None,
+    ) -> Graph:
+        """Rewrite the bound session so ``graph`` is the durable state."""
+
+        engine = self.for_graph(graph)
+        if fork:
+            if engine.workspace is None:
+                raise ValueError("commit_graph(..., fork=True) requires a workspace")
+            if new_location is None:
+                raise TypeError("commit_graph(..., fork=True) requires new_location")
+            workspace = engine.workspace.fork(
+                new_location=new_location,
+                new_branch_id=branch_id,
+            )
+            engine = engine.with_workspace(workspace)
+
+        if engine.workspace is not None:
+            return engine.workspace.sync_graph(graph)
+
+        engine.session.rewrite_graph(graph)
+        return engine.session.load_graph()
 
     def _refill_eager_children(
         self,
@@ -462,6 +524,7 @@ class RLMFlow(LLMClient):
         *,
         client: LLMClient | None = None,
         model: str | None = None,
+        **llm_kwargs,
     ) -> tuple[str, LLMUsage]:
         """Stream a chat completion and return ``(text, usage)``.
 
@@ -470,13 +533,13 @@ class RLMFlow(LLMClient):
         usage.
         """
         if model is not None:
-            return self.llm_channel.call(model, messages)
+            return self.llm_channel.call(model, messages, **llm_kwargs)
         if client is None:
-            return self.llm_channel.call("default", messages)
+            return self.llm_channel.call("default", messages, **llm_kwargs)
         for key, candidate in self.llm_clients.items():
             if candidate is client:
-                return self.llm_channel.call(key, messages)
-        return client.completion(messages)
+                return self.llm_channel.call(key, messages, **llm_kwargs)
+        return client.completion(messages, **llm_kwargs)
 
     @tool(
         "Run multiple independent one-shot LLM prompts concurrently. "
@@ -487,6 +550,10 @@ class RLMFlow(LLMClient):
         prompts: list[str],
         *,
         model: str = "default",
+        temperature: float | None = None,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
+        stop: str | list[str] | None = None,
     ) -> list[str]:
         """Run one-shot LLM prompts concurrently without spawning child agents."""
 
@@ -500,7 +567,17 @@ class RLMFlow(LLMClient):
         if not prompts:
             return []
 
-        pairs = self.llm_channel.batch(model, prompts)
+        llm_kwargs = {
+            key: value
+            for key, value in {
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_tokens": max_tokens,
+                "stop": stop,
+            }.items()
+            if value is not None
+        }
+        pairs = self.llm_channel.batch(model, prompts, **llm_kwargs)
 
         total_usage = LLMUsage(
             input_tokens=sum(usage.input_tokens for _, usage in pairs),
@@ -549,7 +626,7 @@ class RLMFlow(LLMClient):
         context_keys = self.context.list_contexts(agent_id=graph.agent_id)
         max_depth = (graph.config or {}).get("max_depth", self.config.max_depth)
 
-        msgs = project_state_messages(graph.states)
+        msgs = project_state_messages(graph.nodes)
 
         cap = self.config.max_messages
         if cap and len(msgs) > cap:
@@ -570,10 +647,10 @@ class RLMFlow(LLMClient):
         # double up the user prompt on the very first turn. The
         # transition writes the paired ``LLMAction`` *before* calling
         # ``build_messages``, so the action for the in-progress turn is
-        # already in ``graph.states`` here. ``LLMOutput``s only exist
+        # already in ``graph.nodes`` here. ``LLMOutput``s only exist
         # for *completed* prior turns, which is what should gate the
         # continuation nudge.
-        prior_turns = sum(1 for s in graph.states if is_llm_output(s))
+        prior_turns = sum(1 for s in graph.nodes if is_llm_output(s))
         has_prior_turn = prior_turns > 0
         nudge: str | None = None
         if force_final:
@@ -646,6 +723,7 @@ class RLMFlow(LLMClient):
                 self.runtime_factory() if self.runtime_factory else self.runtime.clone()
             )
             self.runtime_sessions[session_id] = runtime
+            self.register_tools(runtime)
         return runtime
 
     def create_runtime_session(
@@ -737,7 +815,6 @@ class RLMFlow(LLMClient):
         query: str,
         context: str,
         *,
-        max_iterations: int | None = None,
         model: str = "default",
     ) -> ChildHandle | str:
         """Spawn a child agent under ``parent_agent_id``.
@@ -765,8 +842,6 @@ class RLMFlow(LLMClient):
         cfg = {
             **_child_config(
                 parent,
-                max_iterations=max_iterations,
-                default_max_iterations=self.config.max_iterations,
                 child_max_iterations=self.config.child_max_iterations,
             ),
             "model": model,

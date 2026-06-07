@@ -29,13 +29,13 @@ class RLMConfig:
     """Engine-level knobs."""
 
     max_depth: int = 5
-    max_iterations: int = 30
+    max_iterations: int | None = None
     max_output_length: int = 12000
     max_messages: int | None = None
     max_concurrency: int | None = field(default_factory=_default_max_concurrency)
     llm_max_concurrency: int | None = None
     llm_request_timeout: float | None = 600
-    child_max_iterations: int | None = None
+    child_max_iterations: int | None = 20
     eager_children: bool = False
     single_block: bool = True
     system_prompt: str | None = None

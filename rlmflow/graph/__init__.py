@@ -1,12 +1,12 @@
 """RLMFlow's data model — one recursive class.
 
 * :class:`Graph` — one agent, mutable, with per-agent invariants as flat
-  fields, ``states`` as its trajectory, and ``children`` for sub-agents.
+  fields, ``nodes`` as its trajectory, and ``children`` for sub-agents.
   Recursion lives in ``children``; cross-agent navigation goes through
   ``graph[other_aid]`` or ``graph.agents``.
 * :class:`AgentsView`, :class:`NodesView`, :class:`EdgesView` — flat
   query / mutation views over the subtree (``graph.agents``,
-  ``graph.nodes``, ``graph.edges``).
+  ``graph.all_nodes``, ``graph.edges``).
 * :class:`Node` and its subclasses — one immutable per-state payload.
   See :mod:`rlmflow.graph.node` and ``docs/node_model.md``.
 * :class:`WorkspaceRef`, :class:`RuntimeRef` — serializable handles to

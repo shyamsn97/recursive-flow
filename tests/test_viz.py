@@ -129,12 +129,12 @@ def _multi_batch_fanout_graph(
             depth=1,
             parent_agent_id="root",
             parent_node_id=parent.id,
-            states=states,
+            nodes=states,
         )
 
     return Graph(
         agent_id="root",
-        states=[q, sup1, sup2, done],
+        nodes=[q, sup1, sup2, done],
         children=children,
     )
 
@@ -237,7 +237,7 @@ def test_plot_dense_runs_cap_scaled_marker_and_label_size():
 def test_live_tree_shows_running_children_count():
     graph = Graph(
         agent_id="root",
-        states=[
+        nodes=[
             UserQuery(agent_id="root", seq=0, content="do work"),
             SupervisingOutput(
                 agent_id="root",
@@ -249,12 +249,12 @@ def test_live_tree_shows_running_children_count():
             "root.a": Graph(
                 agent_id="root.a",
                 parent_agent_id="root",
-                states=[UserQuery(agent_id="root.a", seq=0, content="a")],
+                nodes=[UserQuery(agent_id="root.a", seq=0, content="a")],
             ),
             "root.b": Graph(
                 agent_id="root.b",
                 parent_agent_id="root",
-                states=[DoneOutput(agent_id="root.b", seq=1, result="b")],
+                nodes=[DoneOutput(agent_id="root.b", seq=1, result="b")],
             ),
         },
     )
@@ -269,7 +269,7 @@ def test_live_tree_displays_model_label_and_state():
     graph = Graph(
         agent_id="root",
         config={"model": "default"},
-        states=[
+        nodes=[
             UserQuery(agent_id="root", seq=0, content="do work"),
             LLMOutput(agent_id="root", seq=1, model="gpt-5", reply="", code=""),
         ],
@@ -278,7 +278,7 @@ def test_live_tree_displays_model_label_and_state():
                 agent_id="root.fast",
                 parent_agent_id="root",
                 config={"model": "fast"},
-                states=[
+                nodes=[
                     UserQuery(agent_id="root.fast", seq=0, content="fast work"),
                     LLMOutput(
                         agent_id="root.fast",

@@ -18,7 +18,6 @@ from __future__ import annotations
 from rlmflow.graph import (
     Graph,
     SupervisingOutput,
-    is_done,
     is_exec_action,
     is_llm_action,
     is_llm_output,
@@ -42,7 +41,7 @@ def can_resume(graph: Graph, supervising: SupervisingOutput) -> bool:
     for aid in supervising.waiting_on:
         if aid not in graph.agents:
             return False
-        if not is_done(graph.agents[aid].current()):
+        if not graph.agents[aid].finished:
             return False
     return True
 
@@ -55,7 +54,7 @@ def results_for_supervise(
     children = [
         graph.agents[aid] for aid in supervising.waiting_on if aid in graph.agents
     ]
-    return [child.result() if is_done(child.current()) else "" for child in children]
+    return [child.result() if child.finished else "" for child in children]
 
 
 def supervise_history(
@@ -73,7 +72,7 @@ def supervise_history(
     :class:`SupervisingOutput` nodes; it stops at the
     :class:`LLMOutput` whose code drove the run.
     """
-    states = graph.states
+    states = graph.nodes
     idx = next(i for i, s in enumerate(states) if s is current)
     chain: list[SupervisingOutput] = [current]
     code = ""

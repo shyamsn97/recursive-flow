@@ -5,12 +5,12 @@ A :class:`Graph` is **one agent**, mutable. It holds:
 * the agent's per-run invariants (``agent_id``, ``depth``, ``query``,
   ``system_prompt``, ``config``, ``workspace``, ``runtime``, ``model``,
   ``branch_id``, ``parent_agent_id``, ``parent_node_id``) as flat fields;
-* ``states`` — this agent's trajectory of :class:`Node` instances;
+* ``nodes`` — this agent's trajectory of :class:`Node` instances;
 * ``children`` — a ``dict[str, Graph]`` of sub-agents spawned from this one.
 
 Recursion lives in ``children``. Indexing by id (``graph[aid]``) walks the
 tree; ``graph.agents`` is a flat :class:`Mapping` view over every agent in
-the subtree; ``graph.nodes`` / ``graph.edges`` are flat views over every
+the subtree; ``graph.all_nodes`` / ``graph.edges`` are flat views over every
 node / derived edge in the subtree.
 
 Per-state payload lives on :class:`Node`. Per-agent invariants live on
@@ -30,7 +30,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel
 
-from rlmflow.graph.node import Node, parse_node_obj
+from rlmflow.graph.node import ActionNode, Node, ObservationNode, parse_node_obj
 from rlmflow.graph.views import AgentsView, Edge, EdgesView, NodesView
 
 # ── refs (small Pydantic models for serializable external pointers) ──
@@ -60,10 +60,10 @@ class Graph:
     trajectory. Sub-agents live in ``children``; ``graph[other_aid]``
     or ``graph.agents[other_aid]`` walks the subtree to find them.
 
-    Graphs are mutable — use the editing helpers (``add_state``,
-    ``replace_state``, ``remove_state``, ``add_child``, ``remove_child``,
-    ``update``) or just assign fields directly. ``graph.nodes`` /
-    ``graph.children`` are live views, so mutations show up immediately.
+    Graphs are mutable — use the editing helpers (``add_node``,
+    ``update_node``, ``remove_node``, ``add_child``, ``remove_child``,
+    ``update``) or just assign fields directly. ``graph.all_nodes`` /
+    ``graph.children`` are live subtree views, so mutations show up immediately.
     """
 
     agent_id: str
@@ -78,13 +78,13 @@ class Graph:
     parent_agent_id: str | None = None
     parent_node_id: str | None = None
 
-    states: list[Node] = field(default_factory=list)
+    nodes: list[Node] = field(default_factory=list)
     children: dict[str, Graph] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Be forgiving: callers may pass tuples / iterables.
-        if not isinstance(self.states, list):
-            self.states = list(self.states)
+        if not isinstance(self.nodes, list):
+            self.nodes = list(self.nodes)
         if not isinstance(self.children, dict):
             self.children = dict(self.children)
 
@@ -111,7 +111,7 @@ class Graph:
             actual = next(
                 (
                     str(model)
-                    for state in reversed(self.states)
+                    for state in reversed(self.nodes)
                     if (model := getattr(state, "model", None))
                 ),
                 None,
@@ -120,16 +120,18 @@ class Graph:
             return f"{self.model_key}:{actual}"
         return self.model_key
 
-    # ── current-state accessors ──────────────────────────────────────
+    # ── current-node accessors ───────────────────────────────────────
 
     def current(self) -> Node | None:
-        """Latest state of this agent (last by insertion)."""
-        return self.states[-1] if self.states else None
+        """Latest node of this agent (last by insertion)."""
+        return self.nodes[-1] if self.nodes else None
 
     @property
     def finished(self) -> bool:
         cur = self.current()
-        return bool(cur and cur.terminal)
+        if not (cur and cur.terminal):
+            return False
+        return all(child.finished for child in self.children.values())
 
     def result(self) -> str:
         """Terminal result string from the deepest terminal leaf, or ``""``."""
@@ -147,8 +149,8 @@ class Graph:
 
     @property
     def root(self) -> Node | None:
-        """First state of this agent (the :class:`UserQuery` at ``seq=0``)."""
-        return self.states[0] if self.states else None
+        """First node of this agent (the :class:`UserQuery` at ``seq=0``)."""
+        return self.nodes[0] if self.nodes else None
 
     # ── subtree iteration ────────────────────────────────────────────
 
@@ -192,14 +194,14 @@ class Graph:
         compiled = re.compile(pattern) if isinstance(pattern, str) else pattern
         return [g for g in self.walk() if compiled.search(g.agent_id)]
 
-    # ── flat views over the subtree (back-compat) ────────────────────
+    # ── flat views over the subtree ──────────────────────────────────
 
     @property
     def agents(self) -> AgentsView:
         return AgentsView(self)
 
     @property
-    def nodes(self) -> NodesView:
+    def all_nodes(self) -> NodesView:
         return NodesView(self)
 
     @property
@@ -209,7 +211,7 @@ class Graph:
     def find(self, node_id: str) -> Node | None:
         """Bare :class:`Node` lookup by id across the whole subtree."""
         for g in self.walk():
-            for n in g.states:
+            for n in g.nodes:
                 if n.id == node_id:
                     return n
         return None
@@ -250,8 +252,8 @@ class Graph:
     # ── token rollups ────────────────────────────────────────────────
 
     def tokens(self, *, recursive: bool = True) -> tuple[int, int]:
-        inp = sum(getattr(s, "input_tokens", 0) for s in self.states)
-        out = sum(getattr(s, "output_tokens", 0) for s in self.states)
+        inp = sum(getattr(s, "input_tokens", 0) for s in self.nodes)
+        out = sum(getattr(s, "output_tokens", 0) for s in self.nodes)
         if recursive:
             for child in self.children.values():
                 ci, co = child.tokens()
@@ -266,39 +268,269 @@ class Graph:
     # ── editing helpers (mutate in place) ────────────────────────────
 
     def _index_of(self, node_id: str) -> int:
-        for i, s in enumerate(self.states):
+        for i, s in enumerate(self.nodes):
             if s.id == node_id:
                 return i
         raise KeyError(node_id)
 
-    def add_state(self, node: Node) -> Node:
-        """Append a state to this agent's trajectory."""
-        self.states.append(node)
+    def add_node(self, node: Node) -> Node:
+        """Append a node to this agent's trajectory."""
+        self.nodes.append(node)
         return node
 
-    def replace_state(self, node_id: str, new_node: Node) -> Node:
-        """Swap a state on **this** agent by id. For subtree-wide replacement,
-        use ``graph.nodes.replace(id, node)``."""
-        self.states[self._index_of(node_id)] = new_node
+    def set_node(self, node_id: str, new_node: Node) -> Node:
+        """Swap a node on **this** agent by id. For subtree-wide replacement,
+        use ``graph.all_nodes.replace(id, node)``."""
+        self.nodes[self._index_of(node_id)] = new_node
         return new_node
 
-    def update_state(self, node_id: str, **changes: Any) -> Node:
-        """Replace a state on this agent with a copy carrying ``changes``."""
+    def update_node(self, node_id: str, **changes: Any) -> Node:
+        """Replace a node on this agent with a copy carrying ``changes``."""
         i = self._index_of(node_id)
-        self.states[i] = self.states[i].update(**changes)
-        return self.states[i]
+        self.nodes[i] = self.nodes[i].update(**changes)
+        return self.nodes[i]
+
+    def remove_node(self, node_id: str) -> Node:
+        """Drop a node by id and return it."""
+        return self.nodes.pop(self._index_of(node_id))
+
+    def pop_node(self) -> Node:
+        """Drop and return the most recent node of this agent."""
+        return self.nodes.pop()
+
+    def clear_nodes(self) -> Graph:
+        self.nodes.clear()
+        return self
+
+    def add_state(self, node: Node) -> Node:
+        """Deprecated alias for :meth:`add_node`."""
+
+        return self.add_node(node)
+
+    def replace_state(self, node_id: str, new_node: Node) -> Node:
+        """Deprecated alias for :meth:`set_node`."""
+
+        return self.set_node(node_id, new_node)
+
+    def update_state(self, node_id: str, **changes: Any) -> Node:
+        """Deprecated alias for :meth:`update_node`."""
+
+        return self.update_node(node_id, **changes)
 
     def remove_state(self, node_id: str) -> Node:
-        """Drop a state by id and return it."""
-        return self.states.pop(self._index_of(node_id))
+        """Deprecated alias for :meth:`remove_node`."""
+
+        return self.remove_node(node_id)
 
     def pop_state(self) -> Node:
-        """Drop and return the most recent state of this agent."""
-        return self.states.pop()
+        """Deprecated alias for :meth:`pop_node`."""
+
+        return self.pop_node()
 
     def clear_states(self) -> Graph:
-        self.states.clear()
-        return self
+        """Deprecated alias for :meth:`clear_nodes`."""
+
+        return self.clear_nodes()
+
+    def last_node(self, agent_id: str) -> Node | None:
+        """Latest node for ``agent_id``."""
+
+        return self[agent_id].current()
+
+    def last_action(self, agent_id: str) -> ActionNode | None:
+        """Latest action node for ``agent_id``."""
+
+        for node in reversed(self[agent_id].nodes):
+            if isinstance(node, ActionNode):
+                return node
+        return None
+
+    def last_observation(self, agent_id: str) -> ObservationNode | None:
+        """Latest observation node for ``agent_id``."""
+
+        for node in reversed(self[agent_id].nodes):
+            if isinstance(node, ObservationNode):
+                return node
+        return None
+
+    def node_owner(self, node_id: str) -> Graph:
+        """Agent graph that owns ``node_id``."""
+
+        for graph in self.walk():
+            if any(node.id == node_id for node in graph.nodes):
+                return graph
+        raise KeyError(node_id)
+
+    def replace_node(
+        self,
+        node_id: str,
+        node: Node,
+        *,
+        truncate: str = "after",
+    ) -> Graph:
+        """Return a copy with ``node_id`` replaced by ``node``.
+
+        ``truncate`` may be:
+        - ``"none"``: replace only the node;
+        - ``"after"``: drop later states in the same agent;
+        - ``"descendants"``: also prune children whose spawn node disappeared,
+          and children that were only reachable through a replaced supervisor's
+          ``waiting_on`` list.
+        """
+
+        if truncate not in {"none", "after", "descendants"}:
+            raise ValueError("truncate must be 'none', 'after', or 'descendants'")
+        out = self.copy(deep=True)
+        owner = out.node_owner(node_id)
+        index = owner._index_of(node_id)
+        old, _fixed = out._replace_node_at_index(
+            owner,
+            index,
+            node,
+            truncate=truncate,
+        )
+        out._invalidate_ancestors_after_child_edit(owner, truncate=truncate)
+        if truncate == "descendants":
+            out._apply_descendant_truncation(owner, old)
+        return out
+
+    def replace_last_action(
+        self,
+        agent_id: str,
+        node: ActionNode,
+        *,
+        truncate: str = "after",
+    ) -> Graph:
+        """Return a copy replacing ``agent_id``'s latest action node."""
+
+        last = self.last_action(agent_id)
+        if last is None:
+            raise KeyError(f"agent {agent_id!r} has no action node")
+        return self.replace_node(last.id, node, truncate=truncate)
+
+    def replace_last_observation(
+        self,
+        agent_id: str,
+        node: ObservationNode,
+        *,
+        truncate: str = "after",
+    ) -> Graph:
+        """Return a copy replacing ``agent_id``'s latest observation node."""
+
+        last = self.last_observation(agent_id)
+        if last is None:
+            raise KeyError(f"agent {agent_id!r} has no observation node")
+        return self.replace_node(last.id, node, truncate=truncate)
+
+    def truncate_after(self, node_id: str, *, descendants: bool = True) -> Graph:
+        """Return a copy with states after ``node_id`` removed."""
+
+        out = self.copy(deep=True)
+        owner = out.node_owner(node_id)
+        index = owner._index_of(node_id)
+        owner.nodes = owner.nodes[: index + 1]
+        if descendants:
+            out._prune_unreachable_children()
+        return out
+
+    def truncate_agent(self, agent_id: str, *, after_seq: int) -> Graph:
+        """Return a copy with ``agent_id`` states after ``after_seq`` removed."""
+
+        out = self.copy(deep=True)
+        out[agent_id].nodes = [
+            node for node in out[agent_id].nodes if node.seq <= after_seq
+        ]
+        out._prune_unreachable_children()
+        return out
+
+    def prune_descendants_spawned_after(self, agent_id: str, seq: int) -> Graph:
+        """Return a copy pruning children spawned after ``agent_id`` ``seq``."""
+
+        out = self.copy(deep=True)
+        owner = out[agent_id]
+        kept_ids = {node.id for node in owner.nodes if node.seq <= seq}
+        owner.children = {
+            aid: child
+            for aid, child in owner.children.items()
+            if child.parent_node_id in kept_ids
+        }
+        for child in owner.children.values():
+            child._prune_unreachable_children()
+        return out
+
+    def _replace_node_at_index(
+        self,
+        owner: Graph,
+        index: int,
+        node: Node,
+        *,
+        truncate: str,
+    ) -> tuple[Node, Node]:
+        """Replace one local state and optionally drop its local future."""
+
+        old = owner.nodes[index]
+        fixed = _node_for_replacement(old, node)
+        if truncate == "none":
+            owner.nodes[index] = fixed
+        else:
+            owner.nodes = [*owner.nodes[:index], fixed]
+        return old, fixed
+
+    def _invalidate_ancestors_after_child_edit(
+        self,
+        owner: Graph,
+        *,
+        truncate: str,
+    ) -> None:
+        """Drop stale ancestor resume paths after a child timeline edit."""
+
+        if truncate == "none" or owner.parent_agent_id is None:
+            return
+        self._truncate_ancestors_waiting_on(owner.agent_id)
+
+    def _apply_descendant_truncation(self, owner: Graph, old: Node) -> None:
+        """Apply child cleanup for route-changing edits."""
+
+        self._prune_waiting_on_children(owner, old)
+        self._prune_unreachable_children()
+
+    def _prune_waiting_on_children(self, owner: Graph, old: Node) -> None:
+        """Drop children that were only part of a replaced supervisor route."""
+
+        for child_id in getattr(old, "waiting_on", ()):
+            owner.children.pop(child_id, None)
+
+    def _prune_unreachable_children(self) -> None:
+        """Drop children whose ``parent_node_id`` no longer exists."""
+
+        valid_ids = {node.id for node in self.nodes}
+        self.children = {
+            aid: child
+            for aid, child in self.children.items()
+            if child.parent_node_id in valid_ids
+        }
+        for child in self.children.values():
+            child._prune_unreachable_children()
+
+    def _truncate_ancestors_waiting_on(self, agent_id: str) -> None:
+        """Drop stale parent resume states that depended on ``agent_id``."""
+
+        child = self[agent_id]
+        if child.parent_agent_id is None:
+            return
+
+        parent = self[child.parent_agent_id]
+        wait_index = None
+        for index, node in enumerate(parent.nodes):
+            if agent_id in getattr(node, "waiting_on", ()):
+                wait_index = index
+
+        if wait_index is None:
+            return
+
+        parent.nodes = parent.nodes[: wait_index + 1]
+        if parent.parent_agent_id is not None:
+            self._truncate_ancestors_waiting_on(parent.agent_id)
 
     def add_child(self, child: Graph) -> Graph:
         """Attach (or replace) a sub-agent under this graph."""
@@ -318,7 +550,7 @@ class Graph:
         return self
 
     def copy(self, *, deep: bool = True) -> Graph:
-        """Return a copy of this graph. ``deep`` copies states + subtree."""
+        """Return a copy of this graph. ``deep`` copies nodes + subtree."""
         from copy import deepcopy
 
         return deepcopy(self) if deep else replace(self)
@@ -423,10 +655,10 @@ class Graph:
         cls,
         data: dict[str, Any],
         *,
-        states: Iterable[Node] = (),
+        nodes: Iterable[Node] = (),
         children: dict[str, Graph] | None = None,
     ) -> Graph:
-        """Build a :class:`Graph` from a flat agent dict + states + children."""
+        """Build a :class:`Graph` from a flat agent dict + nodes + children."""
         return cls(
             agent_id=data["agent_id"],
             depth=data.get("depth", 0),
@@ -447,7 +679,7 @@ class Graph:
             branch_id=data.get("branch_id", "main"),
             parent_agent_id=data.get("parent_agent_id"),
             parent_node_id=data.get("parent_node_id"),
-            states=list(states),
+            nodes=list(nodes),
             children=dict(children or {}),
         )
 
@@ -455,15 +687,16 @@ class Graph:
         """Recursive JSON dump of the whole subtree."""
         return {
             **self.meta_dict(),
-            "states": [s.to_dict() for s in self.states],
+            "nodes": [s.to_dict() for s in self.nodes],
             "children": {aid: c.to_dict() for aid, c in self.children.items()},
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Graph:
+        raw_nodes = data.get("nodes", data.get("states", []))
         return cls.from_meta_dict(
             data,
-            states=[parse_node_obj(s) for s in data.get("states", [])],
+            nodes=[parse_node_obj(s) for s in raw_nodes],
             children={
                 aid: cls.from_dict(child)
                 for aid, child in (data.get("children") or {}).items()
@@ -493,7 +726,7 @@ class Graph:
     def __repr__(self) -> str:
         return (
             f"Graph(agent_id={self.agent_id!r}, depth={self.depth}, "
-            f"states={len(self.states)}, children={len(self.children)})"
+            f"nodes={len(self.nodes)}, children={len(self.children)})"
         )
 
 
@@ -510,6 +743,13 @@ def _path_prefixes(start: str, full: str) -> Iterator[str]:
     for piece in rest:
         cur = f"{cur}.{piece}"
         yield cur
+
+
+def _node_for_replacement(old: Node, new: Node) -> Node:
+    """Stamp ``new`` into ``old``'s graph position with a fresh id."""
+
+    fields = new.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
+    return new.__class__(agent_id=old.agent_id, seq=old.seq, **fields)
 
 
 __all__ = [

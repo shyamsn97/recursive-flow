@@ -23,7 +23,9 @@ each one is called out under **Breaking** below.
   `llm_query_batched(...)` calls now route through one per-run `LLMChannel`,
   keyed by model/client. `RLMConfig.llm_max_concurrency` controls the global
   LLM request cap; unsafe clients are serialized behind a per-client lock, and
-  safe clients can run concurrently within the channel limit.
+  safe clients can run concurrently within the channel limit. Batched one-shot
+  calls now also accept common sampling kwargs: `temperature`, `top_p`,
+  `max_tokens`, and `stop`.
 - **Thread-safe per-request usage accounting.** `LLMClient.completion(...)`
   returns `(text, LLMUsage)` for each request. `OpenAIClient` and
   `AnthropicClient` implement it directly from provider response usage, so the
@@ -33,6 +35,17 @@ each one is called out under **Breaking** below.
   deterministic/offline example suite by default, with opt-in flags for
   optional dependencies, live LLM examples, notebooks, sandbox providers, and
   manual viewer/interactive checks.
+- **Tinker inference client.** `TinkerClient` adapts the Tinker SDK and
+  `tinker-cookbook` renderers to the `LLMClient` interface, with an optional
+  `rlmflow[tinker]` extra and a live-view example in `examples/tinker_agent.py`.
+- **Stricter local install checks.** `make install` now runs `ruff check .`
+  through the existing lint target before installing the package.
+- **Graph repair example.** `examples/advanced/replay_resume.py` loads the
+  needle-haystack trace, injects a hanging child action, replaces it with a
+  fixed result, and continues with a live LLM.
+- **Simpler iteration defaults.** `RLMConfig.max_iterations` is unbounded by
+  default (`None`), while delegated children use the global
+  `child_max_iterations=20` engine policy by default.
 - **Direct child-writes-file prompt pattern.** The default prompt's multi-file
   fanout example no longer teaches a `PATH: <path>` answer header. It passes
   target paths through child `CONTEXT` and demonstrates plain Python
@@ -150,7 +163,7 @@ each one is called out under **Breaking** below.
   `graph.parent_node_id`). `Graph` is a frozen `dataclass` with
   `states: tuple[Node, ...]` and `children: dict[str, Graph]` for
   sub-agents. Cross-agent navigation is `graph[other_aid]`;
-  subtree views are `graph.agents`, `graph.nodes`, `graph.edges`.
+  subtree views are `graph.agents`, `graph.all_nodes`, `graph.edges`.
 - `Graph.from_agent_states(...)` is removed. Build `Graph` instances
   directly (frozen dataclass) or rely on `Session.load_graph()`.
 - `Edge` no longer ships as a stored object on `Graph` — `graph.edges`
@@ -160,7 +173,7 @@ each one is called out under **Breaking** below.
 - `Session.write_agent` now takes a `Graph` (not an `AgentMeta`).
   `Session.record_spawn` is removed; the parent link is captured on
   the child's `parent_node_id` field.
-- `Graph.events` is now `Graph.states` — every `Node` represents the
+- `Graph.events` is now `Graph.nodes` — every `Node` represents the
   agent's *state* at one step in its trajectory, not a discrete event.
 - `latest.json` writes `latest_node_id` instead of `latest_event_id`.
 
