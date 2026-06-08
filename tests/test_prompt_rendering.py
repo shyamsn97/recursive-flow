@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from rlmflow import RLMConfig, RLMFlow
 from rlmflow.prompts.builder import PromptBuilder
 from rlmflow.prompts.default import DEFAULT_BUILDER
-from tests.helpers import make_agent
+from rlmflow.runtime.local import LocalRuntime
+from tests.helpers import StaticLLM, make_agent
 
 
 def test_default_builder_has_expected_section_shape():
@@ -79,11 +81,30 @@ def test_default_prompt_skips_structured_output_section_without_schema():
 def test_default_prompt_documents_child_output_schema_specs():
     graph = make_agent().start("say ok")
 
+    assert "structured one-shot batch" in graph.system_prompt
+    assert "llm_query_batched(" in graph.system_prompt
+    assert "output_schema=fact_schema" in graph.system_prompt
     assert "structured child results" in graph.system_prompt
     assert "`output_schema`" in graph.system_prompt
     assert '"output_schema": item_schema' in graph.system_prompt
     assert "JSON Schema dict" in graph.system_prompt
     assert "validated JSON-compatible values" in graph.system_prompt
+
+
+def test_structured_prompt_hints_can_be_disabled():
+    agent = RLMFlow(
+        StaticLLM('```repl\ndone("ok")\n```'),
+        runtime=LocalRuntime(),
+        config=RLMConfig(enable_structured_output=False),
+    )
+
+    graph = agent.start("say ok")
+
+    assert "structured one-shot batch" not in graph.system_prompt
+    assert "structured child results" not in graph.system_prompt
+    assert "output_schema" not in graph.system_prompt
+    assert "validated JSON-compatible values" not in graph.system_prompt
+    assert "**Example 4 — multi-file app fanout.**" in graph.system_prompt
 
 
 def test_default_prompt_includes_structured_output_section_with_schema():
@@ -97,4 +118,21 @@ def test_default_prompt_includes_structured_output_section_with_schema():
 
     assert "## Structured Output" in graph.system_prompt
     assert '"answer"' in graph.system_prompt
+
+
+def test_structured_output_section_can_be_disabled_even_with_schema():
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+    agent = RLMFlow(
+        StaticLLM('```repl\ndone("ok")\n```'),
+        runtime=LocalRuntime(),
+        config=RLMConfig(enable_structured_output=False),
+    )
+
+    graph = agent.start("say ok", output_schema=schema)
+
+    assert "## Structured Output" not in graph.system_prompt
 

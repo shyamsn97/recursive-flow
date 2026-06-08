@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from rlmflow.graph.node import ActionNode, ExecOutput, Node
+from rlmflow.graph.node_state import inherit_node_state
 
 
 def inject(
@@ -15,6 +16,8 @@ def inject(
     target: str | re.Pattern[str] | Callable[[Any], Iterable[str | Any]],
     node: Node,
     mode: str = "append",
+    output_schema: dict[str, Any] | None = None,
+    inherit_output_schema: bool = True,
 ) -> Any:
     """Return a new graph with ``node`` injected at ``target``."""
 
@@ -25,8 +28,13 @@ def inject(
     if not targets:
         raise KeyError(f"no injection targets matched {target!r}")
     for sub in targets:
-        fixed = node_for_injection(sub, node)
         cur = sub.current()
+        fixed = node_for_injection(
+            sub,
+            node,
+            output_schema=output_schema,
+            inherit_output_schema=inherit_output_schema,
+        )
         if cur is not None and cur.terminal:
             raise ValueError(f"cannot inject into finished agent {sub.agent_id!r}")
         if cur is not None and is_action_like(cur) and is_action_like(fixed):
@@ -73,17 +81,53 @@ def is_action_like(node: Node) -> bool:
     return isinstance(node, ActionNode)
 
 
-def node_for_injection(sub: Any, node: Node) -> Node:
+def node_for_injection(
+    sub: Any,
+    node: Node,
+    *,
+    output_schema: dict[str, Any] | None = None,
+    inherit_output_schema: bool = True,
+) -> Node:
+    return _node_for_injection(
+        sub,
+        node,
+        output_schema=output_schema,
+        inherit_output_schema=inherit_output_schema,
+    )
+
+
+def _node_for_injection(
+    sub: Any,
+    node: Node,
+    *,
+    output_schema: dict[str, Any] | None,
+    inherit_output_schema: bool,
+) -> Node:
     fields = node.model_dump(
         exclude={"id", "agent_id", "seq"},
         mode="python",
     )
+    source = sub.current()
     next_seq = (sub.nodes[-1].seq + 1) if sub.nodes else 0
-    return node.__class__(
+    fixed = node.__class__(
         agent_id=sub.agent_id,
         seq=next_seq,
         **fields,
     )
+    fixed = inherit_node_state(
+        source=source,
+        replacement=fixed,
+        output_schema=output_schema,
+        inherit_output_schema=inherit_output_schema,
+    )
+    if (
+        output_schema is None
+        and inherit_output_schema
+        and fixed.output_schema is None
+        and getattr(sub, "output_schema", None) is not None
+    ):
+        fixed = fixed.update(output_schema=sub.output_schema)
+    return fixed
 
 
 __all__ = [

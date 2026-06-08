@@ -28,7 +28,7 @@ from collections.abc import Set
 from dataclasses import dataclass
 
 from rlmflow.engine.config import RLMConfig
-from rlmflow.engine.seq import iteration_count
+from rlmflow.engine.helpers import iteration_count
 from rlmflow.graph import (
     ErrorOutput,
     ExecAction,

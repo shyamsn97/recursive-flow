@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 
-import jsonschema
 import pytest
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter
 
-from rlmflow.integrations.structured import StructuredOutputParser
+from rlmflow.integrations.structured import StructuredOutputError, StructuredOutputParser
 
 
 class WeatherAdvice(BaseModel):
@@ -43,8 +42,13 @@ def test_parser_accepts_type_adapter_schema():
 def test_parser_rejects_invalid_pydantic_output():
     parser = StructuredOutputParser()
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(StructuredOutputError) as exc_info:
         parser('{"cities": ["Seattle"], "packing_list": "rain jacket", "warnings": []}', WeatherAdvice)
+    message = str(exc_info.value)
+    assert "Structured output is invalid" in message
+    assert "Expected JSON Schema" in message
+    assert "Received JSON" in message
+    assert "packing_list" in message
 
 
 def test_parser_accepts_json_schema_dict():
@@ -88,5 +92,24 @@ def test_parser_rejects_invalid_json_schema_output():
         "required": ["confidence"],
     }
 
-    with pytest.raises(jsonschema.ValidationError):
+    with pytest.raises(StructuredOutputError) as exc_info:
         parser('{"confidence": "high"}', schema)
+    message = str(exc_info.value)
+    assert "Structured output is invalid" in message
+    assert "Expected JSON Schema" in message
+    assert '{"confidence": "high"}' in message
+
+
+def test_parser_rejects_malformed_json_with_repair_hint():
+    parser = StructuredOutputParser()
+    schema = {
+        "type": "object",
+        "properties": {"confidence": {"type": "number"}},
+        "required": ["confidence"],
+    }
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        parser('```json\n{"confidence": 0.8}\n```', schema)
+    message = str(exc_info.value)
+    assert "Do not pass prose, Markdown fences" in message
+    assert "JSONDecodeError" in message

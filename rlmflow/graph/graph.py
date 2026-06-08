@@ -127,6 +127,14 @@ class Graph:
         """Latest node of this agent (last by insertion)."""
         return self.nodes[-1] if self.nodes else None
 
+    def active_output_schema(self, node: Node | None = None) -> dict[str, Any] | None:
+        """Active structured-output schema for ``node`` or the current path."""
+
+        target = node or self.current()
+        if target is not None and target.output_schema is not None:
+            return target.output_schema
+        return self.output_schema
+
     @property
     def finished(self) -> bool:
         cur = self.current()
@@ -374,6 +382,8 @@ class Graph:
         node: Node,
         *,
         truncate: str = "descendants",
+        output_schema: dict[str, Any] | None = None,
+        inherit_output_schema: bool = True,
     ) -> Graph:
         """Return a copy with ``node_id`` replaced by ``node``.
 
@@ -387,7 +397,14 @@ class Graph:
 
         from rlmflow.graph.replace import replace_node
 
-        return replace_node(self, node_id, node, truncate=truncate)
+        return replace_node(
+            self,
+            node_id,
+            node,
+            truncate=truncate,
+            output_schema=output_schema,
+            inherit_output_schema=inherit_output_schema,
+        )
 
     def replace_last_action(
         self,
@@ -395,12 +412,21 @@ class Graph:
         node: ActionNode,
         *,
         truncate: str = "descendants",
+        output_schema: dict[str, Any] | None = None,
+        inherit_output_schema: bool = True,
     ) -> Graph:
         """Return a copy replacing ``agent_id``'s latest action node."""
 
         from rlmflow.graph.replace import replace_last_action
 
-        return replace_last_action(self, agent_id, node, truncate=truncate)
+        return replace_last_action(
+            self,
+            agent_id,
+            node,
+            truncate=truncate,
+            output_schema=output_schema,
+            inherit_output_schema=inherit_output_schema,
+        )
 
     def replace_last_observation(
         self,
@@ -408,12 +434,21 @@ class Graph:
         node: ObservationNode,
         *,
         truncate: str = "descendants",
+        output_schema: dict[str, Any] | None = None,
+        inherit_output_schema: bool = True,
     ) -> Graph:
         """Return a copy replacing ``agent_id``'s latest observation node."""
 
         from rlmflow.graph.replace import replace_last_observation
 
-        return replace_last_observation(self, agent_id, node, truncate=truncate)
+        return replace_last_observation(
+            self,
+            agent_id,
+            node,
+            truncate=truncate,
+            output_schema=output_schema,
+            inherit_output_schema=inherit_output_schema,
+        )
 
     def truncate_after(self, node_id: str, *, descendants: bool = True) -> Graph:
         """Return a copy with states after ``node_id`` removed."""
@@ -465,6 +500,8 @@ class Graph:
         target: str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]],
         node: Node,
         mode: str = "append",
+        output_schema: dict[str, Any] | None = None,
+        inherit_output_schema: bool = True,
     ) -> Graph:
         """Return a new graph with ``node`` injected at ``target``.
 
@@ -474,7 +511,14 @@ class Graph:
         """
         from rlmflow.graph.injection import inject
 
-        return inject(self, target=target, node=node, mode=mode)
+        return inject(
+            self,
+            target=target,
+            node=node,
+            mode=mode,
+            output_schema=output_schema,
+            inherit_output_schema=inherit_output_schema,
+        )
 
     def inject_output(
         self,

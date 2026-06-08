@@ -8,7 +8,7 @@ children.
 
 Lives in :mod:`rlmflow.engine` alongside the other pure helpers
 (:mod:`~rlmflow.engine.actions`, :mod:`~rlmflow.engine.replay`,
-:mod:`~rlmflow.engine.seq`). The engine owns scheduling; users
+:mod:`~rlmflow.engine.helpers`). The engine owns scheduling; users
 override :class:`NodeScheduler` to plug in custom policies.
 """
 

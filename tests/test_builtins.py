@@ -66,6 +66,46 @@ def test_llm_query_batched_validates_list_shape(tmp_path):
         agent.llm_query_batched(["ok", 3])
 
 
+def test_llm_query_batched_validates_structured_outputs(tmp_path):
+    class _InventoryLLM(LLMClient):
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def chat(self, messages, *args, **kwargs) -> str:
+            prompt = messages[-1]["content"]
+            self.prompts.append(prompt)
+            if "apple" in prompt:
+                return '{"name":"apple","count":2}'
+            return '{"name":"orange","count":3}'
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "count": {"type": "integer"},
+        },
+        "required": ["name", "count"],
+        "additionalProperties": False,
+    }
+    llm = _InventoryLLM()
+    agent = RLMFlow(
+        llm,
+        runtime=LocalRuntime(workspace=tmp_path / "workspace"),
+        config=RLMConfig(max_concurrency=2),
+    )
+
+    results = agent.llm_query_batched(
+        ["extract apple count", "extract orange count"],
+        output_schema=schema,
+    )
+
+    assert results == [
+        {"name": "apple", "count": 2},
+        {"name": "orange", "count": 3},
+    ]
+    assert all("Return only a JSON value matching this JSON Schema" in p for p in llm.prompts)
+
+
 def test_get_repl_tools_lets_local_tool_call_visible_tool(tmp_path):
     @tool("Return a greeting.")
     def greet(name: str) -> str:

@@ -1,3 +1,0 @@
-COLUMN_INDEX: 5
-COLUMN: 794652318
-Return ONLY 'OK' if the column is valid, otherwise ONLY 'INVALID'.

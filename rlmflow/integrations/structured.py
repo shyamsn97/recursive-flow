@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import jsonschema
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 def render_json_schema_hint(schema: Mapping[str, Any] | str) -> str:
@@ -30,6 +30,22 @@ def json_schema_for(schema: Schema) -> dict[str, Any]:
 Schema = type[BaseModel] | TypeAdapter[Any] | Mapping[str, Any] | str
 
 
+class StructuredOutputError(ValueError):
+    """Agent-facing structured-output parse/validation failure."""
+
+    def __init__(
+        self,
+        *,
+        content: str,
+        schema: Schema,
+        cause: Exception,
+    ) -> None:
+        self.content = content
+        self.schema = schema
+        self.cause = cause
+        super().__init__(_format_error_message(content, schema, cause))
+
+
 class StructuredOutputParser:
     """Parse and validate a structured-output JSON string.
 
@@ -44,8 +60,24 @@ class StructuredOutputParser:
 
     def __call__(self, content: str, schema: Schema) -> Any:
         if isinstance(schema, Mapping | str):
-            return _validate_json_schema(content, schema)
-        return _adapter_for(schema).validate_json(content)
+            try:
+                return _validate_json_schema(content, schema)
+            except (json.JSONDecodeError, jsonschema.ValidationError) as exc:
+                raise StructuredOutputError(
+                    content=content,
+                    schema=schema,
+                    cause=exc,
+                ) from exc
+
+        adapter = _adapter_for(schema)
+        try:
+            return adapter.validate_json(content)
+        except ValidationError as exc:
+            raise StructuredOutputError(
+                content=content,
+                schema=schema,
+                cause=exc,
+            ) from exc
 
 
 def _adapter_for(schema: type[BaseModel] | TypeAdapter[Any]) -> TypeAdapter[Any]:
@@ -88,4 +120,38 @@ def _load_json_schema(schema: Mapping[str, Any] | str) -> Mapping[str, Any]:
     return schema
 
 
-__all__ = ["Schema", "StructuredOutputParser", "json_schema_for"]
+def _format_error_message(content: str, schema: Schema, cause: Exception) -> str:
+    schema_text = _schema_text(schema)
+    return (
+        "Structured output is invalid.\n"
+        "Hint: call done(value) with a JSON-compatible Python value that matches "
+        "the expected schema. Do not pass prose, Markdown fences, or a JSON "
+        "string containing JSON.\n\n"
+        "Expected JSON Schema:\n"
+        f"{schema_text}\n\n"
+        "Received JSON:\n"
+        f"{_truncate(content)}\n\n"
+        "Validation error:\n"
+        f"{type(cause).__name__}: {cause}"
+    )
+
+
+def _schema_text(schema: Schema) -> str:
+    try:
+        return _truncate(json.dumps(json_schema_for(schema), indent=2))
+    except Exception:
+        return _truncate(repr(schema))
+
+
+def _truncate(text: str, limit: int = 4000) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n... [truncated]"
+
+
+__all__ = [
+    "Schema",
+    "StructuredOutputError",
+    "StructuredOutputParser",
+    "json_schema_for",
+]

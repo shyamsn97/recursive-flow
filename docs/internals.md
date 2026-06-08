@@ -715,7 +715,7 @@ workspace/
 
 - `session.write_state(node)` — append one immutable `Node` to
   `session.jsonl` and update `latest.json`. Called from
-  `append_node()` in `engine/seq.py`, which assigns `agent_id` and
+  `append_node()` in `engine/helpers.py`, which assigns `agent_id` and
   `seq` deterministically.
 - `session.write_agent(graph)` — write the per-agent invariants
   (`query`, `system_prompt`, `config`, `runtime`, etc.) to

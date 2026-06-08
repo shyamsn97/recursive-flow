@@ -10,12 +10,12 @@ from __future__ import annotations
 import json
 
 from rlmflow.engine.actions import CallLLM, Exec, Resume, RunPendingExec
+from rlmflow.engine.helpers import append_node, budget_exceeded, truncate_output
 from rlmflow.engine.replay import (
     can_resume,
     replay_to_suspension,
     results_for_supervise,
 )
-from rlmflow.engine.seq import append_node, budget_exceeded, truncate_output
 from rlmflow.graph import (
     DoneOutput,
     ErrorOutput,
@@ -315,12 +315,13 @@ def _runtime_output(raw: object) -> str:
 
 def _done_output_fields(graph: Graph, result: object) -> dict[str, object]:
     text = str(result).strip()
-    if graph.output_schema is None:
+    schema = graph.active_output_schema()
+    if schema is None:
         return {"result": text}
     return {
         "result": text,
         "structured_result": json.loads(text),
-        "output_schema": graph.output_schema,
+        "output_schema": schema,
     }
 
 

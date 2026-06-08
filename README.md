@@ -75,8 +75,7 @@ coro.send(results)                 # resume; `results` is now the list
 
 The REPL is stateful across blocks, so the next LLM turn can still see
 `results`. The launcher must be awaited; a bare call or a top-level `yield`
-are errors. (`rlm_delegate` / `rlm_wait` are the internal primitives the
-launcher composes over — agents never call them directly.)
+are errors. Agents should use `launch_subagents(...)` for delegation.
 
 See [`docs/internals.md`](docs/internals.md) for the full protocol.
 

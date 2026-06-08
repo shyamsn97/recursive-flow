@@ -22,14 +22,17 @@ from rlmflow.runtime.local import LocalRuntime
 
 
 class CityForecast(BaseModel):
+    """Forecast facts for one city extracted from the trip brief."""
+
     city: str
-    date: str
     condition: Literal["rain", "sun", "clouds"]
     high_f: float
     packing_tip: str
 
 
 class PackingPlan(BaseModel):
+    """Packing plan synthesized from the structured city forecasts."""
+
     destination_count: int
     forecasts: list[CityForecast]
     shared_items: list[str]
@@ -41,15 +44,18 @@ Trip brief for structured extraction.
 
 Seattle leg:
 - City: Seattle
-- Date: 2026-06-09
 - Forecast condition: rain
 - Forecast high: 60.0 F
 
 Austin leg:
 - City: Austin
-- Date: 2026-06-10
 - Forecast condition: sun
 - Forecast high: 96.0 F
+
+Denver leg:
+- City: Denver
+- Forecast condition: clouds
+- Forecast high: 72.0 F
 """
 
 
@@ -76,7 +82,7 @@ def main() -> None:
         config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
     )
 
-    query = """Build a packing plan for my upcoming trip to Seattle and Austin. The important weather info is in CONTEXT.
+    query = """Build a packing plan for my upcoming trip. The important weather info is in CONTEXT. Make sure to delegate each city to child agents.
     """
 
     graph = agent.start(

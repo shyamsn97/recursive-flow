@@ -95,7 +95,7 @@ The parent should treat those as low-priority even when `sum(radii)` is nonzero.
 ## Behavior Notes
 
 - The parent used the full `--max-submissions 64` budget and stopped when `remaining_submissions` reached zero.
-- The initial batch covered eight distinct algorithms, then the parent recovered from a zero-handle `rlm_wait` mistake by generating fresh slugs.
+- The initial batch covered eight distinct algorithms, then the parent recovered from an empty child-batch mistake by generating fresh slugs.
 - Child retry behavior was productive overall, but occasionally repeated identical scores or repeated the same syntax failure.
 - The best result came from a simple geometric `hex_lattice` family, suggesting structured seeds remain a strong baseline for later hybrid approaches.
 

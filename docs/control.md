@@ -288,8 +288,8 @@ results = await launch_subagents([
 - Pass `CONTEXT.read()` only when the child genuinely needs the
   parent's full view (reviewers, auditors, deterministic retry).
 
-(`rlm_delegate` / `rlm_wait` are the internal primitives the launchers compose
-over — agents never call them directly.)
+Agents should use `launch_subagents(...)` for delegation; lower-level
+implementation details are intentionally not part of the prompt surface.
 
 The default prompt biases toward a supervisor workflow for large context,
 parallel reasoning, and split artifacts. Inline work is still fine for small,

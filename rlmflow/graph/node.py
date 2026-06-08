@@ -54,6 +54,7 @@ class Node(BaseModel):
     id: str = Field(default_factory=new_id)
     agent_id: str = "root"
     seq: int = 0
+    output_schema: dict[str, Any] | None = None
 
     @property
     def terminal(self) -> bool:

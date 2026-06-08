@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from rlmflow import (
     AnthropicClient,
     ExecOutput,
@@ -61,6 +63,17 @@ EXPECTED = """\
 
 
 ROWS_COLS_BOXES = {"root.rows", "root.cols", "root.boxes"}
+
+
+class SudokuSolution(BaseModel):
+    """The completed Sudoku grid."""
+
+    solution: str
+
+
+EXPECTED_SOLUTION = SudokuSolution(solution=EXPECTED.strip())
+
+
 COLS_FUNCTION_PROMPT = """\
 Actually, change the column-agent route.
 
@@ -73,9 +86,6 @@ In the next REPL block:
 2. read the solved board from `CONTEXT` after the `BOARD:` line;
 3. run the function;
 4. verify each column contains digits 1 through 9 exactly once;
-5. call `done("VALID")` if there are no invalid columns, otherwise call
-   `done(json.dumps({"invalid_cols": invalid_cols}))`.
-
 """
 
 ROOT_BACKTRACKING_PROMPT = """\
@@ -195,12 +205,6 @@ def fork_edit_and_step(
     agent = make_agent(branch, model)
     return step_until(agent, edited)
 
-def normalize_grid(text: str) -> str:
-    lines = ["".join(ch for ch in line if ch.isdigit()) for line in text.splitlines()]
-    lines = [line for line in lines if len(line) == 9]
-    return "\n".join(lines[-9:])
-
-
 def summarize(label: str, graph: Graph) -> None:
     current = graph.current()
     print(f"\n{label}")
@@ -219,8 +223,9 @@ def validate_grid(label: str, graph: Graph) -> None:
         print(f"\n{label} validation: skipped (graph is not finished)")
         return
 
-    actual = normalize_grid(graph.result())
-    expected = EXPECTED.strip()
+    result = SudokuSolution.model_validate(graph.result())
+    actual = result.solution.strip()
+    expected = EXPECTED_SOLUTION.solution.strip()
     ok = actual == expected
     print(f"\n{label} validation: {'PASS' if ok else 'FAIL'}")
     if actual:
