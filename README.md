@@ -672,7 +672,7 @@ or `--include-manual` as needed. Most live examples share flags like
 | [`needle_haystack_filesystem.py`](examples/applications/needle_haystack_filesystem.py) | Needle-in-a-haystack across many files with custom tools and `runtime_factory`. |
 | [`summarizer.py`](examples/applications/summarizer.py) | Recursive map-reduce summarization over a long document — `launch_subagents` fan-out + stateful combine. |
 | [`eager_children.py`](examples/control/eager_children.py) | `eager_children=True` vs `False` — how child scheduling overlaps. |
-| [`advanced/injection/`](examples/advanced/injection/) | Supervisor-injection demo: generate a real Sudoku workspace, fork it, replace supervising nodes, sync each edited graph to the branch workspace, and continue with a live LLM. |
+| [`advanced/injection/`](examples/advanced/injection/) | Supervisor-injection demo: generate a structured Sudoku workspace, fork it, replace supervising nodes, sync each edited graph to the branch workspace, and validate the typed result. |
 | [`fork_repair.py`](examples/control/fork_repair.py) | Fork a workspace into independent repair branches and run tests in each. |
 | [`best_of_n.py`](examples/control/best_of_n.py) | Run N independent workspace branches and pick the best result. |
 | [`applications/autoresearch/`](examples/applications/autoresearch/) | Karpathy-style hill-climbing research loop with custom `@tool`s and delegation. |

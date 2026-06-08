@@ -21,9 +21,11 @@ python examples/advanced/graph-features/07_render.py
 The supervisor injection example lives in [`injection/`](injection/):
 
 1. [`injection/sudoku.py`](injection/sudoku.py) creates a real saved Sudoku run
-   under `injection/runs/sudoku-naive`.
+   under `injection/runs/sudoku-naive` with a structured `SudokuSolution`
+   result contract.
 2. [`injection/inject_variants.py`](injection/inject_variants.py) forks that run and
-   replaces real `SupervisingOutput` nodes with prompt-based repairs.
+   replaces real `SupervisingOutput` nodes with prompt-based repairs that
+   continue to the same structured result shape.
 
 Run:
 
@@ -41,4 +43,5 @@ python examples/run_examples.py --include-live
 
 The important behavior is that edited graphs are synced back to their forked
 workspaces before stepping, so stale child sessions and contexts are pruned from
-the branch.
+the branch. The final validation uses `graph.result()` as structured data rather
+than normalizing text out of the model's prose.

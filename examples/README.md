@@ -8,7 +8,7 @@ The examples are grouped by what they demonstrate:
   needle-in-haystack search, autoresearch, and coding-agent demos.
 - [`integrations/`](integrations/) — DSPy, MCP, alternate inference backends, and
   sandbox providers.
-- [`advanced/`](advanced/) — graph API tours, supervisor injection, and graph surgery flows.
+- [`advanced/`](advanced/) — graph API tours, supervisor injection, structured-result validation, and graph surgery flows.
 
 Most compute examples (`applications/summarizer.py`,
 `applications/needle_haystack.py`, `applications/needle_haystack_filesystem.py`,
