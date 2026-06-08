@@ -1,0 +1,3 @@
+COLUMN_INDEX: 6
+COLUMN: 852134796
+Return ONLY 'OK' if the column is valid, otherwise ONLY 'INVALID'.

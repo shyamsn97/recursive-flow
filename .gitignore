@@ -65,7 +65,7 @@ examples/runs/
 .DS_Store
 */**/needle_trace_images/*
 examples/*/**/workspaces/*
-examples/autoresearch/runs/*
+examples/applications/autoresearch/runs/*
 examples/*/**/frames/*
 examples/example-workspaces/*
 !examples/example-workspaces/skills-demo/

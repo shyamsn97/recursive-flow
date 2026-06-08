@@ -116,7 +116,7 @@ graph = agent.step(graph)
 ```
 
 See [`injections.md`](injections.md) for the concise guide and
-[`examples/control/injections.py`](../examples/control/injections.py) for a runnable offline demo.
+[`examples/control/controller_injection.py`](../examples/control/controller_injection.py) for a runnable offline demo.
 
 ## Branch workspaces
 

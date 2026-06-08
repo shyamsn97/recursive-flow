@@ -48,11 +48,11 @@ Available in the REPL:
 
 1. `CONTEXT` — task data. Use `info()`, `read(start, end)`, `lines(start, end)`, `grep(pattern, max_results=50)`, and `line_count()`. `read` returns `str`; `lines` returns `list[str]`.
 2. `llm_query_batched(prompts, *, model="default", temperature=None, top_p=None, max_tokens=None, stop=None)` — concurrent one-shot LLM calls. Use for chunk extraction, summarization, classification, or Q&A. Takes and returns `list[str]`; each prompt can carry large payloads.
-3. `await launch_subagents(specs)` — launch one or many recursive sub-agents and wait for all. `specs` must be a `list[dict]`; each dict requires `query` and may set `context`, `name`, and `model`. Returns child answers as a `list[str]` in spec order. Put data/specs in each child `context`; avoid `context=""` for nontrivial work.
+3. `await launch_subagents(specs)` — launch one or many recursive sub-agents and wait for all. `specs` must be a `list[dict]`; each dict requires `query` and may set `context`, `name`, `model`, and `output_schema`. `output_schema` is a JSON Schema dict for that child's `done(value)`. Returns child answers in spec order; children with `output_schema` return validated JSON-compatible values such as `dict`/`list`, not strings. Put data/specs in each child `context`; avoid `context=""` for nontrivial work.
 4. `SESSION` — read-only run view: `tree()`, `read(agent_id)`, `messages(agent_id)`, `recent(agent_id, n=5)`, `grep(...)`, `list_agents()`.
 5. `SHOW_VARS()` — list public REPL variables and types.
 6. `print(...)` — print concise status; REPL output is truncated.
-7. `done(answer)` — finish with the final answer string. Do not call it until the task is complete.
+7. `done(answer)` — finish with the final answer. If this agent has an output schema, pass a JSON-compatible Python value matching that schema; otherwise pass the final string. Do not call it until the task is complete.
 
 `launch_subagents` must be called with `await`. Sub-agents run only when you `await`; for a single child, pass a one-item list and unpack the one-item result: `[answer] = await launch_subagents([{"query": "...", "context": data}])`.
 """
@@ -66,6 +66,7 @@ STRATEGY_TEXT = """
 **Run independent work in parallel:** Batch prompts together, and launch independent sub-agents together with `await launch_subagents([...])`.
 **Run dependent work in stages:** When one stage needs the previous stage's output, use one-item `await launch_subagents([...])` calls, threading each result into the next spec's `context`.
 **Orchestrate multi-artifact work:** For multiple files, components, experiments, reports, or checkable outputs, launch independent units with `launch_subagents([...])`, then integrate and verify. Put shared specs/contracts in each child `context=...`.
+**Use child output schemas when shape matters:** Add `output_schema` to a `launch_subagents` spec when the parent needs a validated dictionary/list back from that child instead of prose.
 **Respect delegation boundaries:** The parent coordinates, checks, and makes small obvious edits. Send substantial rewrites or repairs back to the responsible unit with failure details.
 **Huge contexts need fanout:** If `CONTEXT.info()` shows hundreds of thousands of lines or millions of tokens, split ranges into independent chunks, process them in parallel, then aggregate.
 **Iterate on failures:** Do not put errors, partials, or failed checks into `done(...)`. Repair at the right level, re-verify, then submit.
@@ -180,7 +181,33 @@ findings = [r for r in results if r.strip() and r.strip() != "NO_MATCH"]
 done("\\n".join(findings) if findings else "NO_MATCH")
 ```
 
-**Example 4 — multi-file app fanout.** Delegate independent file units, then either collect drafts or let children write their own assigned files. Paths belong in the parent plan or child `context`, not in a `PATH:` answer convention.
+**Example 4 — structured child results.** Add `output_schema` when the parent needs dictionaries/lists instead of prose:
+
+```repl
+item_schema = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "price_usd": {"type": "number"},
+        "in_stock": {"type": "boolean"},
+    },
+    "required": ["name", "price_usd", "in_stock"],
+    "additionalProperties": False,
+}
+items = await launch_subagents([
+    {
+        "name": f"item-{i}",
+        "query": "Extract exactly one inventory item from CONTEXT. Call done(value) with a dict matching the schema.",
+        "context": item_text,
+        "output_schema": item_schema,
+    }
+    for i, item_text in enumerate(item_blurbs)
+])
+total = sum(item["price_usd"] for item in items if item["in_stock"])
+done(f"In-stock total: ${total:.2f}")
+```
+
+**Example 5 — multi-file app fanout.** Delegate independent file units, then either collect drafts or let children write their own assigned files. Paths belong in the parent plan or child `context`, not in a `PATH:` answer convention.
 
 ```repl
 from pathlib import Path
@@ -281,6 +308,19 @@ def status_section(engine, graph) -> str:
     return note
 
 
+def structured_output_section(engine, graph) -> str:
+    schema = getattr(graph, "output_schema", None)
+    if schema is None:
+        return ""
+    return (
+        "This run requires structured output. When complete, call "
+        "`done(value)` with a JSON-compatible Python value that matches this "
+        "JSON schema. Do not pass prose, Markdown, or a JSON string.\n\n"
+        "Schema:\n"
+        f"```json\n{engine.structured_output_hint(schema)}\n```"
+    )
+
+
 DEFAULT_BUILDER = (
     PromptBuilder()
     .section("role", ROLE_TEXT)
@@ -288,6 +328,7 @@ DEFAULT_BUILDER = (
     .section("format", FORMAT_TEXT)
     .section("examples", EXAMPLES_TEXT)
     .section("final", FINAL_TEXT)
+    .section("structured-output", structured_output_section, title="Structured Output")
     .section("tools", tools_section, title="Tools")
     .section("status", status_section, title="Status")
 )
@@ -302,5 +343,6 @@ __all__ = [
     "ROLE_TEXT",
     "STRATEGY_TEXT",
     "status_section",
+    "structured_output_section",
     "tools_section",
 ]

@@ -7,6 +7,8 @@ implementation details out of the façade.
 
 from __future__ import annotations
 
+import json
+
 from rlmflow.engine.actions import CallLLM, Exec, Resume, RunPendingExec
 from rlmflow.engine.replay import (
     can_resume,
@@ -164,7 +166,7 @@ def run_exec(
             engine.session,
             graph,
             DoneOutput(
-                result=str(result).strip(),
+                **_done_output_fields(graph, result),
                 output=output,
                 content=engine.format_exec_output(output),
             ),
@@ -262,7 +264,7 @@ def step_after_supervising(
             engine.session,
             graph,
             DoneOutput(
-                result=str(result).strip(),
+                **_done_output_fields(graph, result),
                 output=output,
                 content=engine.format_exec_output(output),
                 resumed_from=resumed_from,
@@ -309,6 +311,17 @@ def step_after_supervising(
 def _runtime_output(raw: object) -> str:
     output = raw if isinstance(raw, str) else ""
     return output if output.strip() else "(no output)"
+
+
+def _done_output_fields(graph: Graph, result: object) -> dict[str, object]:
+    text = str(result).strip()
+    if graph.output_schema is None:
+        return {"result": text}
+    return {
+        "result": text,
+        "structured_result": json.loads(text),
+        "output_schema": graph.output_schema,
+    }
 
 
 __all__ = [

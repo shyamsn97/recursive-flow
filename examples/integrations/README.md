@@ -67,3 +67,16 @@ Optional model flags:
 python examples/integrations/tinker_agent.py --base-model Qwen/Qwen3-8B
 python examples/integrations/tinker_agent.py --model-path tinker://run/weights/checkpoint
 ```
+
+## Sandbox Providers
+
+Remote runtime examples live under [`sandbox/`](sandbox/). They run the same
+small platformer-building task against Modal, E2B, or Daytona.
+
+```bash
+export OPENAI_API_KEY=...
+pip install -e ".[sandbox]"
+python examples/integrations/sandbox/modal_agent.py --model gpt-5 --no-live
+python examples/integrations/sandbox/e2b_agent.py --model gpt-5
+python examples/integrations/sandbox/daytona_agent.py --model gpt-5
+```

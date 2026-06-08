@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from rlmflow.prompts.builder import PromptBuilder
 from rlmflow.prompts.default import DEFAULT_BUILDER
+from tests.helpers import make_agent
 
 
 def test_default_builder_has_expected_section_shape():
@@ -16,6 +17,7 @@ def test_default_builder_has_expected_section_shape():
         "format",
         "examples",
         "final",
+        "structured-output",
         "tools",
         "status",
     ]
@@ -66,4 +68,33 @@ def test_prompt_builder_overrides_win_over_callable_sections():
     rendered = prompt.build(memory="forced")
 
     assert rendered == "## Memory\n\nforced\n"
+
+
+def test_default_prompt_skips_structured_output_section_without_schema():
+    graph = make_agent().start("say ok")
+
+    assert "## Structured Output" not in graph.system_prompt
+
+
+def test_default_prompt_documents_child_output_schema_specs():
+    graph = make_agent().start("say ok")
+
+    assert "structured child results" in graph.system_prompt
+    assert "`output_schema`" in graph.system_prompt
+    assert '"output_schema": item_schema' in graph.system_prompt
+    assert "JSON Schema dict" in graph.system_prompt
+    assert "validated JSON-compatible values" in graph.system_prompt
+
+
+def test_default_prompt_includes_structured_output_section_with_schema():
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+
+    graph = make_agent().start("say ok", output_schema=schema)
+
+    assert "## Structured Output" in graph.system_prompt
+    assert '"answer"' in graph.system_prompt
 

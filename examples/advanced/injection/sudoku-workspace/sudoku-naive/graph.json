@@ -1,0 +1,27 @@
+{
+  "root_agent_id": "root",
+  "agents": [
+    "root",
+    "root.rows",
+    "root.cols",
+    "root.boxes",
+    "root.cols.col-1",
+    "root.cols.col-2",
+    "root.cols.col-3",
+    "root.cols.col-4",
+    "root.cols.col-5",
+    "root.cols.col-6",
+    "root.cols.col-7",
+    "root.cols.col-8",
+    "root.cols.col-9",
+    "root.rows.row-1",
+    "root.rows.row-2",
+    "root.rows.row-3",
+    "root.rows.row-4",
+    "root.rows.row-5",
+    "root.rows.row-6",
+    "root.rows.row-7",
+    "root.rows.row-8",
+    "root.rows.row-9"
+  ]
+}

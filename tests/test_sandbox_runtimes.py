@@ -191,6 +191,7 @@ def test_e2b_runtime_imports_file_tools_remotely(monkeypatch, tmp_path):
 
 def test_e2b_runtime_keeps_control_tools_as_proxies(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
+    from rlmflow.integrations.structured import StructuredOutputParser
     from rlmflow.runtime.sandbox.e2b import E2BRuntime
     from rlmflow.tools.builtins import make_delegate, make_done, make_wait
 
@@ -201,7 +202,7 @@ def test_e2b_runtime_keeps_control_tools_as_proxies(monkeypatch, tmp_path):
     )
     env = {"AGENT_ID": "root", "PARENT_NODE_ID": "n0"}
     try:
-        runtime.register_tool(make_done(env), core=True)
+        runtime.register_tool(make_done(env, StructuredOutputParser()), core=True)
         runtime.register_tool(make_wait(), core=True)
         runtime.register_tool(make_delegate(lambda *args, **kwargs: "child", env), core=True)
 

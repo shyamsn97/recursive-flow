@@ -188,6 +188,8 @@ class DoneOutput(CodeObservation):
 
     type: Literal["done_output"] = "done_output"
     result: str = ""
+    structured_result: Any | None = None
+    output_schema: dict[str, Any] | None = None
     content: str = ""
     output: str = ""
 

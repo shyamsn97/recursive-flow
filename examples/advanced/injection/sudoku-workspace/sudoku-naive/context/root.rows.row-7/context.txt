@@ -1,0 +1,4 @@
+ROW:961537284
+INDEX:7
+Instructions: Your CONTEXT contains a single ROW line with 9 digits (no spaces). Verify the row contains each digit 1 through 9 exactly once. If valid return exactly: OK
+If invalid return exactly: INVALID

@@ -24,6 +24,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+    "jsonschema>=4.0",
     "pydantic>=2.0",
     "tenacity>=8.0",
 ]

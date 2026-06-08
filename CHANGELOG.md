@@ -33,14 +33,14 @@ each one is called out under **Breaking** below.
   batching.
 - **Example smoke runner.** `python examples/run_examples.py` runs the
   deterministic/offline example suite by default, with opt-in flags for
-  optional dependencies, live LLM examples, notebooks, sandbox providers, and
+  optional dependencies, live LLM examples, sandbox providers, and
   manual viewer/interactive checks.
 - **Tinker inference client.** `TinkerClient` adapts the Tinker SDK and
   `tinker-cookbook` renderers to the `LLMClient` interface, with an optional
   `rlmflow[tinker]` extra and a live-view example in `examples/integrations/tinker_agent.py`.
 - **Stricter local install checks.** `make install` now runs `ruff check .`
   through the existing lint target before installing the package.
-- **Graph replay/surgery example.** `examples/advanced/replay/` generates a
+- **Supervisor injection example.** `examples/advanced/injection/` generates a
   real Sudoku run, forks it, replaces supervising nodes with prompt-based graph
   edits, syncs each edited graph to its branch workspace, and continues with a
   live LLM.

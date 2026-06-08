@@ -1,23 +1,35 @@
 # Advanced Examples
 
-These examples exercise durable workspaces, graph surgery, replay, and branch
-repair. They are meant to be read alongside the generated workspace files, not
-just run once.
+These examples exercise the graph API, durable workspaces, prompt injection,
+graph surgery, and branch repair. They are meant to be read alongside the
+generated workspace files, not just run once.
 
-## Replay And Graph Surgery
+## Graph Feature Tour
 
-The replay example lives in [`replay/`](replay/):
+The graph feature examples live in [`graph-features/`](graph-features/). They
+are offline scripts that walk through graph querying, navigation, mutation,
+save/load, timeline retrace, forking, and rendering:
 
-1. [`replay/sudoku.py`](replay/sudoku.py) creates a real saved Sudoku run under
-   `replay/runs/sudoku-naive`.
-2. [`replay/replay_resume.py`](replay/replay_resume.py) forks that run and
+```bash
+python examples/advanced/graph-features/01_query.py
+python examples/advanced/graph-features/05_timeline.py
+python examples/advanced/graph-features/07_render.py
+```
+
+## Supervisor Injection
+
+The supervisor injection example lives in [`injection/`](injection/):
+
+1. [`injection/sudoku.py`](injection/sudoku.py) creates a real saved Sudoku run
+   under `injection/runs/sudoku-naive`.
+2. [`injection/inject_variants.py`](injection/inject_variants.py) forks that run and
    replaces real `SupervisingOutput` nodes with prompt-based repairs.
 
 Run:
 
 ```bash
-python examples/advanced/replay/sudoku.py
-python examples/advanced/replay/replay_resume.py
+python examples/advanced/injection/sudoku.py
+python examples/advanced/injection/inject_variants.py
 ```
 
 Both scripts use live LLM clients. Pass `--model` to choose a model.

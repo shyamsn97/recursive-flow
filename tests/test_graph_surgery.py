@@ -42,7 +42,7 @@ def _graph_with_child() -> Graph:
     )
 
 
-def test_replace_last_action_stamps_position_and_truncates_following_states():
+def test_replace_last_action_defaults_to_descendant_truncation():
     graph = _graph_with_child()
     old_action = graph.last_action("root")
 
@@ -61,10 +61,11 @@ def test_replace_last_action_stamps_position_and_truncates_following_states():
         "llm_output",
         "exec_action",
     ]
+    assert "root.worker" not in edited.agents
     assert graph.current().type == "error_output"
 
 
-def test_replace_node_can_prune_descendants_spawned_by_removed_action():
+def test_replace_node_defaults_to_pruning_descendants_spawned_by_removed_action():
     graph = _graph_with_child()
     old_action = graph.last_action("root")
     assert old_action is not None
@@ -72,7 +73,6 @@ def test_replace_node_can_prune_descendants_spawned_by_removed_action():
     edited = graph.replace_node(
         old_action.id,
         ExecAction(code="fixed()"),
-        truncate="descendants",
     )
 
     assert "root.worker" not in edited.agents
@@ -156,7 +156,7 @@ def _graph_waiting_on_children() -> Graph:
     )
 
 
-def test_replace_supervising_node_prunes_waited_children_with_descendants():
+def test_replace_supervising_node_prunes_waited_children_by_default():
     graph = _graph_waiting_on_children()
     supervising = graph.last_observation("root")
     assert isinstance(supervising, SupervisingOutput)
@@ -164,7 +164,6 @@ def test_replace_supervising_node_prunes_waited_children_with_descendants():
     edited = graph.replace_node(
         supervising.id,
         ExecOutput(output="try another route"),
-        truncate="descendants",
     )
 
     assert [node.type for node in edited.nodes] == [

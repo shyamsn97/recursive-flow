@@ -18,14 +18,19 @@ graph = agent.start("Summarize this document.", context=document)
 print(agent.build_system_prompt(graph))
 ```
 
-You can also render without starting a run:
+You can also render without starting a run by constructing the graph shape you
+want to inspect:
 
 ```python
-print(agent.build_system_prompt_for(
+from rlmflow import Graph
+
+graph = Graph(
     query="Summarize this document.",
     agent_id="root",
     depth=0,
-))
+    config=agent.node_config(),
+)
+print(agent.build_system_prompt(graph))
 ```
 
 Each `Graph` stores the prompt snapshot that was used for that agent's

@@ -15,6 +15,8 @@ need; nothing in this module imports :class:`~rlmflow.rlm.RLMFlow`.
 
 from __future__ import annotations
 
+from typing import Any
+
 from rlmflow.graph import (
     Graph,
     SupervisingOutput,
@@ -49,7 +51,7 @@ def can_resume(graph: Graph, supervising: SupervisingOutput) -> bool:
 def results_for_supervise(
     graph: Graph,
     supervising: SupervisingOutput,
-) -> list[str]:
+) -> list[Any]:
     """Collect terminal results for ``supervising.waiting_on`` children."""
     children = [
         graph.agents[aid] for aid in supervising.waiting_on if aid in graph.agents

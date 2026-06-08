@@ -5,15 +5,14 @@ The examples are grouped by what they demonstrate:
 - [`core-api/`](core-api/) — small examples for the core API surface.
 - [`control/`](control/) — delegation, branching, forking, and graph edits.
 - [`applications/`](applications/) — concrete workloads like summarization and
-  needle-in-haystack search.
-- [`integrations/`](integrations/) — DSPy and alternate inference backends.
-- [`advanced/`](advanced/) — multi-step replay and graph surgery flows.
-- [`graph-features/`](graph-features/) — direct graph querying, mutation, and export.
-- [`sandbox/`](sandbox/) — Modal, E2B, and Daytona runtime examples.
+  needle-in-haystack search, autoresearch, and coding-agent demos.
+- [`integrations/`](integrations/) — DSPy, MCP, alternate inference backends, and
+  sandbox providers.
+- [`advanced/`](advanced/) — graph API tours, supervisor injection, and graph surgery flows.
 
 Most compute examples (`applications/summarizer.py`,
 `applications/needle_haystack.py`, `applications/needle_haystack_filesystem.py`,
-`core-api/showcase.py`, `coding-agent/agent.py`) take the same flags. Defaults can
+`core-api/showcase.py`, `applications/coding-agent/agent.py`) take the same flags. Defaults can
 vary; run `--help` for the exact values.
 
 | Flag | Default | Meaning |
@@ -42,7 +41,7 @@ python examples/applications/summarizer.py                 --docker-image rlmflo
 python examples/applications/needle_haystack.py            --docker-image rlmflow:local
 python examples/applications/needle_haystack_filesystem.py --docker-image rlmflow:local
 python examples/core-api/showcase.py                        --docker-image rlmflow:local
-python examples/coding-agent/agent.py --workspace ./proj --docker-image rlmflow:local
+python examples/applications/coding-agent/agent.py --workspace ./proj --docker-image rlmflow:local
 ```
 
 The host workspace is bind-mounted at `/workspace` inside the container, so
@@ -60,14 +59,14 @@ The workspace is the saved run.
 
 ## Modal, E2B, and Daytona
 
-Remote sandbox examples live under [`examples/sandbox/`](sandbox/). They run
+Remote sandbox examples live under [`examples/integrations/sandbox/`](integrations/sandbox/). They run
 a small platformer-building task, so set `OPENAI_API_KEY` plus the provider's
 sandbox credentials:
 
 ```bash
-python examples/sandbox/modal_agent.py --model gpt-5 --no-live
-python examples/sandbox/e2b_agent.py --model gpt-5
-python examples/sandbox/daytona_agent.py --model gpt-5
+python examples/integrations/sandbox/modal_agent.py --model gpt-5 --no-live
+python examples/integrations/sandbox/e2b_agent.py --model gpt-5
+python examples/integrations/sandbox/daytona_agent.py --model gpt-5
 ```
 
 Install the matching extra first: `rlmflow[modal]`, `rlmflow[e2b]`,
@@ -93,7 +92,8 @@ runtime = DockerRuntime(
 
 `run_examples.py` is the manifest-driven smoke runner. By default it runs the
 deterministic/offline examples; use `--include-optional`, `--include-live`,
-`--include-notebooks`, `--include-sandbox`, or `--all --list` to expand or inspect
-the suite.
+`--include-sandbox`, `--include-manual`, or `--all --list` to expand or inspect
+the suite. Notebooks are documented separately and are not executed by this
+runner.
 
 See each subdirectory README for the examples in that group.

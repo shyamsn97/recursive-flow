@@ -9,6 +9,7 @@ DEPTH = "DEPTH"
 MAX_DEPTH = "MAX_DEPTH"
 PARENT_NODE_ID = "PARENT_NODE_ID"
 DONE_RESULT = "DONE_RESULT"
+DONE_OUTPUT_SCHEMA = "DONE_OUTPUT_SCHEMA"
 REPLAY_QUEUE = "_REPLAY_QUEUE"
 
 
@@ -52,6 +53,7 @@ def clear_replay_queue(env: dict[str, object]) -> None:
 __all__ = [
     "AGENT_ID",
     "DEPTH",
+    "DONE_OUTPUT_SCHEMA",
     "DONE_RESULT",
     "MAX_DEPTH",
     "PARENT_NODE_ID",

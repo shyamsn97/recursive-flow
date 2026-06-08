@@ -85,7 +85,7 @@ rt = E2BRuntime(workspace=workspace)
 agent = RLMFlow(llm_client=llm, runtime=rt, runtime_factory=rt.clone)
 ```
 
-See [`examples/sandbox/`](../examples/sandbox/) for real-agent examples
+See [`examples/integrations/sandbox/`](../examples/integrations/sandbox/) for real-agent examples
 on Modal, E2B, and Daytona.
 
 ## Writing your own

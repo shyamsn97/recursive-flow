@@ -1,3 +1,5 @@
 """Optional adapters for external agent and LLM frameworks."""
 
-__all__: list[str] = []
+from rlmflow.integrations.structured import Schema, StructuredOutputParser
+
+__all__ = ["Schema", "StructuredOutputParser"]
