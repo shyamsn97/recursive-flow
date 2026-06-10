@@ -4,7 +4,7 @@ Internal brainstorm. Not user-facing.
 
 ## The complaint
 
-Running `examples/applications/autoresearch/autoresearch.py --target circle_packing
+Running `examples/use_cases/autoresearch/autoresearch.py --target circle_packing
 --model gpt-5-mini --rounds 4 --branches-per-turn 4` reliably produces:
 
 - 1 baseline row in the ledger.

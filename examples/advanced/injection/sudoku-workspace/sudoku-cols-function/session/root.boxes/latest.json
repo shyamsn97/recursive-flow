@@ -1,8 +1,0 @@
-{
-  "agent_id": "root.boxes",
-  "latest_node_id": "n_be4948f88465",
-  "seq": 10,
-  "type": "done_output",
-  "terminal": true,
-  "result": "[{\"index\":0,\"ok\":true,\"issue\":\"\"},{\"index\":1,\"ok\":true,\"issue\":\"\"},{\"index\":2,\"ok\":true,\"issue\":\"\"},{\"index\":3,\"ok\":true,\"issue\":\"\"},{\"index\":4,\"ok\":true,\"issue\":\"\"},{\"index\":5,\"ok\":true,\"issue\":\"\"},{\"index\":6,\"ok\":true,\"issue\":\"\"},{\"index\":7,\"ok\":true,\"issue\":\"\"},{\"index\":8,\"ok\":true,\"issue\":\"\"}]"
-}

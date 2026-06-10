@@ -1,8 +1,0 @@
-{
-  "agent_id": "root.boxes.box.5",
-  "latest_node_id": "n_9a5a00a2ef00",
-  "seq": 8,
-  "type": "done_output",
-  "terminal": true,
-  "result": "{\"index\":5,\"ok\":true,\"issue\":\"\"}"
-}

@@ -196,7 +196,7 @@ With `eager_children=False`, a fast child that finishes `task_1` waits for
 the rest of that parallel step before it can start `task_2`. With
 `eager_children=True`, the fast child's `task_2` can start while a slow
 sibling is still running `task_1`. See
-[`examples/control/eager_children.py`](./examples/control/eager_children.py) for a
+[`examples/control/delegation/eager_children.py`](./examples/control/delegation/eager_children.py) for a
 deterministic timestamped demo.
 
 `Workspace.create("./myproject")` writes a debuggable workspace as it runs:
@@ -256,8 +256,8 @@ prompt = DEFAULT_BUILDER.section(
 )
 ```
 
-See [`examples/core-api/skills.py`](examples/core-api/skills.py), which uses the checked-in
-workspace [`examples/example-workspaces/skills-demo`](examples/example-workspaces/skills-demo)
+See [`examples/basics/skills.py`](examples/basics/skills.py), which uses the checked-in
+workspace [`examples/_runs/example-workspaces/skills-demo`](examples/_runs/example-workspaces/skills-demo)
 and a concrete NumPy linear-algebra `SKILL.md`.
 
 ## Step and inspect
@@ -361,7 +361,7 @@ alt = workspace.fork(new_branch_id="repair", new_dir="./runs/repair")
 alt_agent = RLMFlow(llm_client=..., workspace=alt, ...)
 ```
 
-See [`examples/core-api/showcase.py`](examples/core-api/showcase.py) for workspace persistence,
+See [`examples/basics/showcase.py`](examples/basics/showcase.py) for workspace persistence,
 session reads, time travel through `list[Graph]`, and gym-style stepping in one
 file.
 
@@ -634,7 +634,7 @@ from rlmflow import OpenAIClient, RLMConfig, RLMFlow, Workspace
 from rlmflow.integrations.dspy import RLMFlowLM
 from rlmflow.runtime.local import LocalRuntime
 
-workspace = Workspace.create(Path("examples/example-workspaces/dspy-workspace"))
+workspace = Workspace.create(Path("examples/_runs/example-workspaces/dspy-workspace"))
 agent = RLMFlow(
     llm_client=OpenAIClient("gpt-4o-mini"),
     runtime=LocalRuntime(workspace=workspace),
@@ -647,7 +647,7 @@ print(qa(question="What is 17 * 23?").answer)
 ```
 
 Install it with `pip install rlmflow[openai,dspy]`. See
-[`examples/integrations/dspy_drop_in.py`](examples/integrations/dspy_drop_in.py) for the runnable
+[`examples/providers/dspy_drop_in.py`](examples/providers/dspy_drop_in.py) for the runnable
 version.
 
 ## Examples
@@ -660,25 +660,25 @@ or `--include-manual` as needed. Most live examples share flags like
 
 | Example | What it shows |
 |---|---|
-| [`showcase.py`](examples/core-api/showcase.py) | `Graph` snapshots, workspace persistence, session reads, time travel, gym-style stepping. |
-| [`structured_output.py`](examples/core-api/structured_output.py) | Validate root and delegated child results with Pydantic and JSON Schema output contracts. |
-| [`drop_in_llm.py`](examples/core-api/drop_in_llm.py) | `RLMFlow` as an `LLMClient`. Nested agents. |
-| [`dspy_drop_in.py`](examples/integrations/dspy_drop_in.py) | Use an `RLMFlow` agent as the LM behind a DSPy program. |
-| [`mcp_weather.py`](examples/integrations/mcp_weather.py) | Start a local MCP weather server backed by Open-Meteo, delegate city forecasts, and combine the packing advice. |
-| [`tinker_agent.py`](examples/integrations/tinker_agent.py) | Run the live terminal graph view with `TinkerClient` inference. |
-| [`integrations/sandbox/`](examples/integrations/sandbox/) | Build a small web app whose Python code runs inside Modal, E2B, and Daytona sandboxes. |
-| [`applications/coding-agent/agent.py`](examples/applications/coding-agent/agent.py) | Interactive coding agent that writes and edits files. |
-| [`needle_haystack.py`](examples/applications/needle_haystack.py) | Needle-in-a-haystack over a massive in-memory `CONTEXT`, using parallel child chunks. |
-| [`needle_haystack_filesystem.py`](examples/applications/needle_haystack_filesystem.py) | Needle-in-a-haystack across many files with custom tools and `runtime_factory`. |
-| [`summarizer.py`](examples/applications/summarizer.py) | Recursive map-reduce summarization over a long document — `launch_subagents` fan-out + stateful combine. |
-| [`eager_children.py`](examples/control/eager_children.py) | `eager_children=True` vs `False` — how child scheduling overlaps. |
-| [`advanced/injection/`](examples/advanced/injection/) | Supervisor-injection demo: generate a structured Sudoku workspace, fork it, replace supervising nodes, sync each edited graph to the branch workspace, and validate the typed result. |
-| [`fork_repair.py`](examples/control/fork_repair.py) | Fork a workspace into independent repair branches and run tests in each. |
-| [`best_of_n.py`](examples/control/best_of_n.py) | Run N independent workspace branches and pick the best result. |
-| [`applications/autoresearch/`](examples/applications/autoresearch/) | Karpathy-style hill-climbing research loop with custom `@tool`s and delegation. |
-| [`advanced/graph-features/`](examples/advanced/graph-features/) | Offline tour of the `Graph` API: query, navigate, mutate, save/load, timeline retrace, fork, render. |
+| [`showcase.py`](examples/basics/showcase.py) | `Graph` snapshots, workspace persistence, session reads, time travel, gym-style stepping. |
+| [`structured_output.py`](examples/basics/structured_output.py) | Validate root and delegated child results with Pydantic and JSON Schema output contracts. |
+| [`drop_in_llm.py`](examples/basics/drop_in_llm.py) | `RLMFlow` as an `LLMClient`. Nested agents. |
+| [`dspy_drop_in.py`](examples/providers/dspy_drop_in.py) | Use an `RLMFlow` agent as the LM behind a DSPy program. |
+| [`mcp_weather.py`](examples/providers/mcp_weather.py) | Start a local MCP weather server backed by Open-Meteo, delegate city forecasts, and combine the packing advice. |
+| [`tinker_agent.py`](examples/providers/tinker_agent.py) | Run the live terminal graph view with `TinkerClient` inference. |
+| [`sandboxes/`](examples/sandboxes/) | Build a small web app whose Python code runs inside Modal, E2B, and Daytona sandboxes. |
+| [`use_cases/coding_agent/agent.py`](examples/use_cases/coding_agent/agent.py) | Interactive coding agent that writes and edits files. |
+| [`needle_haystack.py`](examples/use_cases/needle_haystack.py) | Needle-in-a-haystack over a massive in-memory `CONTEXT`, using parallel child chunks. |
+| [`needle_haystack_filesystem.py`](examples/use_cases/needle_haystack_filesystem.py) | Needle-in-a-haystack across many files with custom tools and `runtime_factory`. |
+| [`summarizer.py`](examples/use_cases/summarizer.py) | Recursive map-reduce summarization over a long document — `launch_subagents` fan-out + stateful combine. |
+| [`eager_children.py`](examples/control/delegation/eager_children.py) | `eager_children=True` vs `False` — how child scheduling overlaps. |
+| [`control/injection/`](examples/control/injection/) | Supervisor-injection demo: generate a structured word-search workspace, fork it, replace supervising nodes, sync each edited graph to the branch workspace, and validate the typed result. |
+| [`fork_repair.py`](examples/control/branching/fork_repair.py) | Fork a workspace into independent repair branches and run tests in each. |
+| [`best_of_n.py`](examples/control/branching/best_of_n.py) | Run N independent workspace branches and pick the best result. |
+| [`use_cases/autoresearch/`](examples/use_cases/autoresearch/) | Karpathy-style hill-climbing research loop with custom `@tool`s and delegation. |
+| [`graph/`](examples/graph/) | Offline tour of the `Graph` API: query, navigate, mutate, save/load, timeline retrace, fork, render. |
 | [`run_examples.py`](examples/run_examples.py) | Manifest-driven smoke runner for offline, optional, live, sandbox, and manual examples. |
-| [`view_demo.py`](examples/core-api/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
+| [`view_demo.py`](examples/basics/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
 | [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, and inspect the workspace/viewer. Requires a live LLM. |
 | [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | Every visualization against the saved fixture: inline tree, Plotly graph, HTML stepper, topology renders (mermaid/dot/d2/sequence), step-indexed timeline, per-node detail, cost & reports, run-vs-run comparison, CLI equivalents. |
 | [`notebooks/node_basics.ipynb`](examples/notebooks/node_basics.ipynb) | `Graph` query API tour — `graph[aid]`, `graph.all_nodes`, `graph.all_nodes.find`, `graph.all_nodes.where`, `graph.all_nodes.results`/`errors`, per-agent tokens, `session.load_graph`, node streaming with `tee` / `json_logs`. |

@@ -1,8 +1,0 @@
-{
-  "agent_id": "root.rows.row.1",
-  "latest_node_id": "n_6447b9f8f96b",
-  "seq": 8,
-  "type": "done_output",
-  "terminal": true,
-  "result": "{\"index\":1,\"ok\":true,\"issue\":\"\"}"
-}

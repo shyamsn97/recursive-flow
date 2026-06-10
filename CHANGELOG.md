@@ -37,13 +37,12 @@ each one is called out under **Breaking** below.
   manual viewer/interactive checks.
 - **Tinker inference client.** `TinkerClient` adapts the Tinker SDK and
   `tinker-cookbook` renderers to the `LLMClient` interface, with an optional
-  `rlmflow[tinker]` extra and a live-view example in `examples/integrations/tinker_agent.py`.
+  `rlmflow[tinker]` extra and a live-view example in `examples/providers/tinker_agent.py`.
 - **Stricter local install checks.** `make install` now runs `ruff check .`
   through the existing lint target before installing the package.
-- **Supervisor injection example.** `examples/advanced/injection/` generates a
-  real Sudoku run, forks it, replaces supervising nodes with prompt-based graph
-  edits, syncs each edited graph to its branch workspace, and continues with a
-  live LLM.
+- **Supervisor injection example.** `examples/control/injection/` generates a
+  real word-search run, forks it, replaces supervising nodes with prompt-based
+  graph edits, validates structured results, and continues with a live LLM.
 - **Simpler iteration defaults.** `RLMConfig.max_iterations` is unbounded by
   default (`None`), while delegated children use the global
   `child_max_iterations=20` engine policy by default.
@@ -221,7 +220,7 @@ each one is called out under **Breaking** below.
 - `tests/test_session_variable.py` — `SessionVariable` tree-navigation
   methods (`parent`, `ancestors`, `children`, `subtree`, `tree`)
   derived from real cross-agent edges.
-- `examples/data/notebook-coding-agent/` — canonical saved trace shared
+- `examples/_data/notebook-coding-agent/` — canonical saved trace shared
   by `coding_agent.ipynb` (generator), `node_basics.ipynb` (querying),
   and `viz_walkthrough.ipynb` (rendering).
 - CI workflow (`.github/workflows/ci.yml`): ruff + pytest matrix on
