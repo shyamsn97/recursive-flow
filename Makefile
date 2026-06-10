@@ -1,4 +1,4 @@
-.PHONY: clean clean-build clean-pyc clean-test coverage dist docs help install lint lint/flake8 format-md lint-md examples examples-list examples-optional examples-live examples-sandbox examples-all oolong-paper oolong-rlm oolong-rlm-tips oolong-standard oolong-real oolong-ablations oolong-aggregate animation animation-preview animation-mp4 animation-gif animation-gif-small animation-clean bump-version
+.PHONY: clean clean-build clean-pyc clean-test coverage dist docs help install lint lint/flake8 format-md lint-md test test-all examples examples-list examples-optional examples-live examples-sandbox examples-all oolong-paper oolong-rlm oolong-rlm-tips oolong-standard oolong-real oolong-ablations oolong-aggregate animation animation-preview animation-mp4 animation-gif animation-gif-small animation-clean bump-version
 	{%- if cookiecutter.use_black == 'y' %} lint/black{% endif %}
 .DEFAULT_GOAL := help
 
@@ -112,8 +112,11 @@ commit: install test doc
 	git add .
 	git commit -a
 
-test:
-	python -m pytest --cov=rlmflow/ --cov-report html:tests/cov-report tests/
+test: ## Run the default test suite.
+	python -m pytest
+
+test-all: build-docker-image ## Run all tests, including Docker-gated integration tests.
+	RLMKIT_DOCKER_TEST=1 python -m pytest
 
 test-html: test
 	$(BROWSER) tests/cov-report/index.html

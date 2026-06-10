@@ -3,7 +3,7 @@
 Covers the three smoke paths that regressed during the 0.1.0 cycle:
 
 1. ``inject`` on a non-literal object exposes its methods over the wire.
-2. ``from X import *`` works inside a code block that also ``yield``s.
+2. ``from X import *`` works inside a code block that also awaits.
 3. Proxied tool writes resolve to the host workspace directory.
 
 Gated on ``RLMKIT_DOCKER_TEST=1`` plus a running docker daemon.  Build
@@ -81,23 +81,30 @@ def test_object_proxy_round_trips_file_context_methods(runtime, tmp_path: Path):
 def test_star_import_with_await(runtime):
     rt, _ = runtime
 
-    def delegate(prompt: str) -> ChildHandle:
+    def rlm_delegate(
+        *,
+        name: str,
+        query: str,
+        context: str,
+        model: str = "default",
+        output_schema=None,
+    ) -> ChildHandle:
         return ChildHandle(agent_id="c")
 
-    def wait(handles):
+    def rlm_wait(*handles):
         return WaitRequest(agent_ids=[h.agent_id for h in handles])
 
-    rt.inject("delegate", delegate)
-    rt.inject("wait", wait)
+    rt.inject("rlm_delegate", rlm_delegate)
+    rt.inject("rlm_wait", rlm_wait)
+    rt.inject_launcher("launch_subagents")
 
     suspended, _, _ = rt.start_code(
         "from math import *\n"
-        "h = delegate('q')\n"
-        "await wait([h])\n"
+        "await launch_subagents([{'name': 'c', 'query': 'q'}])\n"
         "print(int(pi * 100))\n"
     )
     assert suspended is True
-    suspended, out, _ = rt.resume_code({"c": "done"})
+    suspended, out, _ = rt.resume_code(["done"])
     assert suspended is False
     assert "314" in out
 
@@ -122,26 +129,33 @@ def test_end_to_end_delegate_wait():
     try:
         assert rt.execute("print('hi from container')") == "hi from container"
 
-        def delegate(prompt: str) -> ChildHandle:
-            return ChildHandle(agent_id=f"child-{prompt}")
+        def rlm_delegate(
+            *,
+            name: str,
+            query: str,
+            context: str,
+            model: str = "default",
+            output_schema=None,
+        ) -> ChildHandle:
+            return ChildHandle(agent_id=f"child-{name}")
 
-        def wait(handles):
+        def rlm_wait(*handles):
             return WaitRequest(agent_ids=[h.agent_id for h in handles])
 
-        rt.inject("delegate", delegate)
-        rt.inject("wait", wait)
+        rt.inject("rlm_delegate", rlm_delegate)
+        rt.inject("rlm_wait", rlm_wait)
+        rt.inject_launcher("launch_subagents")
 
         suspended, payload, _ = rt.start_code(
-            "h = delegate('q1')\n"
-            "results = await wait([h])\n"
+            "results = await launch_subagents([{'name': 'q1', 'query': 'q1'}])\n"
             "print('after:', results)\n"
         )
         assert suspended is True
         request, _ = payload
         assert request.agent_ids == ["child-q1"]
 
-        suspended, out, _ = rt.resume_code({"child-q1": "answer"})
+        suspended, out, _ = rt.resume_code(["answer"])
         assert suspended is False
-        assert "after: {'child-q1': 'answer'}" in out
+        assert "after: ['answer']" in out
     finally:
         rt.close()

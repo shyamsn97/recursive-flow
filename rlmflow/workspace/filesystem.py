@@ -306,7 +306,10 @@ class Workspace(BaseWorkspace):
         )
         graph = forked.session.load_graph()
         if graph.nodes or graph.children:
-            forked.sync_graph(graph)
+            ref = WorkspaceRef(root=str(forked.root), branch_id=graph.branch_id)
+            for agent in graph.walk():
+                agent.workspace = ref
+            forked.session.rewrite_graph(graph)
         return forked
 
 
