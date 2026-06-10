@@ -20,6 +20,19 @@ from rlmflow.engine.replay import can_resume
 from tests.helpers import StaticLLM
 
 
+OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+}
+
+OTHER_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"score": {"type": "integer"}},
+    "required": ["score"],
+}
+
+
 def _graph_with_child() -> Graph:
     action = ExecAction(agent_id="root", seq=3, code="bad()")
     child = Graph(
@@ -42,7 +55,7 @@ def _graph_with_child() -> Graph:
     )
 
 
-def test_replace_last_action_stamps_position_and_truncates_following_states():
+def test_replace_last_action_defaults_to_descendant_truncation():
     graph = _graph_with_child()
     old_action = graph.last_action("root")
 
@@ -61,10 +74,11 @@ def test_replace_last_action_stamps_position_and_truncates_following_states():
         "llm_output",
         "exec_action",
     ]
+    assert "root.worker" not in edited.agents
     assert graph.current().type == "error_output"
 
 
-def test_replace_node_can_prune_descendants_spawned_by_removed_action():
+def test_replace_node_defaults_to_pruning_descendants_spawned_by_removed_action():
     graph = _graph_with_child()
     old_action = graph.last_action("root")
     assert old_action is not None
@@ -72,7 +86,6 @@ def test_replace_node_can_prune_descendants_spawned_by_removed_action():
     edited = graph.replace_node(
         old_action.id,
         ExecAction(code="fixed()"),
-        truncate="descendants",
     )
 
     assert "root.worker" not in edited.agents
@@ -156,7 +169,7 @@ def _graph_waiting_on_children() -> Graph:
     )
 
 
-def test_replace_supervising_node_prunes_waited_children_with_descendants():
+def test_replace_supervising_node_prunes_waited_children_by_default():
     graph = _graph_waiting_on_children()
     supervising = graph.last_observation("root")
     assert isinstance(supervising, SupervisingOutput)
@@ -164,7 +177,6 @@ def test_replace_supervising_node_prunes_waited_children_with_descendants():
     edited = graph.replace_node(
         supervising.id,
         ExecOutput(output="try another route"),
-        truncate="descendants",
     )
 
     assert [node.type for node in edited.nodes] == [
@@ -626,6 +638,82 @@ def test_step_commits_structural_graph_edits_before_planning(tmp_path):
         "llm_action",
         "llm_output",
     ]
+
+
+def test_replace_node_inherits_active_output_schema_by_default():
+    graph = Graph(
+        agent_id="root",
+        nodes=[
+            UserQuery(agent_id="root", seq=0, content="q", output_schema=OUTPUT_SCHEMA),
+            ExecOutput(agent_id="root", seq=1, output="old", output_schema=OUTPUT_SCHEMA),
+        ],
+    )
+
+    edited = graph.replace_last_observation("root", ExecOutput(output="new"))
+
+    assert edited.current().output_schema == OUTPUT_SCHEMA
+
+
+def test_replace_node_can_clear_active_output_schema():
+    graph = Graph(
+        agent_id="root",
+        nodes=[
+            UserQuery(agent_id="root", seq=0, content="q", output_schema=OUTPUT_SCHEMA),
+            ExecOutput(agent_id="root", seq=1, output="old", output_schema=OUTPUT_SCHEMA),
+        ],
+    )
+
+    edited = graph.replace_last_observation(
+        "root",
+        ExecOutput(output="new"),
+        inherit_output_schema=False,
+    )
+
+    assert edited.current().output_schema is None
+
+
+def test_replace_node_can_override_active_output_schema():
+    graph = Graph(
+        agent_id="root",
+        nodes=[
+            UserQuery(agent_id="root", seq=0, content="q", output_schema=OUTPUT_SCHEMA),
+            ExecOutput(agent_id="root", seq=1, output="old", output_schema=OUTPUT_SCHEMA),
+        ],
+    )
+
+    edited = graph.replace_last_observation(
+        "root",
+        ExecOutput(output="new"),
+        output_schema=OTHER_OUTPUT_SCHEMA,
+    )
+
+    assert edited.current().output_schema == OTHER_OUTPUT_SCHEMA
+
+
+def test_inject_inherits_active_output_schema_by_default():
+    graph = Graph(
+        agent_id="root",
+        nodes=[UserQuery(agent_id="root", seq=0, content="q", output_schema=OUTPUT_SCHEMA)],
+    )
+
+    edited = graph.inject(target="root", node=ExecOutput(output="injected"))
+
+    assert edited.current().output_schema == OUTPUT_SCHEMA
+
+
+def test_inject_can_clear_active_output_schema():
+    graph = Graph(
+        agent_id="root",
+        nodes=[UserQuery(agent_id="root", seq=0, content="q", output_schema=OUTPUT_SCHEMA)],
+    )
+
+    edited = graph.inject(
+        target="root",
+        node=ExecOutput(output="injected"),
+        inherit_output_schema=False,
+    )
+
+    assert edited.current().output_schema is None
 
 
 def test_commit_graph_can_fork_workspace(tmp_path):

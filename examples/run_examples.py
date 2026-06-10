@@ -6,7 +6,7 @@ Default usage runs deterministic/offline examples only:
 
 Opt into heavier examples when you have the dependencies/credentials:
 
-    python examples/run_examples.py --include-optional --include-notebooks
+    python examples/run_examples.py --include-optional
     python examples/run_examples.py --include-live
     python examples/run_examples.py --all
 """
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Literal
 
 
-Category = Literal["offline", "optional", "live", "sandbox", "notebook", "manual"]
+Category = Literal["offline", "optional", "live", "sandbox", "manual"]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -44,21 +44,6 @@ class Example:
     extra_env: dict[str, str] = field(default_factory=dict)
 
     def command(self, tmpdir: Path) -> list[str]:
-        if self.path.endswith(".ipynb"):
-            out = tmpdir / (Path(self.path).stem + ".executed.ipynb")
-            return [
-                sys.executable,
-                "-m",
-                "jupyter",
-                "nbconvert",
-                "--to",
-                "notebook",
-                "--execute",
-                f"--ExecutePreprocessor.timeout={self.timeout}",
-                "--output",
-                str(out),
-                str(REPO_ROOT / self.path),
-            ]
         return [
             sys.executable,
             str(REPO_ROOT / self.path),
@@ -67,36 +52,50 @@ class Example:
 
 
 EXAMPLES: list[Example] = [
-    Example("injections", "examples/control/injections.py"),
-    Example("eager-children", "examples/control/eager_children.py"),
-    Example("llm-query-batched", "examples/core-api/llm_query_batched.py"),
-    Example("best-of-n", "examples/control/best_of_n.py", args=("--n", "4", "--root-dir", "{tmp}/best_of_n")),
+    Example("controller-injection", "examples/control/controller_injection.py"),
+    Example("eager-children", "examples/control/delegation/eager_children.py"),
+    Example("llm-query-batched", "examples/basics/llm_query_batched.py"),
+    Example(
+        "structured-output",
+        "examples/basics/structured_output.py",
+        category="live",
+        args=("--max-iterations", "8", "--workspace", "{tmp}/structured-output"),
+        env=("OPENAI_API_KEY",),
+        modules=("openai",),
+        timeout=300,
+        note="uses a live model to validate root and child structured outputs",
+    ),
+    Example(
+        "best-of-n",
+        "examples/control/branching/best_of_n.py",
+        args=("--n", "4", "--root-dir", "{tmp}/best_of_n"),
+    ),
     Example(
         "fork-repair",
-        "examples/control/fork_repair.py",
+        "examples/control/branching/fork_repair.py",
         args=("--root-dir", "{tmp}/fork_repair"),
         modules=("pytest",),
     ),
-    Example("showcase", "examples/core-api/showcase.py", args=("--no-viz",)),
-    Example("graph-query", "examples/graph-features/01_query.py"),
-    Example("graph-navigate", "examples/graph-features/02_navigate.py"),
-    Example("graph-mutate", "examples/graph-features/03_mutate.py"),
-    Example("graph-save-load", "examples/graph-features/04_save_load.py"),
-    Example("graph-timeline", "examples/graph-features/05_timeline.py"),
-    Example("graph-fork", "examples/graph-features/06_fork.py"),
-    Example("graph-render", "examples/graph-features/07_render.py"),
+    Example("showcase", "examples/basics/showcase.py", args=("--no-viz",)),
+    Example("graph-query", "examples/graph/01_query.py"),
+    Example("graph-navigate", "examples/graph/02_navigate.py"),
+    Example("graph-mutate", "examples/graph/03_mutate.py"),
+    Example("graph-save-load", "examples/graph/04_save_load.py"),
+    Example("graph-timeline", "examples/graph/05_timeline.py"),
+    Example("graph-fork", "examples/graph/06_fork.py"),
+    Example("graph-render", "examples/graph/07_render.py"),
     Example(
         "circle-packing-evaluate",
-        "examples/autoresearch/circle_packing/evaluate.py",
-        args=("examples/autoresearch/circle_packing/solution.py",),
+        "examples/use_cases/autoresearch/circle_packing/evaluate.py",
+        args=("examples/use_cases/autoresearch/circle_packing/solution.py",),
         category="optional",
         modules=("numpy",),
     ),
     Example(
         "circle-packing-plot",
-        "examples/autoresearch/circle_packing/plot_circles.py",
+        "examples/use_cases/autoresearch/circle_packing/plot_circles.py",
         args=(
-            "examples/autoresearch/circle_packing/solution.py",
+            "examples/use_cases/autoresearch/circle_packing/solution.py",
             "--out",
             "{tmp}/circle_packing.png",
         ),
@@ -105,14 +104,14 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "view-demo",
-        "examples/core-api/view_demo.py",
+        "examples/basics/view_demo.py",
         category="manual",
         modules=("gradio", "plotly"),
         note="opens the interactive viewer",
     ),
     Example(
         "drop-in-llm",
-        "examples/core-api/drop_in_llm.py",
+        "examples/basics/drop_in_llm.py",
         category="live",
         env=("OPENAI_API_KEY",),
         modules=("openai",),
@@ -120,7 +119,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "summarizer",
-        "examples/applications/summarizer.py",
+        "examples/use_cases/summarizer.py",
         category="live",
         args=("--sections", "6", "--no-viz", "--max-iterations", "8"),
         env=("OPENAI_API_KEY",),
@@ -129,7 +128,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "needle-haystack",
-        "examples/applications/needle_haystack.py",
+        "examples/use_cases/needle_haystack.py",
         category="live",
         args=("--num-lines", "2000", "--no-viz", "--max-iterations", "8"),
         env=("OPENAI_API_KEY",),
@@ -138,7 +137,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "needle-haystack-filesystem",
-        "examples/applications/needle_haystack_filesystem.py",
+        "examples/use_cases/needle_haystack_filesystem.py",
         category="live",
         args=("--num-files", "50", "--no-viz", "--max-iterations", "8"),
         env=("OPENAI_API_KEY",),
@@ -147,7 +146,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "dspy-drop-in",
-        "examples/integrations/dspy_drop_in.py",
+        "examples/providers/dspy_drop_in.py",
         category="live",
         env=("OPENAI_API_KEY",),
         modules=("dspy", "openai"),
@@ -155,7 +154,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "mcp-weather",
-        "examples/integrations/mcp_weather.py",
+        "examples/providers/mcp_weather.py",
         category="live",
         args=("--no-viz", "--max-iterations", "8"),
         env=("OPENAI_API_KEY",),
@@ -164,32 +163,32 @@ EXAMPLES: list[Example] = [
         note="uses Open-Meteo through a local MCP server",
     ),
     Example(
-        "advanced-replay-sudoku",
-        "examples/advanced/replay/sudoku.py",
+        "injection-word-search",
+        "examples/control/injection/word_search.py",
         category="live",
-        args=("--workspace", "{tmp}/sudoku-naive"),
+        args=("--workspace", "{tmp}/word-search-baseline"),
         env=("OPENAI_API_KEY",),
         modules=("openai",),
         timeout=600,
-        note="generates the baseline workspace used by advanced-replay-resume",
+        note="generates the baseline workspace used by injection-variants",
     ),
     Example(
-        "advanced-replay-resume",
-        "examples/advanced/replay/replay_resume.py",
+        "injection-variants",
+        "examples/control/injection/inject_variants.py",
         category="live",
-        args=("--source", "{tmp}/sudoku-naive"),
+        args=("--source", "{tmp}/word-search-baseline"),
         env=("OPENAI_API_KEY",),
         modules=("openai",),
         timeout=600,
-        note="replays the baseline generated by advanced-replay-sudoku",
+        note="injects alternate prompts into the baseline generated by injection-word-search",
     ),
     Example(
         "autoresearch",
-        "examples/autoresearch/autoresearch.py",
+        "examples/use_cases/autoresearch/autoresearch.py",
         category="live",
         args=(
             "--target",
-            "examples/autoresearch/circle_packing",
+            "examples/use_cases/autoresearch/circle_packing",
             "--workspace",
             "{tmp}/autoresearch",
             "--max-submissions",
@@ -205,7 +204,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "sandbox-e2b",
-        "examples/sandbox/e2b_agent.py",
+        "examples/sandboxes/e2b_agent.py",
         category="sandbox",
         args=("--max-iterations", "2", "--skip-setup"),
         env=("OPENAI_API_KEY", "E2B_API_KEY"),
@@ -214,7 +213,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "sandbox-daytona",
-        "examples/sandbox/daytona_agent.py",
+        "examples/sandboxes/daytona_agent.py",
         category="sandbox",
         args=("--max-iterations", "2", "--skip-setup"),
         env=("OPENAI_API_KEY", "DAYTONA_API_KEY"),
@@ -223,7 +222,7 @@ EXAMPLES: list[Example] = [
     ),
     Example(
         "sandbox-modal",
-        "examples/sandbox/modal_agent.py",
+        "examples/sandboxes/modal_agent.py",
         category="sandbox",
         args=("--max-iterations", "2", "--no-live", "--quiet-runtime"),
         env=("OPENAI_API_KEY",),
@@ -231,31 +230,8 @@ EXAMPLES: list[Example] = [
         timeout=900,
     ),
     Example(
-        "notebook-node-basics",
-        "examples/notebooks/node_basics.ipynb",
-        category="notebook",
-        modules=("jupyter", "nbconvert", "ipykernel"),
-        timeout=180,
-    ),
-    Example(
-        "notebook-viz-walkthrough",
-        "examples/notebooks/viz_walkthrough.ipynb",
-        category="notebook",
-        modules=("jupyter", "nbconvert", "ipykernel"),
-        timeout=180,
-    ),
-    Example(
-        "notebook-coding-agent",
-        "examples/notebooks/coding_agent.ipynb",
-        category="notebook",
-        env=("OPENAI_API_KEY",),
-        modules=("jupyter", "nbconvert", "ipykernel", "openai"),
-        timeout=600,
-        note="live notebook: executes real LLM cells",
-    ),
-    Example(
         "coding-agent-interactive",
-        "examples/coding-agent/agent.py",
+        "examples/use_cases/coding_agent/agent.py",
         category="manual",
         env=("OPENAI_API_KEY",),
         modules=("openai",),
@@ -277,7 +253,6 @@ def should_include(example: Example, args: argparse.Namespace) -> bool:
         or (example.category == "optional" and args.include_optional)
         or (example.category == "live" and args.include_live)
         or (example.category == "sandbox" and args.include_sandbox)
-        or (example.category == "notebook" and args.include_notebooks)
         or (example.category == "manual" and args.include_manual)
     )
 
@@ -325,7 +300,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-optional", action="store_true", help="run optional-dependency examples")
     parser.add_argument("--include-live", action="store_true", help="run examples that call live LLM APIs")
     parser.add_argument("--include-sandbox", action="store_true", help="run Modal/E2B/Daytona examples")
-    parser.add_argument("--include-notebooks", action="store_true", help="execute notebooks with nbconvert")
     parser.add_argument("--include-manual", action="store_true", help="include interactive/manual smoke checks")
     parser.add_argument("--all", action="store_true", help="enable every include flag")
     parser.add_argument("--list", action="store_true", help="list selected examples without running them")
@@ -342,7 +316,6 @@ def main() -> int:
         args.include_optional = True
         args.include_live = True
         args.include_sandbox = True
-        args.include_notebooks = True
         args.include_manual = True
 
     selected = [example for example in EXAMPLES if should_include(example, args)]

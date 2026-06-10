@@ -18,7 +18,13 @@ from rlmflow.graph import (
 
 
 def step(engine, graph: Graph) -> Graph:
-    """Advance the run by one synchronized or async-child batch."""
+    """Advance the run by one synchronized or async-child batch.
+
+    If ``graph`` has been edited outside normal execution (injection,
+    replacement, truncation, fork repair), sync that whole graph snapshot before
+    planning. Once planning starts, transitions use append-only ``write_state``
+    via ``append_node`` rather than rewriting the graph for every new node.
+    """
 
     engine = engine.for_graph(graph)
     if engine.workspace is not None:

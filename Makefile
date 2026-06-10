@@ -1,4 +1,4 @@
-.PHONY: clean clean-build clean-pyc clean-test coverage dist docs help install lint lint/flake8 format-md lint-md oolong-paper oolong-rlm oolong-rlm-tips oolong-standard oolong-real oolong-ablations oolong-aggregate animation animation-preview animation-mp4 animation-gif animation-gif-small animation-clean bump-version
+.PHONY: clean clean-build clean-pyc clean-test coverage dist docs help install lint lint/flake8 format-md lint-md examples examples-list examples-optional examples-live examples-sandbox examples-all oolong-paper oolong-rlm oolong-rlm-tips oolong-standard oolong-real oolong-ablations oolong-aggregate animation animation-preview animation-mp4 animation-gif animation-gif-small animation-clean bump-version
 	{%- if cookiecutter.use_black == 'y' %} lint/black{% endif %}
 .DEFAULT_GOAL := help
 
@@ -117,6 +117,26 @@ test:
 
 test-html: test
 	$(BROWSER) tests/cov-report/index.html
+
+EXAMPLES_ARGS ?=
+
+examples: ## Run deterministic/offline examples.
+	python examples/run_examples.py $(EXAMPLES_ARGS)
+
+examples-list: ## List all examples and skip reasons.
+	python examples/run_examples.py --all --list $(EXAMPLES_ARGS)
+
+examples-optional: ## Run offline + optional-dependency examples.
+	python examples/run_examples.py --include-optional $(EXAMPLES_ARGS)
+
+examples-live: ## Run offline + live LLM examples.
+	python examples/run_examples.py --include-live $(EXAMPLES_ARGS)
+
+examples-sandbox: ## Run offline + sandbox runtime examples.
+	python examples/run_examples.py --include-sandbox $(EXAMPLES_ARGS)
+
+examples-all: ## Run every example category.
+	python examples/run_examples.py --all $(EXAMPLES_ARGS)
 
 OOLONG_N ?= 20
 OOLONG_SPLIT ?= validation

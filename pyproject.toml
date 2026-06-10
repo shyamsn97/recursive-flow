@@ -24,6 +24,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+    "jsonschema>=4.0",
     "pydantic>=2.0",
     "tenacity>=8.0",
 ]
@@ -103,4 +104,4 @@ exclude_lines = [
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-extend-exclude = ["examples/notebooks", "examples/data"]
+extend-exclude = ["examples/notebooks", "examples/_data"]

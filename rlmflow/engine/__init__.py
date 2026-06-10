@@ -18,7 +18,7 @@ helpers called by the public ``RLMFlow`` methods.
 - :mod:`~rlmflow.engine.transitions` — implementation of action-to-state
   transition handlers behind ``RLMFlow.apply_one`` / ``step_exec`` /
   ``step_after_supervising``.
-- :mod:`~rlmflow.engine.seq` — tiny pure helpers (sequence numbers,
+- :mod:`~rlmflow.engine.helpers` — tiny shared helpers (node appends,
   iteration counts, budget checks, output truncation/formatting, the
   pool factory).
 - :mod:`~rlmflow.engine.config` — :class:`RLMConfig`. Pure data.

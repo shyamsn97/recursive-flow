@@ -1,6 +1,6 @@
 # Autoresearch Run Failure Analysis
 
-Internal notes from inspecting `examples/autoresearch/runs/autoresearch`
+Internal notes from inspecting `examples/use_cases/autoresearch/runs/autoresearch`
 after the recursive circle-packing runs.
 
 ## TL;DR
@@ -393,7 +393,7 @@ global rules, unless this remains a circle-packing-only example.
    - numeric score means done, no `_fixN`
    - use `ExperimentCrashed as e`, not broad `Exception`
 3. Move "Do not generalize" near the top of
-   `examples/autoresearch/circle_packing/program.md`.
+   `examples/use_cases/autoresearch/circle_packing/program.md`.
 4. Reduce or remove prompt examples that contain broad fallback logic.
 
 The main theme: children should be researchers for one exact target,

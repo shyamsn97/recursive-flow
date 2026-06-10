@@ -54,6 +54,7 @@ class Node(BaseModel):
     id: str = Field(default_factory=new_id)
     agent_id: str = "root"
     seq: int = 0
+    output_schema: dict[str, Any] | None = None
 
     @property
     def terminal(self) -> bool:
@@ -188,6 +189,8 @@ class DoneOutput(CodeObservation):
 
     type: Literal["done_output"] = "done_output"
     result: str = ""
+    structured_result: Any | None = None
+    output_schema: dict[str, Any] | None = None
     content: str = ""
     output: str = ""
 

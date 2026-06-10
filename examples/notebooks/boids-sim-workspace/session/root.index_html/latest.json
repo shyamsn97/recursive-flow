@@ -1,8 +1,0 @@
-{
-  "agent_id": "root.index_html",
-  "latest_node_id": "n_07aed1872654",
-  "seq": 8,
-  "type": "done_output",
-  "terminal": true,
-  "result": "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>Boids</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n  <canvas id=\"boids\" aria-label=\"Boids simulation\"></canvas>\n  <script src=\"boids.js\"></script>\n</body>\n</html>"
-}

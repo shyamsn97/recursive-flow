@@ -77,6 +77,7 @@ class Graph:
     branch_id: str = "main"
     parent_agent_id: str | None = None
     parent_node_id: str | None = None
+    output_schema: dict[str, Any] | None = None
 
     nodes: list[Node] = field(default_factory=list)
     children: dict[str, Graph] = field(default_factory=dict)
@@ -126,6 +127,14 @@ class Graph:
         """Latest node of this agent (last by insertion)."""
         return self.nodes[-1] if self.nodes else None
 
+    def active_output_schema(self, node: Node | None = None) -> dict[str, Any] | None:
+        """Active structured-output schema for ``node`` or the current path."""
+
+        target = node or self.current()
+        if target is not None and target.output_schema is not None:
+            return target.output_schema
+        return self.output_schema
+
     @property
     def finished(self) -> bool:
         cur = self.current()
@@ -133,14 +142,20 @@ class Graph:
             return False
         return all(child.finished for child in self.children.values())
 
-    def result(self) -> str:
-        """Terminal result string from the deepest terminal leaf, or ``""``."""
+    def result(self) -> Any:
+        """Semantic terminal result from the deepest terminal leaf, or ``""``."""
         g: Graph = self
         while True:
             cur = g.current()
             if cur is None:
                 return ""
             if cur.terminal:
+                if getattr(cur, "output_schema", None) is not None:
+                    structured = getattr(cur, "structured_result", None)
+                    if structured is not None:
+                        return structured
+                    result = getattr(cur, "result", "") or "null"
+                    return json.loads(result)
                 return getattr(cur, "result", "") or ""
             kids = list(g.children.values())
             if not kids:
@@ -366,11 +381,13 @@ class Graph:
         node_id: str,
         node: Node,
         *,
-        truncate: str = "after",
+        truncate: str = "descendants",
+        output_schema: dict[str, Any] | None = None,
+        inherit_output_schema: bool = True,
     ) -> Graph:
         """Return a copy with ``node_id`` replaced by ``node``.
 
-        ``truncate`` may be:
+        ``truncate`` defaults to ``"descendants"``. Valid values are:
         - ``"none"``: replace only the node;
         - ``"after"``: drop later states in the same agent;
         - ``"descendants"``: also prune children whose spawn node disappeared,
@@ -378,159 +395,81 @@ class Graph:
           ``waiting_on`` list.
         """
 
-        if truncate not in {"none", "after", "descendants"}:
-            raise ValueError("truncate must be 'none', 'after', or 'descendants'")
-        out = self.copy(deep=True)
-        owner = out.node_owner(node_id)
-        index = owner._index_of(node_id)
-        old, _fixed = out._replace_node_at_index(
-            owner,
-            index,
+        from rlmflow.graph.replace import replace_node
+
+        return replace_node(
+            self,
+            node_id,
             node,
             truncate=truncate,
+            output_schema=output_schema,
+            inherit_output_schema=inherit_output_schema,
         )
-        out._invalidate_ancestors_after_child_edit(owner, truncate=truncate)
-        if truncate == "descendants":
-            out._apply_descendant_truncation(owner, old)
-        return out
 
     def replace_last_action(
         self,
         agent_id: str,
         node: ActionNode,
         *,
-        truncate: str = "after",
+        truncate: str = "descendants",
+        output_schema: dict[str, Any] | None = None,
+        inherit_output_schema: bool = True,
     ) -> Graph:
         """Return a copy replacing ``agent_id``'s latest action node."""
 
-        last = self.last_action(agent_id)
-        if last is None:
-            raise KeyError(f"agent {agent_id!r} has no action node")
-        return self.replace_node(last.id, node, truncate=truncate)
+        from rlmflow.graph.replace import replace_last_action
+
+        return replace_last_action(
+            self,
+            agent_id,
+            node,
+            truncate=truncate,
+            output_schema=output_schema,
+            inherit_output_schema=inherit_output_schema,
+        )
 
     def replace_last_observation(
         self,
         agent_id: str,
         node: ObservationNode,
         *,
-        truncate: str = "after",
+        truncate: str = "descendants",
+        output_schema: dict[str, Any] | None = None,
+        inherit_output_schema: bool = True,
     ) -> Graph:
         """Return a copy replacing ``agent_id``'s latest observation node."""
 
-        last = self.last_observation(agent_id)
-        if last is None:
-            raise KeyError(f"agent {agent_id!r} has no observation node")
-        return self.replace_node(last.id, node, truncate=truncate)
+        from rlmflow.graph.replace import replace_last_observation
+
+        return replace_last_observation(
+            self,
+            agent_id,
+            node,
+            truncate=truncate,
+            output_schema=output_schema,
+            inherit_output_schema=inherit_output_schema,
+        )
 
     def truncate_after(self, node_id: str, *, descendants: bool = True) -> Graph:
         """Return a copy with states after ``node_id`` removed."""
 
-        out = self.copy(deep=True)
-        owner = out.node_owner(node_id)
-        index = owner._index_of(node_id)
-        owner.nodes = owner.nodes[: index + 1]
-        if descendants:
-            out._prune_unreachable_children()
-        return out
+        from rlmflow.graph.truncation import truncate_after
+
+        return truncate_after(self, node_id, descendants=descendants)
 
     def truncate_agent(self, agent_id: str, *, after_seq: int) -> Graph:
         """Return a copy with ``agent_id`` states after ``after_seq`` removed."""
 
-        out = self.copy(deep=True)
-        out[agent_id].nodes = [
-            node for node in out[agent_id].nodes if node.seq <= after_seq
-        ]
-        out._prune_unreachable_children()
-        return out
+        from rlmflow.graph.truncation import truncate_agent
+
+        return truncate_agent(self, agent_id, after_seq=after_seq)
 
     def prune_descendants_spawned_after(self, agent_id: str, seq: int) -> Graph:
         """Return a copy pruning children spawned after ``agent_id`` ``seq``."""
 
-        out = self.copy(deep=True)
-        owner = out[agent_id]
-        kept_ids = {node.id for node in owner.nodes if node.seq <= seq}
-        owner.children = {
-            aid: child
-            for aid, child in owner.children.items()
-            if child.parent_node_id in kept_ids
-        }
-        for child in owner.children.values():
-            child._prune_unreachable_children()
-        return out
+        from rlmflow.graph.truncation import prune_descendants_spawned_after
 
-    def _replace_node_at_index(
-        self,
-        owner: Graph,
-        index: int,
-        node: Node,
-        *,
-        truncate: str,
-    ) -> tuple[Node, Node]:
-        """Replace one local state and optionally drop its local future."""
-
-        old = owner.nodes[index]
-        fixed = _node_for_replacement(old, node)
-        if truncate == "none":
-            owner.nodes[index] = fixed
-        else:
-            owner.nodes = [*owner.nodes[:index], fixed]
-        return old, fixed
-
-    def _invalidate_ancestors_after_child_edit(
-        self,
-        owner: Graph,
-        *,
-        truncate: str,
-    ) -> None:
-        """Drop stale ancestor resume paths after a child timeline edit."""
-
-        if truncate == "none" or owner.parent_agent_id is None:
-            return
-        self._truncate_ancestors_waiting_on(owner.agent_id)
-
-    def _apply_descendant_truncation(self, owner: Graph, old: Node) -> None:
-        """Apply child cleanup for route-changing edits."""
-
-        self._prune_waiting_on_children(owner, old)
-        self._prune_unreachable_children()
-
-    def _prune_waiting_on_children(self, owner: Graph, old: Node) -> None:
-        """Drop children that were only part of a replaced supervisor route."""
-
-        for child_id in getattr(old, "waiting_on", ()):
-            owner.children.pop(child_id, None)
-
-    def _prune_unreachable_children(self) -> None:
-        """Drop children whose ``parent_node_id`` no longer exists."""
-
-        valid_ids = {node.id for node in self.nodes}
-        self.children = {
-            aid: child
-            for aid, child in self.children.items()
-            if child.parent_node_id in valid_ids
-        }
-        for child in self.children.values():
-            child._prune_unreachable_children()
-
-    def _truncate_ancestors_waiting_on(self, agent_id: str) -> None:
-        """Drop stale parent resume states that depended on ``agent_id``."""
-
-        child = self[agent_id]
-        if child.parent_agent_id is None:
-            return
-
-        parent = self[child.parent_agent_id]
-        wait_index = None
-        for index, node in enumerate(parent.nodes):
-            if agent_id in getattr(node, "waiting_on", ()):
-                wait_index = index
-
-        if wait_index is None:
-            return
-
-        parent.nodes = parent.nodes[: wait_index + 1]
-        if parent.parent_agent_id is not None:
-            self._truncate_ancestors_waiting_on(parent.agent_id)
+        return prune_descendants_spawned_after(self, agent_id, seq)
 
     def add_child(self, child: Graph) -> Graph:
         """Attach (or replace) a sub-agent under this graph."""
@@ -561,6 +500,8 @@ class Graph:
         target: str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]],
         node: Node,
         mode: str = "append",
+        output_schema: dict[str, Any] | None = None,
+        inherit_output_schema: bool = True,
     ) -> Graph:
         """Return a new graph with ``node`` injected at ``target``.
 
@@ -570,7 +511,14 @@ class Graph:
         """
         from rlmflow.graph.injection import inject
 
-        return inject(self, target=target, node=node, mode=mode)
+        return inject(
+            self,
+            target=target,
+            node=node,
+            mode=mode,
+            output_schema=output_schema,
+            inherit_output_schema=inherit_output_schema,
+        )
 
     def inject_output(
         self,
@@ -648,6 +596,7 @@ class Graph:
             "branch_id": self.branch_id,
             "parent_agent_id": self.parent_agent_id,
             "parent_node_id": self.parent_node_id,
+            "output_schema": self.output_schema,
         }
 
     @classmethod
@@ -679,6 +628,7 @@ class Graph:
             branch_id=data.get("branch_id", "main"),
             parent_agent_id=data.get("parent_agent_id"),
             parent_node_id=data.get("parent_node_id"),
+            output_schema=data.get("output_schema"),
             nodes=list(nodes),
             children=dict(children or {}),
         )
@@ -743,13 +693,6 @@ def _path_prefixes(start: str, full: str) -> Iterator[str]:
     for piece in rest:
         cur = f"{cur}.{piece}"
         yield cur
-
-
-def _node_for_replacement(old: Node, new: Node) -> Node:
-    """Stamp ``new`` into ``old``'s graph position with a fresh id."""
-
-    fields = new.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
-    return new.__class__(agent_id=old.agent_id, seq=old.seq, **fields)
 
 
 __all__ = [

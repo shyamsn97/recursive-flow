@@ -30,7 +30,7 @@ Pick the doc that matches what you're trying to do.
 - [Security](security.md) — trust model, Docker isolation knobs,
   engine-level caps, proxied tools, approval gates.
 - [Example smoke runner](../examples/run_examples.py) — run the offline
-  examples and opt into optional, live, notebook, sandbox, or manual checks.
+  examples and opt into optional, live, sandbox, or manual checks.
 
 ## Extend rlmflow
 

@@ -13,11 +13,18 @@ via ``runtime.env`` after each execution to discover ``DONE_RESULT``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
 from rlmflow.graph import ChildHandle, WaitRequest
-from rlmflow.runtime.env import AGENT_ID, DONE_RESULT, PARENT_NODE_ID, replay_queue
+from rlmflow.runtime.env import (
+    AGENT_ID,
+    DONE_OUTPUT_SCHEMA,
+    DONE_RESULT,
+    PARENT_NODE_ID,
+    replay_queue,
+)
 from rlmflow.tools import tool
 
 
@@ -30,13 +37,28 @@ class DoneSignal(BaseException):
     """
 
 
-def make_done(env: dict[str, Any]):
+def make_done(env: dict[str, Any], output_parser: Callable[[str, Any], Any]):
     """Closure that records the final answer and stops the current block."""
 
     @tool("Return this agent's final answer.")
-    def done(answer: str) -> str:
+    def done(answer: Any) -> str:
         if env.get(DONE_RESULT) is None:
-            env[DONE_RESULT] = str(answer).strip()
+            schema = env.get(DONE_OUTPUT_SCHEMA)
+            if schema is None:
+                env[DONE_RESULT] = str(answer).strip()
+            else:
+                content = json.dumps(answer, separators=(",", ":"), ensure_ascii=False)
+                parsed = output_parser(content, schema)
+                structured = (
+                    parsed.model_dump(mode="json")
+                    if hasattr(parsed, "model_dump")
+                    else parsed
+                )
+                env[DONE_RESULT] = json.dumps(
+                    structured,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
             print(f"[done] {env[DONE_RESULT]}")
         raise DoneSignal(env[DONE_RESULT])
 
@@ -96,7 +118,8 @@ def make_delegate(
         "Delegate one independent unit of work to a named child agent. "
         "Use for multi-file/component/chunk/trial fanout; the parent should "
         "pass shared requirements/data in context, then integrate and verify "
-        "child results."
+        "child results. Set output_schema to a JSON Schema dict when the child "
+        "must return a validated JSON-compatible value."
     )
     def rlm_delegate(
         *,
@@ -104,6 +127,7 @@ def make_delegate(
         query: str,
         context: str | list[str],
         model: str = "default",
+        output_schema: Any | None = None,
     ) -> ChildHandle | str:
         queue = replay_queue(env)
         if queue is not None:
@@ -121,6 +145,7 @@ def make_delegate(
             query,
             context_text,
             model=model,
+            output_schema=output_schema,
         )
 
     return rlm_delegate
@@ -132,13 +157,18 @@ def make_launch_subagents(
 ):
     """Build the public multi-child launcher from bound primitives."""
 
-    @tool("Launch sub-agents in parallel and wait for all. Must be awaited.")
+    @tool(
+        "Launch sub-agents in parallel and wait for all. Must be awaited. "
+        "Each spec may include output_schema as a JSON Schema dict for that "
+        "child's done(value)."
+    )
     async def launch_subagents(specs):
         """Launch sub-agents in parallel and wait for all. Must be awaited.
 
         ``specs`` is a list of dicts; each dict may set ``query`` (required),
-        ``context``, ``name``, and ``model``.
-        Returns finish messages in the same order as ``specs``.
+        ``context``, ``name``, ``model``, and ``output_schema``.
+        Returns child results in the same order as ``specs``. Children with
+        ``output_schema`` return validated JSON-compatible values.
         """
         if not isinstance(specs, list):
             raise TypeError("launch_subagents(...) requires a list of dict specs")
@@ -157,6 +187,7 @@ def make_launch_subagents(
                 query=_spec["query"],
                 context=_spec.get("context", ""),
                 model=_spec.get("model", "default"),
+                output_schema=_spec.get("output_schema"),
             )
             if isinstance(_handle, str):
                 _results[_i] = _handle

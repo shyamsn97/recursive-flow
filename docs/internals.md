@@ -715,7 +715,7 @@ workspace/
 
 - `session.write_state(node)` — append one immutable `Node` to
   `session.jsonl` and update `latest.json`. Called from
-  `append_node()` in `engine/seq.py`, which assigns `agent_id` and
+  `append_node()` in `engine/helpers.py`, which assigns `agent_id` and
   `seq` deterministically.
 - `session.write_agent(graph)` — write the per-agent invariants
   (`query`, `system_prompt`, `config`, `runtime`, etc.) to
@@ -823,7 +823,7 @@ or pure helpers from `engine/*`.
 | Lifecycle              | `start`, `run`, `chat`, `step`, `terminate`                                                      |
 | Per-step transitions   | `apply_one`, `step_llm`, `step_exec`, `step_after_supervising`                                   |
 | LLM half-step          | `reply_to`, `call_llm`, `llm_client_for`, `extract_code`                                         |
-| Messages / prompt      | `build_messages`, `build_system_prompt`, `build_system_prompt_for`, `build_tools_section`, `build_status_section` |
+| Messages / prompt      | `build_messages`, `build_system_prompt`, `build_tools_section`, `build_status_section` |
 | Runtime / env          | `runtime_for`, `create_runtime_session`, `inject_env`, `register_tools`, `format_exec_output`    |
 | Child spawning         | `spawn_child`                                                                                    |
 | Bookkeeping            | `record_usage`, `node_config`                                                                    |

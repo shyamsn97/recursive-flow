@@ -14,7 +14,7 @@ Pure helpers live under :mod:`rlmflow.engine`:
   ``step`` loop and async-child refill policy.
 - :mod:`rlmflow.engine.transitions` — implementation of action-to-state
   transition handlers.
-- :mod:`rlmflow.engine.seq` — tiny pure helpers (sequence numbers,
+- :mod:`rlmflow.engine.helpers` — tiny shared helpers (node appends,
   output truncation, the pool factory).
 - :mod:`rlmflow.engine.config` — :class:`RLMConfig` (pure data).
 
@@ -39,6 +39,7 @@ The class is grouped:
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -48,14 +49,14 @@ from uuid import uuid4
 from rlmflow.engine import scheduling, transitions
 from rlmflow.engine.actions import Action
 from rlmflow.engine.config import RLMConfig
-from rlmflow.engine.scheduler import NodeScheduler
-from rlmflow.engine.seq import (
+from rlmflow.engine.helpers import (
     ROOT_RUNTIME_ID,
-    append_node,
     create_pool,
     format_exec_output,
+    prepare_node_for_append,
     unique_child_id,
 )
+from rlmflow.engine.scheduler import NodeScheduler
 from rlmflow.engine.transcript import TranscriptRecorder
 from rlmflow.graph import (
     ChildHandle,
@@ -67,6 +68,11 @@ from rlmflow.graph import (
     SupervisingOutput,
     UserQuery,
     is_llm_output,
+)
+from rlmflow.integrations.structured import (
+    Schema,
+    StructuredOutputParser,
+    json_schema_for,
 )
 from rlmflow.llm import LLMClient, LLMUsage
 from rlmflow.llm_channel import LLMChannel
@@ -84,7 +90,11 @@ from rlmflow.prompts.projection import (
     project_state_messages,
 )
 from rlmflow.runtime import LocalRuntime, Runtime
-from rlmflow.runtime.env import execution_facts, seed_execution_env
+from rlmflow.runtime.env import (
+    DONE_OUTPUT_SCHEMA,
+    execution_facts,
+    seed_execution_env,
+)
 from rlmflow.tools import tool
 from rlmflow.tools.builtins import (
     SHOW_VARS,
@@ -140,8 +150,8 @@ class RLMFlow(LLMClient):
     - **LLM half-step:** :meth:`reply_to` / :meth:`call_llm` /
       :meth:`llm_client_for` / :meth:`extract_code`
     - **Messages / prompt:** :meth:`build_messages` /
-      :meth:`build_system_prompt` / :meth:`build_system_prompt_for` /
-      :meth:`build_tools_section` / :meth:`build_status_section`
+      :meth:`build_system_prompt` / :meth:`build_tools_section` /
+      :meth:`build_status_section`
     - **Runtime / env:** :meth:`runtime_for` /
       :meth:`create_runtime_session` / :meth:`inject_env` /
       :meth:`register_tools` / :meth:`format_exec_output`
@@ -163,6 +173,7 @@ class RLMFlow(LLMClient):
         *,
         workspace: Workspace | None = None,
         node_scheduler: NodeScheduler | None = None,
+        output_parser: Callable[[str, Schema], Any] | None = None,
     ) -> None:
         if workspace is None and runtime is None:
             raise ValueError("RLMFlow requires either runtime= or workspace=.")
@@ -186,6 +197,7 @@ class RLMFlow(LLMClient):
         self.prompt_builder = prompt_builder or DEFAULT_BUILDER
         self.pool = create_pool(self.config, pool)
         self.node_scheduler = node_scheduler or NodeScheduler()
+        self.output_parser = output_parser or StructuredOutputParser()
 
         self.llm_clients: dict[str, LLMClient] = {}
         self.model_descriptions: dict[str, str] = {}
@@ -220,12 +232,25 @@ class RLMFlow(LLMClient):
         self,
         query: str | None = None,
         *,
+        graph: Graph | None = None,
         context: str | None = None,
         contexts: dict[str, str] | None = None,
         context_metadata: dict[str, Any] | None = None,
         agent_id: str = "root",
+        output_schema: Schema | None = None,
     ) -> Graph:
         query = query or DEFAULT_QUERY
+        if graph is not None:
+            return self._start_from_graph(
+                graph,
+                query=query,
+                context=context,
+                contexts=contexts,
+                context_metadata=context_metadata,
+                output_schema=output_schema,
+            )
+
+        durable_output_schema = self._register_output_schema(agent_id, output_schema)
 
         self.context.write(
             "context",
@@ -243,20 +268,14 @@ class RLMFlow(LLMClient):
             branch_id=self.workspace.branch_id if self.workspace else "main",
             depth=0,
             query=query,
-            system_prompt=self.build_system_prompt_for(
-                query=query,
-                agent_id=agent_id,
-                depth=0,
-            ),
             config=self.node_config(),
             workspace=self.workspace.ref() if self.workspace else None,
             runtime=RuntimeRef(id=ROOT_RUNTIME_ID),
         )
-        self.session.write_agent(root)
-        append_node(
-            self.session,
+        initial_query = prepare_node_for_append(
             root,
             UserQuery(
+                output_schema=durable_output_schema,
                 content=build_user_prompt(
                     query=query,
                     iteration=0,
@@ -264,19 +283,99 @@ class RLMFlow(LLMClient):
                     max_depth=self.config.max_depth,
                     context_keys=context_hint,
                     context_info=context_info,
-                )
+                ),
             ),
         )
+        root.nodes.append(initial_query)
+        root.system_prompt = self.build_system_prompt(root)
+        self.session.rewrite_graph(root)
         graph = self.session.load_graph()
         if self.workspace is not None:
             self.workspace.mark_graph_synced(graph)
         return graph
 
-    def run(self, query: str | None = None, **kwargs) -> str:
-        graph = self.start(query, **kwargs)
+    def run(
+        self,
+        query: str | None = None,
+        *,
+        graph: Graph | None = None,
+        output_schema: Schema | None = None,
+        **kwargs,
+    ) -> Any:
+        schema = output_schema
+        graph = self.start(query, graph=graph, output_schema=output_schema, **kwargs)
         while not graph.finished:
             graph = self.step(graph)
-        return graph.result()
+        result = graph.result()
+        if schema is None:
+            return result
+        return self.output_parser(self._json_content(result), schema)
+
+    def _start_from_graph(
+        self,
+        graph: Graph,
+        *,
+        query: str,
+        context: str | None = None,
+        contexts: dict[str, str] | None = None,
+        context_metadata: dict[str, Any] | None = None,
+        output_schema: Schema | None = None,
+    ) -> Graph:
+        engine = self.for_graph(graph)
+        if engine is not self:
+            return engine._start_from_graph(
+                graph,
+                query=query,
+                context=context,
+                contexts=contexts,
+                context_metadata=context_metadata,
+                output_schema=output_schema,
+            )
+
+        committed = self.commit_graph(graph)
+        if not committed.finished:
+            raise ValueError(
+                "start(..., graph=...) requires a finished graph. "
+                "Use step(graph) to continue unfinished work."
+            )
+
+        agent_id = committed.agent_id
+        durable_output_schema = self._register_output_schema(agent_id, output_schema)
+
+        if context is not None:
+            self.context.write(
+                "context",
+                context,
+                agent_id=agent_id,
+                metadata=context_metadata,
+            )
+        for key, value in (contexts or {}).items():
+            self.context.write(key, value, agent_id=agent_id)
+
+        context_hint = self.context.list_contexts(agent_id=agent_id)
+        context_info = self._context_info(agent_id)
+        next_query = prepare_node_for_append(
+            committed,
+            UserQuery(
+                output_schema=durable_output_schema,
+                content=build_user_prompt(
+                    query=query,
+                    iteration=0,
+                    depth=committed.depth,
+                    max_depth=committed.config.get("max_depth", self.config.max_depth),
+                    context_keys=context_hint,
+                    context_info=context_info,
+                ),
+            ),
+            inherit_output_schema=False,
+        )
+        committed.nodes.append(next_query)
+        committed.system_prompt = self.build_system_prompt(committed)
+        self.session.rewrite_graph(committed)
+        graph = self.session.load_graph()
+        if self.workspace is not None:
+            self.workspace.mark_graph_synced(graph)
+        return graph
 
     def chat(self, messages: list[dict[str, str]], *args, **kwargs) -> str:
         query = next(
@@ -543,18 +642,20 @@ class RLMFlow(LLMClient):
 
     @tool(
         "Run multiple independent one-shot LLM prompts concurrently. "
-        "Returns strings in the same order as the prompts."
+        "Returns results in the same order as the prompts. Set output_schema "
+        "to validate each response as structured JSON."
     )
     def llm_query_batched(
         self,
         prompts: list[str],
         *,
         model: str = "default",
+        output_schema: Schema | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
         max_tokens: int | None = None,
         stop: str | list[str] | None = None,
-    ) -> list[str]:
+    ) -> list[Any]:
         """Run one-shot LLM prompts concurrently without spawning child agents."""
 
         if isinstance(prompts, str) or not isinstance(prompts, list):
@@ -567,6 +668,14 @@ class RLMFlow(LLMClient):
         if not prompts:
             return []
 
+        request_prompts = prompts
+        if output_schema is not None:
+            json_schema_for(output_schema)
+            request_prompts = [
+                self._with_output_schema_hint(prompt, output_schema)
+                for prompt in prompts
+            ]
+
         llm_kwargs = {
             key: value
             for key, value in {
@@ -577,14 +686,16 @@ class RLMFlow(LLMClient):
             }.items()
             if value is not None
         }
-        pairs = self.llm_channel.batch(model, prompts, **llm_kwargs)
+        pairs = self.llm_channel.batch(model, request_prompts, **llm_kwargs)
 
         total_usage = LLMUsage(
             input_tokens=sum(usage.input_tokens for _, usage in pairs),
             output_tokens=sum(usage.output_tokens for _, usage in pairs),
         )
         self.record_usage(total_usage)
-        return [text for text, _ in pairs]
+        if output_schema is None:
+            return [text for text, _ in pairs]
+        return [self.output_parser(text, output_schema) for text, _ in pairs]
 
     def llm_client_for(self, graph: Graph, *, model: str | None = None) -> LLMClient:
         """Pick the per-agent LLM client.
@@ -616,11 +727,7 @@ class RLMFlow(LLMClient):
         force_final: bool = False,
     ) -> list[dict[str, str]]:
         """Render ``graph``'s trajectory as a chat-message list."""
-        system_content = graph.system_prompt or self.build_system_prompt_for(
-            query=graph.query,
-            agent_id=graph.agent_id,
-            depth=graph.depth,
-        )
+        system_content = graph.system_prompt or self.build_system_prompt(graph)
         system = {"role": "system", "content": system_content}
 
         context_keys = self.context.list_contexts(agent_id=graph.agent_id)
@@ -675,23 +782,6 @@ class RLMFlow(LLMClient):
         if self.config.system_prompt:
             return self.config.system_prompt
         return self.prompt_builder.build(self, graph)
-
-    def build_system_prompt_for(
-        self,
-        *,
-        query: str,
-        agent_id: str,
-        depth: int,
-        config: dict[str, Any] | None = None,
-    ) -> str:
-        """Render the system prompt for a (possibly not-yet-instantiated) agent."""
-        stub = Graph(
-            agent_id=agent_id,
-            depth=depth,
-            query=query,
-            config=config or self.node_config(),
-        )
-        return self.build_system_prompt(stub)
 
     def build_tools_section(self) -> str:
         """Render the tools section that lands inside the system prompt."""
@@ -757,6 +847,9 @@ class RLMFlow(LLMClient):
             parent_node_id=node.id,
         )
         seed_execution_env(runtime.env, facts)
+        schema = graph.active_output_schema(node)
+        if schema is not None:
+            runtime.env[DONE_OUTPUT_SCHEMA] = schema
         preserve_suspension = runtime.suspended
         if preserve_suspension:
             runtime.prepare_for_resume()
@@ -793,7 +886,7 @@ class RLMFlow(LLMClient):
         """
         runtime = runtime or self.runtime
         runtime.register_tool(SHOW_VARS, core=True)
-        runtime.register_tool(make_done(runtime.env), core=True)
+        runtime.register_tool(make_done(runtime.env, self.output_parser), core=True)
         rlm_wait = make_wait()
         runtime.register_tool(rlm_wait, core=True, hidden=True)
         runtime.register_tool(self.llm_query_batched, core=True)
@@ -816,6 +909,7 @@ class RLMFlow(LLMClient):
         context: str,
         *,
         model: str = "default",
+        output_schema: Schema | None = None,
     ) -> ChildHandle | str:
         """Spawn a child agent under ``parent_agent_id``.
 
@@ -834,6 +928,7 @@ class RLMFlow(LLMClient):
             return f"[error: unknown model {model!r}. available: {keys}]"
 
         child_aid = unique_child_id(parent_agent_id, name, set(parent.children))
+        durable_output_schema = self._register_output_schema(child_aid, output_schema)
         self.context.write("context", context, agent_id=child_aid)
 
         parent_runtime = self.runtime_for(parent.runtime)
@@ -853,12 +948,6 @@ class RLMFlow(LLMClient):
             branch_id=parent.branch_id,
             depth=parent.depth + 1,
             query=query,
-            system_prompt=self.build_system_prompt_for(
-                query=query,
-                agent_id=child_aid,
-                depth=parent.depth + 1,
-                config=cfg,
-            ),
             config=cfg,
             workspace=parent.workspace,
             runtime=runtime_ref,
@@ -866,11 +955,10 @@ class RLMFlow(LLMClient):
             parent_agent_id=parent.agent_id,
             parent_node_id=parent_node_id,
         )
-        self.session.write_agent(child_graph)
-        append_node(
-            self.session,
+        initial_query = prepare_node_for_append(
             child_graph,
             UserQuery(
+                output_schema=durable_output_schema,
                 content=build_user_prompt(
                     query=query,
                     iteration=0,
@@ -878,9 +966,13 @@ class RLMFlow(LLMClient):
                     max_depth=cfg.get("max_depth", self.config.max_depth),
                     context_keys=context_keys,
                     context_info=context_info,
-                )
+                ),
             ),
         )
+        child_graph.nodes.append(initial_query)
+        child_graph.system_prompt = self.build_system_prompt(child_graph)
+        self.session.write_agent(child_graph)
+        self.session.write_state(initial_query)
         return ChildHandle(child_aid)
 
     # ── bookkeeping ──────────────────────────────────────────────────
@@ -888,6 +980,32 @@ class RLMFlow(LLMClient):
     def record_usage(self, usage: LLMUsage) -> None:
         """Cache the most recent ``LLMUsage``. Override for metrics."""
         self.last_usage = usage
+
+    def _register_output_schema(
+        self,
+        _agent_id: str,
+        output_schema: Schema | None,
+    ) -> dict[str, Any] | None:
+        if output_schema is None:
+            return None
+        return json_schema_for(output_schema)
+
+    def structured_output_hint(self, schema: Schema) -> str:
+        render_hint = getattr(self.output_parser, "system_prompt_hint", None)
+        if callable(render_hint):
+            return render_hint(schema)
+        return json.dumps(json_schema_for(schema), indent=2)
+
+    def _with_output_schema_hint(self, prompt: str, schema: Schema) -> str:
+        return (
+            f"{prompt}\n\n"
+            "Return only a JSON value matching this JSON Schema. "
+            "Do not include Markdown fences or explanatory text.\n"
+            f"```json\n{self.structured_output_hint(schema)}\n```"
+        )
+
+    def _json_content(self, value: Any) -> str:
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
     def _context_info(self, agent_id: str) -> dict[str, Any] | None:
         """Best-effort size/shape signal for the agent's primary ``CONTEXT``.
@@ -911,6 +1029,7 @@ class RLMFlow(LLMClient):
             "child_max_iterations": self.config.child_max_iterations,
             "eager_children": self.config.eager_children,
             "single_block": self.config.single_block,
+            "enable_structured_output": self.config.enable_structured_output,
             "max_budget": self.config.max_budget,
         }
 

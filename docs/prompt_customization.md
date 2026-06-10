@@ -18,14 +18,19 @@ graph = agent.start("Summarize this document.", context=document)
 print(agent.build_system_prompt(graph))
 ```
 
-You can also render without starting a run:
+You can also render without starting a run by constructing the graph shape you
+want to inspect:
 
 ```python
-print(agent.build_system_prompt_for(
+from rlmflow import Graph
+
+graph = Graph(
     query="Summarize this document.",
     agent_id="root",
     depth=0,
-))
+    config=agent.node_config(),
+)
+print(agent.build_system_prompt(graph))
 ```
 
 Each `Graph` stores the prompt snapshot that was used for that agent's
@@ -352,9 +357,9 @@ With callable sections, skills are not an engine config knob. They are ordinary
 workspace artifacts plus a prompt section that decides what to include for the
 current `engine, graph`.
 
-See [`examples/core-api/skills.py`](../examples/core-api/skills.py) for a runnable version. It
+See [`examples/basics/skills.py`](../examples/basics/skills.py) for a runnable version. It
 uses a checked-in workspace at
-[`examples/example-workspaces/skills-demo`](../examples/example-workspaces/skills-demo)
+[`examples/_runs/example-workspaces/skills-demo`](../examples/_runs/example-workspaces/skills-demo)
 with a concrete NumPy linear-algebra `SKILL.md`, then injects that skill through
 a callable `skills` section.
 

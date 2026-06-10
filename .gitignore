@@ -65,9 +65,11 @@ examples/runs/
 .DS_Store
 */**/needle_trace_images/*
 examples/*/**/workspaces/*
-examples/autoresearch/runs/*
+examples/use_cases/autoresearch/runs/*
 examples/*/**/frames/*
-examples/example-workspaces/*
-!examples/example-workspaces/skills-demo/
-!examples/example-workspaces/skills-demo/skills/
-!examples/example-workspaces/skills-demo/skills/**
+examples/_runs/*
+!examples/_runs/example-workspaces/
+examples/_runs/example-workspaces/*
+!examples/_runs/example-workspaces/skills-demo/
+!examples/_runs/example-workspaces/skills-demo/skills/
+!examples/_runs/example-workspaces/skills-demo/skills/**

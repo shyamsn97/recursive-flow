@@ -60,7 +60,7 @@ childa.task_1 finishes
 parent resumes when all waited-on children are done
 ```
 
-See [`examples/control/eager_children.py`](../examples/control/eager_children.py) for a
+See [`examples/control/delegation/eager_children.py`](../examples/control/delegation/eager_children.py) for a
 deterministic offline demo that prints both modes side by side.
 
 ## Workspace Resume
@@ -116,7 +116,7 @@ graph = agent.step(graph)
 ```
 
 See [`injections.md`](injections.md) for the concise guide and
-[`examples/control/injections.py`](../examples/control/injections.py) for a runnable offline demo.
+[`examples/control/controller_injection.py`](../examples/control/controller_injection.py) for a runnable offline demo.
 
 ## Branch workspaces
 
@@ -288,8 +288,7 @@ results = await launch_subagents([
 - Pass `CONTEXT.read()` only when the child genuinely needs the
   parent's full view (reviewers, auditors, deterministic retry).
 
-(`rlm_delegate` / `rlm_wait` are the internal primitives the launchers compose
-over — agents never call them directly.)
+Agents should use `launch_subagents(...)` for delegation;
 
 The default prompt biases toward a supervisor workflow for large context,
 parallel reasoning, and split artifacts. Inline work is still fine for small,
@@ -297,7 +296,7 @@ tightly coupled tasks where delegation adds no useful ownership boundary.
 
 ## Walkthroughs
 
-- [`examples/core-api/showcase.py`](../examples/core-api/showcase.py) — runnable
+- [`examples/basics/showcase.py`](../examples/basics/showcase.py) — runnable
   walkthrough of stepping, workspace persistence, session reads, time travel,
   and gym-style stepping.
 - [`examples/notebooks/coding_agent.ipynb`](../examples/notebooks/coding_agent.ipynb)
