@@ -113,6 +113,7 @@ from rlmflow.workspace import (
     SessionVariable,
     Workspace,
 )
+from rlmflow.workspace.base import graph_with_workspace
 
 
 def _child_config(
@@ -249,6 +250,18 @@ class RLMFlow(LLMClient):
                 context_metadata=context_metadata,
                 output_schema=output_schema,
             )
+        if self.workspace is not None:
+            persisted = self.session.load_graph()
+            if persisted.finished and persisted.branch_id != self.workspace.branch_id:
+                persisted = graph_with_workspace(persisted, self.workspace)
+                return self._start_from_graph(
+                    persisted,
+                    query=query,
+                    context=context,
+                    contexts=contexts,
+                    context_metadata=context_metadata,
+                    output_schema=output_schema,
+                )
 
         durable_output_schema = self._register_output_schema(agent_id, output_schema)
 
