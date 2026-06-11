@@ -69,7 +69,7 @@ def score(result: str) -> tuple[int, dict[str, str]]:
 
 
 def run_branch(root: Path, idx: int) -> tuple[str, int, dict[str, str], int]:
-    workspace = Workspace.create(root / f"branch_{idx}", branch_id=f"branch_{idx}")
+    workspace = Workspace.create(root / f"branch_{idx}")
     llm = MockLLM(seed=idx)
     engine = RLMFlow(
         llm_client=llm,

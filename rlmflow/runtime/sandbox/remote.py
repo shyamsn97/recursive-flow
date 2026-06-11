@@ -320,8 +320,7 @@ class RemoteFileRuntime(Runtime):
             f"{name} = SessionVariable("
             f"FileSession({self.remote_workdir!r}), "
             f"agent_id={value.agent_id!r}, "
-            f"node_id={value.node_id!r}, "
-            f"branch_id={value.branch_id!r})\n"
+            f"node_id={value.node_id!r})\n"
         )
 
     def _inject_importable_tool(self, name: str, fn: Callable[..., object]) -> bool:

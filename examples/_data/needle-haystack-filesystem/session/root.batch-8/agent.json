@@ -15,12 +15,10 @@
     "max_budget": null
   },
   "workspace": {
-    "root": "/Users/shyam/Code/rlmkit/examples/_data/needle-haystack-filesystem",
-    "branch_id": "main"
+    "root": "/Users/shyam/Code/rlmkit/examples/_data/needle-haystack-filesystem"
   },
   "runtime": null,
   "model": null,
-  "branch_id": "main",
   "parent_agent_id": "root",
   "parent_node_id": "n_e88ba7d34508"
 }

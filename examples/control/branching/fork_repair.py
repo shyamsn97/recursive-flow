@@ -103,7 +103,7 @@ def run_tests(files_dir: Path) -> tuple[bool, str]:
 
 
 def run_branch(root: Path, name: str, implementation: str, label: str):
-    workspace = Workspace.create(root / name, branch_id=name)
+    workspace = Workspace.create(root / name)
     setup_project(workspace)
     engine = RLMFlow(
         llm_client=RepairLLM(implementation, label),
@@ -146,7 +146,7 @@ def main() -> None:
 
     winner = next((item for item in results if item[0]), results[0])
     _passed, workspace, _graph, _output = winner
-    print(f"\n[best] {workspace.branch_id} workspace={workspace.root}")
+    print(f"\n[best] {workspace.root.name} workspace={workspace.root}")
 
 
 def brief_test_output(output: str) -> str:

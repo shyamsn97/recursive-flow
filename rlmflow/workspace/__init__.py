@@ -7,7 +7,6 @@ from rlmflow.workspace.base import (
     ContextVariable,
     Session,
     graph_fingerprint,
-    graph_with_workspace,
 )
 from rlmflow.workspace.filesystem import (
     FileContext,
@@ -17,6 +16,7 @@ from rlmflow.workspace.filesystem import (
 from rlmflow.workspace.memory import (
     InMemoryContext,
     InMemorySession,
+    InMemoryWorkspace,
 )
 from rlmflow.workspace.session_view import SessionVariable
 from rlmflow.workspace.store import FileStore, MemoryStore, Store
@@ -36,12 +36,12 @@ __all__ = [
     "FileStore",
     "InMemoryContext",
     "InMemorySession",
+    "InMemoryWorkspace",
     "MemoryStore",
     "Session",
     "SessionVariable",
     "Store",
     "Workspace",
     "graph_fingerprint",
-    "graph_with_workspace",
     "sync_lock_for",
 ]

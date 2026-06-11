@@ -193,7 +193,7 @@ def test_context_fork_isolates_subsequent_writes(tmp_path: Path):
 
 
 def test_workspace_sync_graph_prunes_payloads_and_caches_fingerprint(tmp_path: Path):
-    workspace = Workspace.create(tmp_path / "workspace", branch_id="repair")
+    workspace = Workspace.create(tmp_path / "workspace")
     stale = Graph(agent_id="root.stale", depth=1, parent_agent_id="root")
     workspace.session.write_agent(stale)
     workspace.session.write_state(UserQuery(agent_id="root.stale", seq=0))
@@ -208,9 +208,6 @@ def test_workspace_sync_graph_prunes_payloads_and_caches_fingerprint(tmp_path: P
     synced = workspace.sync_graph(graph)
 
     assert list(synced.agents) == ["root"]
-    assert synced.workspace is not None
-    assert synced.workspace.root == str(workspace.root)
-    assert synced.branch_id == "repair"
     assert workspace._graph_fingerprint == graph_fingerprint(synced)
     assert not (workspace.root / "session" / "root.stale").exists()
     assert not (workspace.root / "context" / "root.stale").exists()

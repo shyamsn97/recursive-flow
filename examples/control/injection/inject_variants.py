@@ -5,8 +5,8 @@ Prerequisite:
 
 That produces ``examples/_runs/word-search-workspace/word-search-baseline`` with
 a real root ``SupervisingOutput`` that waited on ``root.rows``, ``root.cols``,
-and ``root.diagonals``. This example forks that run twice and replaces real
-supervising nodes in the saved trace:
+and ``root.diagonals``. This example creates two variant workspaces from edited
+graphs and replaces real supervising nodes in the saved trace:
 
 1. replace ``root.cols`` so it scans columns directly instead of delegating each
    column;
@@ -14,7 +14,8 @@ supervising nodes in the saved trace:
    all-direction scanner instead of reconciling direction children.
 
 The replacements are operator prompts, not pre-written solution code or mocked
-results. Each edited graph is committed to a forked workspace and then continued.
+results. Each edited graph is written to its own workspace and then continued by
+an explicitly workspace-bound agent clone.
 """
 
 from __future__ import annotations
@@ -33,10 +34,10 @@ from rlmflow import (
     RLMConfig,
     RLMFlow,
     SupervisingOutput,
+    parallel_step,
 )
 from rlmflow.llm import LLMClient
-from rlmflow.utils.viz import live_view
-from rlmflow.workspace import Workspace
+from rlmflow.workspace import Workspace as LocalWorkspace
 
 DIRECTION_CHILDREN = {"root.rows", "root.cols", "root.diagonals"}
 
@@ -111,26 +112,6 @@ def find_supervising(
     raise ValueError(f"could not find matching supervising node for {agent_id!r}")
 
 
-def make_agent(workspace: Workspace, model: str) -> RLMFlow:
-    return RLMFlow(
-        client_for_model(model),
-        workspace=workspace,
-        config=RLMConfig(max_depth=2, max_iterations=None, child_max_iterations=None),
-    )
-
-
-def step_until(
-    agent: RLMFlow,
-    graph: Graph,
-) -> Graph:
-    with live_view() as view:
-        view(graph)
-        while not graph.finished:
-            graph = agent.step(graph)
-            view(graph)
-    return graph
-
-
 def summarize(label: str, graph: Graph) -> None:
     current = graph.current()
     print(f"\n{label}")
@@ -186,12 +167,14 @@ def main() -> None:
     parser.add_argument("--model", default="gpt-5-mini")
     args = parser.parse_args()
 
-    source_workspace = Workspace.open_path(args.source.resolve())
-    source_agent = make_agent(source_workspace, args.model)
-    graph = source_workspace.session.load_graph()
+    source_workspace = LocalWorkspace.open_path(args.source.resolve())
+    base_agent = RLMFlow(
+        client_for_model(args.model),
+        config=RLMConfig(max_depth=2, max_iterations=None, child_max_iterations=None),
+    )
+    graph = source_workspace.load_graph()
     summarize("Loaded real word-search run", graph)
 
-    cols_branch = source_workspace.root.parent / "word-search-cols-direct"
     cols_graph = graph.replace_node(
         find_supervising(graph, "root.cols").id,
         ExecOutput(
@@ -200,23 +183,10 @@ def main() -> None:
         ),
         truncate="descendants",
     )
-    cols_graph = source_agent.commit_graph(
-        cols_graph,
-        fork=True,
-        new_location=cols_branch,
-        branch_id="word-search-cols-direct",
+    cols_workspace = LocalWorkspace(
+        source_workspace.root.parent / "word-search-cols-direct",
     )
-    cols_direct = step_until(
-        make_agent(Workspace.open_path(cols_branch), args.model),
-        cols_graph,
-    )
-    summarize(
-        "Variation A: prompt root.cols to scan columns directly",
-        cols_direct,
-    )
-    validate_result("Variation A", cols_direct)
 
-    root_branch = source_workspace.root.parent / "word-search-direct-scan"
     root_graph = graph.replace_node(
         find_supervising(graph, "root", waiting_on=DIRECTION_CHILDREN).id,
         ExecOutput(
@@ -225,18 +195,37 @@ def main() -> None:
         ),
         truncate="descendants",
     )
-    root_graph = source_agent.commit_graph(
-        root_graph,
-        fork=True,
-        new_location=root_branch,
-        branch_id="word-search-direct-scan",
+    root_workspace = LocalWorkspace(
+        source_workspace.root.parent / "word-search-direct-scan",
     )
-    direct_scan = step_until(
-        make_agent(Workspace.open_path(root_branch), args.model),
-        root_graph,
-    )
-    summarize("Variation B: prompt root to write a direct scanner", direct_scan)
-    validate_result("Variation B", direct_scan)
+
+    cols_agent = base_agent.clone(workspace=cols_workspace)
+    root_agent = base_agent.clone(workspace=root_workspace)
+
+    while not (cols_graph.finished and root_graph.finished):
+        active = []
+        if not cols_graph.finished:
+            active.append((cols_agent, cols_graph))
+        if not root_graph.finished:
+            active.append((root_agent, root_graph))
+
+        next_graphs = parallel_step(active)
+        i = 0
+        if not cols_graph.finished:
+            cols_graph = next_graphs[i]
+            i += 1
+        if not root_graph.finished:
+            root_graph = next_graphs[i]
+
+        cols_state = cols_graph.current().type if cols_graph.current() else "<empty>"
+        root_state = root_graph.current().type if root_graph.current() else "<empty>"
+        print(f"parallel step: Variation A={cols_state}, Variation B={root_state}")
+
+    summarize("Variation A: prompt root.cols to scan columns directly", cols_graph)
+    validate_result("Variation A", cols_graph)
+
+    summarize("Variation B: prompt root to write a direct scanner", root_graph)
+    validate_result("Variation B", root_graph)
 
 
 if __name__ == "__main__":

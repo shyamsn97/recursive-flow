@@ -3,8 +3,8 @@
 A :class:`Graph` is **one agent**, mutable. It holds:
 
 * the agent's per-run invariants (``agent_id``, ``depth``, ``query``,
-  ``system_prompt``, ``config``, ``workspace``, ``runtime``, ``model``,
-  ``branch_id``, ``parent_agent_id``, ``parent_node_id``) as flat fields;
+  ``system_prompt``, ``config``, ``runtime``, ``model``,
+  ``parent_agent_id``, ``parent_node_id``) as flat fields;
 * ``nodes`` — this agent's trajectory of :class:`Node` instances;
 * ``children`` — a ``dict[str, Graph]`` of sub-agents spawned from this one.
 
@@ -32,15 +32,6 @@ from pydantic import BaseModel
 
 from rlmflow.graph.node import ActionNode, Node, ObservationNode, parse_node_obj
 from rlmflow.graph.views import AgentsView, Edge, EdgesView, NodesView
-
-# ── refs (small Pydantic models for serializable external pointers) ──
-
-
-class WorkspaceRef(BaseModel):
-    """Serializable reference to branch-local workspace storage."""
-
-    root: str
-    branch_id: str = "main"
 
 
 class RuntimeRef(BaseModel):
@@ -71,10 +62,8 @@ class Graph:
     query: str = ""
     system_prompt: str = ""
     config: dict[str, Any] = field(default_factory=dict)
-    workspace: WorkspaceRef | None = None
     runtime: RuntimeRef | None = None
     model: str | None = None
-    branch_id: str = "main"
     parent_agent_id: str | None = None
     parent_node_id: str | None = None
     output_schema: dict[str, Any] | None = None
@@ -588,12 +577,8 @@ class Graph:
             "query": self.query,
             "system_prompt": self.system_prompt,
             "config": dict(self.config),
-            "workspace": (
-                self.workspace.model_dump(mode="json") if self.workspace else None
-            ),
             "runtime": (self.runtime.model_dump(mode="json") if self.runtime else None),
             "model": self.model,
-            "branch_id": self.branch_id,
             "parent_agent_id": self.parent_agent_id,
             "parent_node_id": self.parent_node_id,
             "output_schema": self.output_schema,
@@ -614,18 +599,12 @@ class Graph:
             query=data.get("query", ""),
             system_prompt=data.get("system_prompt", ""),
             config=dict(data.get("config") or {}),
-            workspace=(
-                WorkspaceRef.model_validate(data["workspace"])
-                if data.get("workspace")
-                else None
-            ),
             runtime=(
                 RuntimeRef.model_validate(data["runtime"])
                 if data.get("runtime")
                 else None
             ),
             model=data.get("model"),
-            branch_id=data.get("branch_id", "main"),
             parent_agent_id=data.get("parent_agent_id"),
             parent_node_id=data.get("parent_node_id"),
             output_schema=data.get("output_schema"),
@@ -702,5 +681,4 @@ __all__ = [
     "Graph",
     "NodesView",
     "RuntimeRef",
-    "WorkspaceRef",
 ]

@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from rlmflow.workspace import ArtifactStore, Workspace
+from rlmflow.graph import Graph
+from rlmflow.llm import LLMClient
+from rlmflow.rlm import RLMFlow
+from rlmflow.workspace import ArtifactStore, InMemoryWorkspace, Workspace
 
 
 class FakeFileRuntime:
@@ -43,6 +46,11 @@ class FakeFileRuntime:
         )
 
 
+class DummyLLM(LLMClient):
+    def chat(self, messages: list[dict[str, str]], *args, **kwargs) -> str:
+        return '```repl\ndone("ok")\n```'
+
+
 def test_workspace_materialize_and_commit_are_local_noops(tmp_path):
     workspace = Workspace.create(tmp_path / "workspace")
 
@@ -50,6 +58,78 @@ def test_workspace_materialize_and_commit_are_local_noops(tmp_path):
     workspace.commit()
     assert workspace.root.exists()
     assert isinstance(workspace.artifacts, ArtifactStore)
+
+
+def test_workspace_from_graph_creates_synced_workspace(tmp_path):
+    graph = Graph(agent_id="root")
+
+    workspace = Workspace.from_graph(
+        graph,
+        tmp_path / "variant",
+    )
+    synced = workspace.load_graph()
+
+    assert workspace.root == (tmp_path / "variant").resolve()
+    assert synced.agent_id == "root"
+    assert list(synced.agents) == ["root"]
+
+
+def test_workspace_from_graph_replaces_existing_engine_state(tmp_path):
+    existing = Workspace.create(tmp_path / "variant")
+    stale = Graph(agent_id="root.stale")
+    existing.sync_graph(stale)
+    existing.artifacts.write_text("notes.txt", "stale")
+
+    workspace = Workspace.from_graph(
+        Graph(agent_id="root"),
+        tmp_path / "variant",
+    )
+    synced = workspace.load_graph()
+
+    assert list(synced.agents) == ["root"]
+    assert list(workspace.load_graph().agents) == ["root"]
+    assert not workspace.artifacts.exists("notes.txt")
+
+
+def test_workspace_from_graph_requires_path_for_filesystem_workspace():
+    with pytest.raises(TypeError, match="requires a workspace path"):
+        Workspace.from_graph(Graph(agent_id="root"))
+
+
+def test_in_memory_workspace_from_graph_needs_no_path():
+    workspace = InMemoryWorkspace.from_graph(Graph(agent_id="root"))
+    synced = workspace.load_graph()
+
+    assert workspace.load_graph().agent_id == "root"
+    assert synced.agent_id == "root"
+
+
+def test_rlmflow_attach_workspace_binds_in_place(tmp_path):
+    workspace = Workspace.create(tmp_path / "workspace")
+    agent = RLMFlow(DummyLLM())
+
+    result = agent.attach_workspace(workspace)
+
+    assert result is agent
+    assert agent.workspace is workspace
+    assert agent.session is workspace.session
+    assert agent.context is workspace.context
+    assert agent.runtime is not None
+
+
+def test_rlmflow_defaults_to_local_runtime_without_workspace():
+    agent = RLMFlow(DummyLLM())
+
+    assert agent.runtime is not None
+    assert agent.workspace is None
+
+
+def test_rlmflow_clone_rejects_unknown_overrides(tmp_path):
+    workspace = Workspace.create(tmp_path / "workspace")
+    agent = RLMFlow(DummyLLM()).attach_workspace(workspace)
+
+    with pytest.raises(TypeError, match="unknown RLMFlow.clone"):
+        agent.clone(workspaec=workspace)
 
 
 def test_workspace_artifacts_use_user_chosen_flat_paths(tmp_path):
@@ -95,7 +175,7 @@ def test_workspace_fork_copies_artifacts_without_engine_state_collision(tmp_path
     workspace.artifacts.write_text("openclaw/soul.md", "original")
     workspace.context.write("context", "ctx")
 
-    forked = workspace.fork(tmp_path / "forked", new_branch_id="forked")
+    forked = workspace.fork(tmp_path / "forked")
     forked.artifacts.write_text("openclaw/soul.md", "fork")
 
     assert workspace.artifacts.read_text("openclaw/soul.md") == "original"

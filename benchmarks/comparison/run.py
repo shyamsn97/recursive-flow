@@ -246,10 +246,7 @@ class CountingRLMFlow(RLMFlow):
 
 
 def run_rlmflow_task(task: Task, args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
-    workspace = Workspace.create(
-        run_dir / "workspaces" / "rlmflow" / task.task_id,
-        branch_id=task.task_id,
-    )
+    workspace = Workspace.create(run_dir / "workspaces" / "rlmflow" / task.task_id)
     runtime = LocalRuntime(workspace=workspace)
     llm = make_rlmflow_llm(args.model, args.backend)
     config = RLMConfig(

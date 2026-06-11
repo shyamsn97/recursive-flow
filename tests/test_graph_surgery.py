@@ -733,11 +733,8 @@ def test_commit_graph_can_fork_workspace(tmp_path):
         edited,
         fork=True,
         new_location=tmp_path / "fork",
-        branch_id="repair",
     )
 
-    assert committed.workspace is not None
-    assert committed.workspace.branch_id == "repair"
     assert committed.nodes[0].content == "forked query"
     base_query = workspace.session.load_graph().nodes[0].content
     assert "old query" in base_query

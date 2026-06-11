@@ -15,14 +15,12 @@
     "max_budget": null
   },
   "workspace": {
-    "root": "/Users/shyam/Code/rlmkit/examples/_data/boids-sim-workspace",
-    "branch_id": "main"
+    "root": "/Users/shyam/Code/rlmkit/examples/_data/boids-sim-workspace"
   },
   "runtime": {
     "id": "root.css:df373512"
   },
   "model": null,
-  "branch_id": "main",
   "parent_agent_id": "root",
   "parent_node_id": "n_8da4a8f64f7f"
 }

@@ -309,7 +309,7 @@ def run_rlm_task(
     on_step,
 ) -> dict[str, Any]:
     """RLM scaffold: per-task workspace, file-backed context, recursive REPL."""
-    workspace = Workspace.create(workspace_root / task_id, branch_id=task_id)
+    workspace = Workspace.create(workspace_root / task_id)
     context_file = f"task_{row['example_id']:04d}.txt"
     workspace.path(context_file).write_text(row["context"])
 

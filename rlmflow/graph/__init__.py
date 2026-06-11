@@ -9,8 +9,7 @@
   ``graph.all_nodes``, ``graph.edges``).
 * :class:`Node` and its subclasses — one immutable per-state payload.
   See :mod:`rlmflow.graph.node` and ``docs/node_model.md``.
-* :class:`WorkspaceRef`, :class:`RuntimeRef` — serializable handles to
-  external systems (branch storage, durable REPL).
+* :class:`RuntimeRef` — serializable handle to a durable REPL session.
 * :class:`ChildHandle`, :class:`WaitRequest` — REPL protocol handles
   the engine inspects for delegation / suspension.
 """
@@ -22,7 +21,6 @@ from rlmflow.graph.graph import (
     Graph,
     NodesView,
     RuntimeRef,
-    WorkspaceRef,
 )
 from rlmflow.graph.handles import ChildHandle, WaitRequest
 from rlmflow.graph.node import (
@@ -79,7 +77,6 @@ __all__ = [
     "SupervisingOutput",
     "UserQuery",
     "WaitRequest",
-    "WorkspaceRef",
     "is_action",
     "is_code_observation",
     "is_done",

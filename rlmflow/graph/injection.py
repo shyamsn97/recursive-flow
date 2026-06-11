@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from rlmflow.graph.node import ActionNode, ExecOutput, Node
-from rlmflow.graph.node_state import inherit_node_state
+from rlmflow.graph.node_state import stamp_node_for_position
 
 
 def inject(
@@ -103,31 +103,17 @@ def _node_for_injection(
     output_schema: dict[str, Any] | None,
     inherit_output_schema: bool,
 ) -> Node:
-    fields = node.model_dump(
-        exclude={"id", "agent_id", "seq"},
-        mode="python",
-    )
     source = sub.current()
     next_seq = (sub.nodes[-1].seq + 1) if sub.nodes else 0
-    fixed = node.__class__(
+    return stamp_node_for_position(
+        source=source,
+        replacement=node,
         agent_id=sub.agent_id,
         seq=next_seq,
-        **fields,
-    )
-    fixed = inherit_node_state(
-        source=source,
-        replacement=fixed,
+        graph_output_schema=getattr(sub, "output_schema", None),
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,
     )
-    if (
-        output_schema is None
-        and inherit_output_schema
-        and fixed.output_schema is None
-        and getattr(sub, "output_schema", None) is not None
-    ):
-        fixed = fixed.update(output_schema=sub.output_schema)
-    return fixed
 
 
 __all__ = [

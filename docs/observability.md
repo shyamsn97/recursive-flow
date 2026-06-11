@@ -15,7 +15,6 @@ graph.depth        # int — recursion depth
 graph.query        # str — original task
 graph.system_prompt
 graph.config       # dict — engine knobs at spawn
-graph.workspace    # WorkspaceRef | None
 graph.runtime      # RuntimeRef | None
 graph.model        # str | None — concrete model name (if set)
 graph.parent_agent_id / graph.parent_node_id

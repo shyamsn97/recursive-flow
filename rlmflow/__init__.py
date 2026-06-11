@@ -1,5 +1,6 @@
 """rlmflow: a small, hackable engine for recursive language-model flows."""
 
+from rlmflow.engine.scheduling import parallel_step
 from rlmflow.graph import (
     ActionNode,
     ChildHandle,
@@ -19,7 +20,6 @@ from rlmflow.graph import (
     SupervisingOutput,
     UserQuery,
     WaitRequest,
-    WorkspaceRef,
     is_action,
     is_code_observation,
     is_done,
@@ -47,6 +47,7 @@ from rlmflow.workspace import (
     FileStore,
     InMemoryContext,
     InMemorySession,
+    InMemoryWorkspace,
     MemoryStore,
     Session,
     Store,
@@ -72,6 +73,7 @@ __all__ = [
     "Graph",
     "InMemoryContext",
     "InMemorySession",
+    "InMemoryWorkspace",
     "LLMAction",
     "LLMClient",
     "LLMOutput",
@@ -93,7 +95,6 @@ __all__ = [
     "UserQuery",
     "WaitRequest",
     "Workspace",
-    "WorkspaceRef",
     "is_action",
     "is_code_observation",
     "is_done",
@@ -107,5 +108,6 @@ __all__ = [
     "is_resumed",
     "is_supervising",
     "is_user_query",
+    "parallel_step",
     "retrace_steps",
 ]
