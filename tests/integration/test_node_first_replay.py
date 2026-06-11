@@ -19,7 +19,7 @@ def _run(engine: RecursiveFlow, graph: Graph) -> Graph:
     return graph
 
 
-def test_workspace_fork_carries_flat_runtime_tree(tmp_path: Path):
+def test_workspace_fork_carries_core_state_and_artifacts_are_opt_in(tmp_path: Path):
     source_workspace = Workspace.create(tmp_path / "b1")
     source_workspace.path("marker.txt").write_text("copied")
     source_workspace.path("nested").mkdir()
@@ -29,13 +29,20 @@ def test_workspace_fork_carries_flat_runtime_tree(tmp_path: Path):
     source_workspace.path("trace", "trace.json").write_text("{}")
 
     fork_workspace = source_workspace.fork(new_dir=tmp_path / "b2")
+    artifact_workspace = source_workspace.fork(
+        new_dir=tmp_path / "b3",
+        include_artifacts=True,
+    )
 
-    assert fork_workspace.path("marker.txt").read_text() == "copied"
-    assert fork_workspace.path("nested", "data.txt").read_text() == "nested"
+    assert not fork_workspace.path("marker.txt").exists()
+    assert not fork_workspace.path("nested", "data.txt").exists()
     assert not fork_workspace.path("trace", "trace.json").exists()
+    assert fork_workspace.context.read("context") == "payload stays in context store"
+    assert artifact_workspace.path("marker.txt").read_text() == "copied"
+    assert artifact_workspace.path("nested", "data.txt").read_text() == "nested"
+    assert not artifact_workspace.path("trace", "trace.json").exists()
     assert (
-        fork_workspace.context.read("context")
-        == "payload stays in context store"
+        artifact_workspace.context.read("context") == "payload stays in context store"
     )
 
 

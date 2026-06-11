@@ -40,7 +40,7 @@ def test_workspace_session_records_states(tmp_path: Path):
     assert reloaded.nodes[-1].type == "done_output"
 
 
-def test_workspace_fork_copies_user_files_session_and_context(tmp_path: Path):
+def test_workspace_fork_copies_session_context_and_opt_in_user_files(tmp_path: Path):
     source = Workspace.create(tmp_path / "b1")
     source.path("marker.txt").write_text("copied")
     engine = RecursiveFlow(
@@ -51,15 +51,22 @@ def test_workspace_fork_copies_user_files_session_and_context(tmp_path: Path):
     _run(engine, engine.start("test query", context="payload"))
 
     forked = source.fork(new_dir=tmp_path / "b2")
+    with_artifacts = source.fork(new_dir=tmp_path / "b3", include_artifacts=True)
 
-    assert forked.path("marker.txt").read_text() == "copied"
+    assert not forked.path("marker.txt").exists()
+    assert with_artifacts.path("marker.txt").read_text() == "copied"
     assert forked.context.read("context") == "payload"
+    assert with_artifacts.context.read("context") == "payload"
     src_aids = list(source.session.load_graph().agents)
     dst_aids = list(forked.session.load_graph().agents)
-    assert src_aids == dst_aids
+    artifact_aids = list(with_artifacts.session.load_graph().agents)
+    assert src_aids == dst_aids == artifact_aids
     assert (tmp_path / "b2" / "graph.json").exists()
     assert (tmp_path / "b2" / "session" / "root" / "session.jsonl").exists()
     assert (tmp_path / "b2" / "context" / "root" / "context.txt").exists()
+    assert (tmp_path / "b3" / "graph.json").exists()
+    assert (tmp_path / "b3" / "session" / "root" / "session.jsonl").exists()
+    assert (tmp_path / "b3" / "context" / "root" / "context.txt").exists()
 
 
 def test_workspace_fork_isolates_subsequent_session_writes(tmp_path: Path):
@@ -82,11 +89,7 @@ def test_workspace_fork_isolates_subsequent_session_writes(tmp_path: Path):
     )
     _run(fork_engine, fork_engine.start("fork"))
 
-    src_after = sum(
-        len(g.nodes) for g in source.session.load_graph().agents.values()
-    )
-    dst_after = sum(
-        len(g.nodes) for g in forked.session.load_graph().agents.values()
-    )
+    src_after = sum(len(g.nodes) for g in source.session.load_graph().agents.values())
+    dst_after = sum(len(g.nodes) for g in forked.session.load_graph().agents.values())
     assert src_after == source_state_count
     assert dst_after > source_state_count
