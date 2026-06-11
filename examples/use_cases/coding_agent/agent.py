@@ -1,24 +1,24 @@
 """Interactive coding agent.
 
-A REPL interface to an RLMFlow coding agent. Talk to it, give it tasks,
+A REPL interface to an RecursiveFlow coding agent. Talk to it, give it tasks,
 it writes and edits files in your workspace using delegation.
 
 Usage:
     python examples/use_cases/coding_agent/agent.py --workspace ./myproject
     python examples/use_cases/coding_agent/agent.py --workspace ./myproject --no-viz
-    python examples/use_cases/coding_agent/agent.py --workspace ./myproject --docker-image rlmflow:local
+    python examples/use_cases/coding_agent/agent.py --workspace ./myproject --docker-image recursive-flow:local
 """
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from rlmflow.llm import AnthropicClient, OpenAIClient
-from rlmflow.rlm import RLMConfig, RLMFlow
-from rlmflow.runtime.docker import DockerRuntime
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.tools import FILE_TOOLS
-from rlmflow.workspace import Workspace
+
+import rflow
+from rflow.runtime.docker import DockerRuntime
+from rflow.runtime.local import LocalRuntime
+from rflow.tools import FILE_TOOLS
+
 
 def main():
     examples_root = Path(__file__).resolve().parents[2]
@@ -31,13 +31,20 @@ def main():
     )
     parser.add_argument("--model", default="gpt-5")
     parser.add_argument("--fast-model", default="gpt-5-mini")
-    parser.add_argument("--docker-image", default=None,
-                        help="If set, run agent code inside this Docker image (e.g. rlmflow:local).")
+    parser.add_argument(
+        "--docker-image",
+        default=None,
+        help="If set, run agent code inside this Docker image (e.g. recursive-flow:local).",
+    )
     parser.add_argument("--max-depth", type=int, default=3)
     parser.add_argument("--max-iterations", type=int, default=30)
     parser.add_argument("--no-viz", action="store_true")
-    parser.add_argument("--max-concurrency", type=int, default=8,
-                        help="Maximum number of concurrent tasks to run.")
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=8,
+        help="Maximum number of concurrent tasks to run.",
+    )
     args = parser.parse_args()
 
     if args.docker_image:
@@ -46,7 +53,7 @@ def main():
         print(">>> LOCAL RUNTIME")
 
     workspace_root = Path(args.workspace).resolve()
-    workspace = Workspace.create(workspace_root)
+    workspace = rflow.Workspace.create(workspace_root)
     print(f"Workspace: {workspace.root}")
 
     if args.docker_image:
@@ -59,21 +66,23 @@ def main():
     runtime.register_tools(FILE_TOOLS)
 
     llm = (
-        AnthropicClient(args.model)
+        rflow.AnthropicClient(args.model)
         if args.model.startswith("claude")
-        else OpenAIClient(args.model)
+        else rflow.OpenAIClient(args.model)
     )
     fast = (
-        AnthropicClient(args.fast_model)
+        rflow.AnthropicClient(args.fast_model)
         if args.fast_model.startswith("claude")
-        else OpenAIClient(args.fast_model)
+        else rflow.OpenAIClient(args.fast_model)
     )
 
-    agent = RLMFlow(
+    agent = rflow.RecursiveFlow(
         llm_client=llm,
         runtime=runtime,
         workspace=workspace,
-        config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
+        config=rflow.FlowConfig(
+            max_depth=args.max_depth, max_iterations=args.max_iterations
+        ),
         llm_clients={
             "fast": {"model": fast, "description": "Cheap model for smaller subtasks"},
         },
@@ -95,7 +104,8 @@ def main():
             while not graph.finished:
                 graph = agent.step(graph)
         else:
-            from rlmflow.utils.viz import live_view
+            from rflow.utils.viz import live_view
+
             with live_view() as view:
                 view(graph)
                 while not graph.finished:

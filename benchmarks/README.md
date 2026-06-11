@@ -1,23 +1,23 @@
 # benchmarks/
 
-Runnable benchmark harnesses for rlmflow. Each subdirectory is a
+Runnable benchmark harnesses for rflow. Each subdirectory is a
 self-contained driver for one public benchmark, with its own README,
 runner, and scoring script.
 
 ## Conventions (shared across all benchmarks)
 
 - **Runtime.** Default to `LocalRuntime` for dev; pass `--docker-image
-  rlmflow:local` for any serious run. Never run third-party benchmark
+  recursive-flow:local` for any serious run. Never run third-party benchmark
   prompts under `LocalRuntime` on a trusted machine.
 - **Budget.** Every task gets a fixed `max_depth × max_iterations` and
   optional `max_budget` (total tokens). These are declared in the CLI and
   written to the run manifest — do not tune per-task.
 - **Manifest.** Every run writes a `manifest.json` with:
   `{model, fast_model, max_depth, max_iterations, max_budget, split, n,
-   seed, dataset_sha, runtime, timestamp, rlmflow_version}`.
+   seed, dataset_sha, runtime, timestamp, recursive-flow_version}`.
 - **Results.** Per-task rows go to `results.jsonl`; aggregate metrics to
   `summary.json`; full traces to `traces/<task_id>/` via
-  `rlmflow.utils.trace.save_trace`.
+  `rflow.utils.trace.save_trace`.
 - **Seeds.** Any sampling from a dataset is deterministic given `--seed`
   so partial reruns are reproducible.
 
@@ -26,7 +26,7 @@ runner, and scoring script.
 ```
 benchmarks/
   README.md              # this file
-  comparison/            # rlmflow vs alexzhang13/rlm synthetic smoke comparison
+  comparison/            # recursive-flow vs alexzhang13/rlm synthetic smoke comparison
   oolong/                # RLM paper: long-context aggregation
   ...                    # more suites added over time
 ```

@@ -22,8 +22,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from rlmflow import LLMClient, LLMUsage, RLMConfig, RLMFlow, Workspace, retrace_steps
-
+import rflow
 
 ROOT_SPLIT = (
     "```repl\n"
@@ -36,11 +35,11 @@ ROOT_SPLIT = (
 )
 
 
-class ScriptedLLM(LLMClient):
+class ScriptedLLM(rflow.LLMClient):
     """Tiny deterministic LLM: root delegates, each child returns its name."""
 
     def chat(self, messages, *args, **kwargs):
-        self.last_usage = LLMUsage(input_tokens=10, output_tokens=5)
+        self.last_usage = rflow.LLMUsage(input_tokens=10, output_tokens=5)
         last = messages[-1]["content"]
         if "do A" in last:
             return '```repl\ndone("A done")\n```'
@@ -62,11 +61,11 @@ def current_type(subgraph) -> str:
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        workspace = Workspace.create(Path(tmp).resolve() / "ws")
-        engine = RLMFlow(
+        workspace = rflow.Workspace.create(Path(tmp).resolve() / "ws")
+        engine = rflow.RecursiveFlow(
             llm_client=ScriptedLLM(),
             workspace=workspace,
-            config=RLMConfig(max_depth=1, max_iterations=5, max_concurrency=2),
+            config=rflow.FlowConfig(max_depth=1, max_iterations=5, max_concurrency=2),
         )
 
         banner("running the engine - one tick per step()")
@@ -95,7 +94,7 @@ def main() -> None:
             print(f"  {n.agent_id:<7} seq={n.seq:<2} {n.type:<18} {preview!r}")
 
         banner("retrace_steps(graph) - one snapshot per stable transition")
-        snapshots = retrace_steps(graph)
+        snapshots = rflow.retrace_steps(graph)
         print(f"{len(snapshots)} snapshots reconstructed from {tick} engine ticks\n")
         for i, snap in enumerate(snapshots, start=1):
             agents = ", ".join(

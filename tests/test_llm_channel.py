@@ -5,8 +5,8 @@ import time
 
 import pytest
 
-from rlmflow.llm import LLMClient, LLMUsage
-from rlmflow.llm_channel import LLMChannel
+from rflow.llm import LLMClient, LLMUsage
+from rflow.llm_channel import LLMChannel
 
 
 class _ObservedLLM(LLMClient):

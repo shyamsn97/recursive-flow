@@ -1,4 +1,4 @@
-"""Compare rlmflow against upstream ``alexzhang13/rlm`` on one task family.
+"""Compare recursive-flow against upstream ``alexzhang13/rlm`` on one task family.
 
 The task is a deterministic synthetic needle-in-haystack benchmark: a large
 context contains many records, exactly one record has the requested marker, and
@@ -30,11 +30,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from rlmflow.graph import Graph  # noqa: E402
-from rlmflow.llm import AnthropicClient, LLMClient, OpenAIClient  # noqa: E402
-from rlmflow.rlm import RLMConfig, RLMFlow  # noqa: E402
-from rlmflow.runtime.local import LocalRuntime  # noqa: E402
-from rlmflow.workspace import Workspace  # noqa: E402
+from rflow.graph import Graph  # noqa: E402
+from rflow.llm import AnthropicClient, LLMClient, OpenAIClient  # noqa: E402
+from rflow.flow import FlowConfig, RecursiveFlow  # noqa: E402
+from rflow.runtime.local import LocalRuntime  # noqa: E402
+from rflow.workspace import Workspace  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -129,13 +129,13 @@ def infer_backend(model: str, backend: str) -> str:
     return "openai"
 
 
-def make_rlmflow_llm(model: str, backend: str) -> LLMClient:
+def make_recursive_flow_llm(model: str, backend: str) -> LLMClient:
     backend = infer_backend(model, backend)
     if backend == "anthropic":
         return AnthropicClient(model=model)
     if backend == "openai":
         return OpenAIClient(model=model)
-    raise ValueError("rlmflow runner currently supports --backend auto|openai|anthropic")
+    raise ValueError("recursive-flow runner currently supports --backend auto|openai|anthropic")
 
 
 def normalize(text: str) -> str:
@@ -231,31 +231,31 @@ def iter_code_strings(value: Any) -> list[str]:
     return snippets
 
 
-class CountingRLMFlow(RLMFlow):
+class CountingRecursiveFlow(RecursiveFlow):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.method_counts = {"rlm_delegate": 0, "llm_query_batched": 0}
+        self.method_counts = {"flow_delegate": 0, "llm_query_batched": 0}
 
     def llm_query_batched(self, prompts: list[str], *, model: str = "default") -> list[str]:
         self.method_counts["llm_query_batched"] += 1
         return super().llm_query_batched(prompts, model=model)
 
     def spawn_child(self, *args: Any, **kwargs: Any) -> Any:
-        self.method_counts["rlm_delegate"] += 1
+        self.method_counts["flow_delegate"] += 1
         return super().spawn_child(*args, **kwargs)
 
 
-def run_rlmflow_task(task: Task, args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
-    workspace = Workspace.create(run_dir / "workspaces" / "rlmflow" / task.task_id)
+def run_recursive_flow_task(task: Task, args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
+    workspace = Workspace.create(run_dir / "workspaces" / "recursive-flow" / task.task_id)
     runtime = LocalRuntime(workspace=workspace)
-    llm = make_rlmflow_llm(args.model, args.backend)
-    config = RLMConfig(
+    llm = make_recursive_flow_llm(args.model, args.backend)
+    config = FlowConfig(
         max_depth=args.max_depth,
         max_iterations=args.max_iterations,
         max_output_length=args.max_output_length,
         max_concurrency=args.max_concurrency,
     )
-    agent = CountingRLMFlow(llm_client=llm, runtime=runtime, config=config, workspace=workspace)
+    agent = CountingRecursiveFlow(llm_client=llm, runtime=runtime, config=config, workspace=workspace)
 
     started = time.time()
     graph: Graph | None = None
@@ -285,7 +285,7 @@ def run_rlmflow_task(task: Task, args: argparse.Namespace, run_dir: Path) -> dic
     usage = graph_usage(graph)
     method_counts = dict(agent.method_counts)
     return {
-        "framework": "rlmflow",
+        "framework": "recursive-flow",
         "task_id": task.task_id,
         "prediction": prediction,
         "elapsed_s": round(elapsed, 3),
@@ -520,13 +520,13 @@ def run_upstream_task(task: Task, args: argparse.Namespace, run_dir: Path) -> di
 
 def selected_frameworks(framework: str) -> list[str]:
     if framework == "both":
-        return ["rlmflow", "alexzhang13/rlm"]
+        return ["recursive-flow", "alexzhang13/rlm"]
     return [framework]
 
 
 def framework_runner(framework: str):
-    if framework == "rlmflow":
-        return run_rlmflow_task
+    if framework == "recursive-flow":
+        return run_recursive_flow_task
     if framework == "alexzhang13/rlm":
         return run_upstream_task
     raise ValueError(f"unknown framework: {framework}")
@@ -675,7 +675,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--framework",
-        choices=["both", "rlmflow", "alexzhang13/rlm"],
+        choices=["both", "recursive-flow", "alexzhang13/rlm"],
         default="both",
         help="Which implementation(s) to run.",
     )

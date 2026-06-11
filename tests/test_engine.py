@@ -1,6 +1,6 @@
 """End-to-end engine tests: state machine, delegation, edge cases, persistence.
 
-Replaces ``test_rlmflow_core.py`` (engine bits), ``test_step_ordering.py``,
+Replaces ``test_recursive_flow_core.py`` (engine bits), ``test_step_ordering.py``,
 ``test_nested_delegation.py``, and ``test_final_answer_exhaustion.py``.
 
 Covers:
@@ -11,7 +11,7 @@ Covers:
 - edge cases (orphan delegate, max depth, max iterations, budget, no code block)
 - resume semantics (no child injection, REPL state preserved)
 - per-agent isolation (each agent gets its own runtime + ``runtime.env``)
-- ``RLMFlow.spawn_child`` override seam
+- ``RecursiveFlow.spawn_child`` override seam
 - workspace persistence and trace round-trip
 """
 
@@ -20,15 +20,15 @@ from __future__ import annotations
 import threading
 import time
 
-from rlmflow.engine import scheduling
-from rlmflow import (
+from rflow.engine import scheduling
+from rflow import (
     ExecAction,
     ExecOutput,
     Graph,
     LLMClient,
     LLMUsage,
-    RLMConfig,
-    RLMFlow,
+    FlowConfig,
+    RecursiveFlow,
     UserQuery,
     Workspace,
     is_done,
@@ -37,8 +37,8 @@ from rlmflow import (
     is_supervising,
     parallel_step,
 )
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.utils.trace import load_trace, save_trace
+from rflow.runtime.local import LocalRuntime
+from rflow.utils.trace import load_trace, save_trace
 from tests.helpers import StaticLLM, make_agent, run_to_completion
 
 
@@ -54,16 +54,16 @@ def _assert_seqs_monotonic(g: Graph) -> None:
     """Every agent in the subtree has seq 0..n-1 with no gaps or dupes."""
     for sub in g.walk():
         seqs = [s.seq for s in sub.nodes]
-        assert seqs == list(range(len(seqs))), (
-            f"{sub.agent_id}: seqs={seqs} (expected 0..{len(seqs) - 1})"
-        )
+        assert seqs == list(
+            range(len(seqs))
+        ), f"{sub.agent_id}: seqs={seqs} (expected 0..{len(seqs) - 1})"
 
 
 def _assert_spawn_links(g: Graph, spawner_seq: int | None = None) -> None:
     """Every direct child's parent_node_id equals the spawning state's id.
 
     The spawning state is whichever :class:`ExecAction` /
-    :class:`ResumeAction` was running when ``rlm_delegate()`` was called.
+    :class:`ResumeAction` was running when ``flow_delegate()`` was called.
     If ``spawner_seq`` is None (the default), we look it up by
     matching child IDs back to whichever action node's id they
     record as ``parent_node_id``.
@@ -117,7 +117,13 @@ def test_step_drives_one_shot_to_result():
     graph = agent.step(graph)  # exec half — writes ExecAction + DoneOutput
     assert is_done(graph.current())
     assert graph.result() == "ok"
-    assert _types(graph) == ["user_query", "llm_action", "llm_output", "exec_action", "done_output"]
+    assert _types(graph) == [
+        "user_query",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "done_output",
+    ]
 
 
 def test_step_accepts_per_call_pool_override():
@@ -182,12 +188,14 @@ def test_parallel_step_rejects_eager_children():
         raise AssertionError("parallel_step accepted eager_children=True")
 
 
-def test_step_skips_workspace_sync_when_graph_fingerprint_matches(tmp_path, monkeypatch):
+def test_step_skips_workspace_sync_when_graph_fingerprint_matches(
+    tmp_path, monkeypatch
+):
     workspace = Workspace.create(tmp_path)
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone("ok")\n```'),
         workspace=workspace,
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     graph = agent.start("say ok")
     calls = 0
@@ -207,10 +215,10 @@ def test_step_skips_workspace_sync_when_graph_fingerprint_matches(tmp_path, monk
 
 def test_step_syncs_workspace_when_graph_fingerprint_differs(tmp_path, monkeypatch):
     workspace = Workspace.create(tmp_path)
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone("ok")\n```'),
         workspace=workspace,
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     graph = agent.start("old query")
     edited = graph.replace_last_observation("root", UserQuery(content="edited query"))
@@ -245,9 +253,13 @@ def test_graph_inject_returns_new_graph_with_appended_node():
 
 
 def test_graph_inject_rejects_multiple_pending_actions():
-    graph = _agent().start("say ok").inject(
-        target="root",
-        node=ExecAction(code="print('first')"),
+    graph = (
+        _agent()
+        .start("say ok")
+        .inject(
+            target="root",
+            node=ExecAction(code="print('first')"),
+        )
     )
 
     try:
@@ -295,10 +307,10 @@ def test_runtime_exception_after_exec_action_records_error():
         def start_code(self, code: str):
             raise RuntimeError("transport lost")
 
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _StaticLLM("```repl\nprint('hello')\n```"),
         runtime=_FailingRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     graph = agent.start("run")
     graph = agent.step(graph)
@@ -321,10 +333,10 @@ def test_llm_exception_after_llm_action_records_error():
         def call(self, model, messages):
             raise TimeoutError("LLM request timed out after 420s")
 
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _StaticLLM("unused"),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     agent.llm_channel = _TimeoutChannel()
 
@@ -362,10 +374,10 @@ def test_remote_like_runtime_syncs_artifacts_before_exec_observation(tmp_path):
             self.stale_count += 1
 
     runtime = _SyncRecordingRuntime()
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _StaticLLM("```repl\nprint('ran')\n```"),
         runtime=runtime,
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
 
     graph = agent.start("run")
@@ -417,18 +429,18 @@ def test_remote_like_runtime_cross_notifies_siblings_under_eager_children():
                 return '```repl\ndone("B")\n```'
             return (
                 "```repl\n"
-                'ha = rlm_delegate(name="a", query="child-a", context="")\n'
-                'hb = rlm_delegate(name="b", query="child-b", context="")\n'
-                "results = await rlm_wait(ha, hb)\n"
+                'ha = flow_delegate(name="a", query="child-a", context="")\n'
+                'hb = flow_delegate(name="b", query="child-b", context="")\n'
+                "results = await flow_wait(ha, hb)\n"
                 'done("p:" + "+".join(results))\n'
                 "```"
             )
 
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _ParallelLLM(),
         runtime=_RemoteLike(),
         runtime_factory=_RemoteLike,
-        config=RLMConfig(
+        config=FlowConfig(
             eager_children=True,
             max_depth=1,
             max_iterations=5,
@@ -445,16 +457,16 @@ def test_remote_like_runtime_cross_notifies_siblings_under_eager_children():
     assert all(rt.transition_count >= 1 for rt in child_rts)
     parent_label = parent_rt.label
     for rt in child_rts:
-        assert parent_label in rt.notified_by, (
-            f"{rt.label} was not notified by parent: {rt.notified_by}"
-        )
+        assert (
+            parent_label in rt.notified_by
+        ), f"{rt.label} was not notified by parent: {rt.notified_by}"
         sibling_labels = {sib.label for sib in child_rts if sib is not rt}
-        assert sibling_labels & set(rt.notified_by), (
-            f"{rt.label} was not notified by any sibling: {rt.notified_by}"
-        )
-        assert rt.label not in rt.notified_by, (
-            f"{rt.label} notified itself: {rt.notified_by}"
-        )
+        assert sibling_labels & set(
+            rt.notified_by
+        ), f"{rt.label} was not notified by any sibling: {rt.notified_by}"
+        assert (
+            rt.label not in rt.notified_by
+        ), f"{rt.label} notified itself: {rt.notified_by}"
 
     assert {c.label for c in child_rts} <= set(parent_rt.notified_by)
     assert parent_rt.label not in parent_rt.notified_by
@@ -466,7 +478,7 @@ def test_async_refill_does_not_own_runtime_sync():
             return Graph(agent_id="root")
 
     class _Engine:
-        config = RLMConfig(eager_children=True)
+        config = FlowConfig(eager_children=True)
         terminate_requested = set()
         session = _Session()
 
@@ -505,10 +517,10 @@ def test_llm_query_batched_returns_ordered_results_without_children():
             )
 
     llm = _BatchLLM()
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm,
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3, max_concurrency=4),
+        config=FlowConfig(max_iterations=3, max_concurrency=4),
     )
 
     graph = _run(agent, agent.start("batch lightweight prompts"))
@@ -641,7 +653,7 @@ def test_parallel_child_agents_with_batches_share_llm_channel_cap():
 
             child_count = 4
             delegates = "\n".join(
-                f'h{i} = rlm_delegate(name="c{i}", query="child task", context="")'
+                f'h{i} = flow_delegate(name="c{i}", query="child task", context="")'
                 for i in range(child_count)
             )
             handles = ", ".join(f"h{i}" for i in range(child_count))
@@ -649,16 +661,16 @@ def test_parallel_child_agents_with_batches_share_llm_channel_cap():
             return (
                 "```repl\n"
                 f"{delegates}\n"
-                f"results = await rlm_wait({handles})\n"
+                f"results = await flow_wait({handles})\n"
                 'done("|".join(sorted(results)))\n'
                 "```"
             ), LLMUsage(input_tokens=3, output_tokens=1)
 
     llm = _ParallelBatchingLLM()
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm,
         runtime=LocalRuntime(),
-        config=RLMConfig(
+        config=FlowConfig(
             max_depth=1,
             max_iterations=8,
             max_concurrency=4,
@@ -749,9 +761,10 @@ def test_build_messages_never_emits_consecutive_user_turns():
             return "```repl\nSTASH = 'value'\nprint('hello')\n```"
 
     rec = _Recorder()
-    agent = RLMFlow(
-        rec, runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=0, max_iterations=5),
+    agent = RecursiveFlow(
+        rec,
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=0, max_iterations=5),
     )
     _run(agent, agent.start("hi"))
 
@@ -775,12 +788,22 @@ def test_single_agent_observation_loop():
                 return '```repl\ndone("got:" + STASH)\n```'
             return "```repl\nSTASH = 'value'\nprint('hello')\n```"
 
-    agent = RLMFlow(_TwoTurn(), runtime=LocalRuntime(), config=RLMConfig(max_depth=0, max_iterations=5))
+    agent = RecursiveFlow(
+        _TwoTurn(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=0, max_iterations=5),
+    )
     g = _run(agent, agent.start("hi"))
     assert _types(g) == [
         "user_query",
-        "llm_action", "llm_output", "exec_action", "exec_output",
-        "llm_action", "llm_output", "exec_action", "done_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "exec_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "done_output",
     ]
     _assert_seqs_monotonic(g)
     assert g.result() == "got:value"
@@ -798,25 +821,37 @@ class _TightChildLLM(LLMClient):
             return '```repl\ndone("c")\n```'
         return (
             "```repl\n"
-            'h = rlm_delegate(name="child", query="child task", context="")\n'
-            "results = await rlm_wait(h)\n"
+            'h = flow_delegate(name="child", query="child task", context="")\n'
+            "results = await flow_wait(h)\n"
             'done("p:" + results[0])\n'
             "```"
         )
 
 
 def test_tight_pattern_records_resume_before_result():
-    agent = RLMFlow(
-        _TightChildLLM(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=5)
+    agent = RecursiveFlow(
+        _TightChildLLM(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=5),
     )
     g = _run(agent, agent.start("parent"))
 
     assert _types(g) == [
         "user_query",
-        "llm_action", "llm_output", "exec_action", "supervising_output",
-        "resume_action", "done_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "supervising_output",
+        "resume_action",
+        "done_output",
     ]
-    assert _types(g["root.child"]) == ["user_query", "llm_action", "llm_output", "exec_action", "done_output"]
+    assert _types(g["root.child"]) == [
+        "user_query",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "done_output",
+    ]
     _assert_seqs_monotonic(g)
     _assert_spawn_links(g)
 
@@ -835,7 +870,9 @@ def test_remote_like_runtime_syncs_artifacts_before_resume_observation(tmp_path)
             self.stale_count = 0
 
         def after_execution_transition(self, runtimes=()) -> None:
-            self.sync_points.append(workspace.session.load_graph()["root"].current().type)
+            self.sync_points.append(
+                workspace.session.load_graph()["root"].current().type
+            )
             output = workspace.root / "output"
             output.mkdir(exist_ok=True)
             (output / f"sync-{len(self.sync_points)}.txt").write_text(
@@ -848,11 +885,11 @@ def test_remote_like_runtime_syncs_artifacts_before_resume_observation(tmp_path)
             self.stale_count += 1
 
     root_runtime = _SyncRecordingRuntime()
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _TightChildLLM(),
         runtime=root_runtime,
         runtime_factory=lambda: LocalRuntime(workspace=workspace),
-        config=RLMConfig(max_depth=1, max_iterations=5),
+        config=FlowConfig(max_depth=1, max_iterations=5),
     )
 
     graph = _run(agent, agent.start("parent"))
@@ -872,9 +909,7 @@ def test_eager_children_drains_waiting_subtree_and_resumes_parent_same_step():
         def chat(self, messages, *args, **kwargs):
             text = "\n".join(m["content"] for m in messages).lower()
             assistant = "\n".join(
-                m["content"].lower()
-                for m in messages
-                if m.get("role") == "assistant"
+                m["content"].lower() for m in messages if m.get("role") == "assistant"
             )
             if "child task" in text:
                 if "child working" in assistant:
@@ -882,16 +917,16 @@ def test_eager_children_drains_waiting_subtree_and_resumes_parent_same_step():
                 return '```repl\nprint("child working")\n```'
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="child", query="child task", context="")\n'
-                "results = await rlm_wait(h)\n"
+                'h = flow_delegate(name="child", query="child task", context="")\n'
+                "results = await flow_wait(h)\n"
                 'done("parent:" + results[0])\n'
                 "```"
             )
 
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _SlowChildLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(
+        config=FlowConfig(
             eager_children=True,
             max_depth=1,
             max_iterations=8,
@@ -935,16 +970,16 @@ def test_default_children_do_not_drain_waiting_subtree_in_parent_exec_step():
                 return '```repl\ndone("child-result")\n```'
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="child", query="child task", context="")\n'
-                "results = await rlm_wait(h)\n"
+                'h = flow_delegate(name="child", query="child task", context="")\n'
+                "results = await flow_wait(h)\n"
                 'done("parent:" + results[0])\n'
                 "```"
             )
 
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _ChildLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(
+        config=FlowConfig(
             eager_children=False,
             max_depth=1,
             max_iterations=8,
@@ -982,10 +1017,10 @@ def test_eager_children_uses_configured_pool_run_until_idle():
             return results
 
     pool = _RecordingPool()
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _StaticLLM('```repl\ndone("ok")\n```'),
         runtime=LocalRuntime(),
-        config=RLMConfig(eager_children=True, max_iterations=3),
+        config=FlowConfig(eager_children=True, max_iterations=3),
         pool=pool,
     )
 
@@ -1006,24 +1041,33 @@ def test_tight_pattern_with_many_siblings_shares_one_supervising():
             if "leaf task" in prompt:
                 return '```repl\ndone("leaf:" + AGENT_ID)\n```'
             delegations = "\n".join(
-                f'h{i} = rlm_delegate(name="c{i}", query="leaf task", context="")' for i in range(n)
+                f'h{i} = flow_delegate(name="c{i}", query="leaf task", context="")'
+                for i in range(n)
             )
             handles = ", ".join(f"h{i}" for i in range(n))
             return (
                 "```repl\n"
                 f"{delegations}\n"
-                f"results = await rlm_wait({handles})\n"
+                f"results = await flow_wait({handles})\n"
                 'done(",".join(results))\n'
                 "```"
             )
 
-    agent = RLMFlow(_MultiSibling(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=5))
+    agent = RecursiveFlow(
+        _MultiSibling(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=5),
+    )
     g = _run(agent, agent.start("fan out"))
 
     assert _types(g) == [
         "user_query",
-        "llm_action", "llm_output", "exec_action", "supervising_output",
-        "resume_action", "done_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "supervising_output",
+        "resume_action",
+        "done_output",
     ]
     assert set(g.children) == {f"root.c{i}" for i in range(n)}
     sup = next(s for s in g.nodes if is_supervising(s))
@@ -1033,31 +1077,44 @@ def test_tight_pattern_with_many_siblings_shares_one_supervising():
 
 
 def test_verify_pattern_records_resume_then_action():
-    """Block ends after ``await rlm_wait``; agent calls ``done`` on the next turn."""
+    """Block ends after ``await flow_wait``; agent calls ``done`` on the next turn."""
 
     class _VerifyChild(LLMClient):
         def chat(self, messages, *args, **kwargs):
             prompt = messages[-1]["content"].lower()
             if "child task" in prompt:
                 return '```repl\ndone("c")\n```'
-            prior = "\n".join(m["content"] for m in messages if m.get("role") == "assistant")
-            if "await rlm_wait" in prior:
+            prior = "\n".join(
+                m["content"] for m in messages if m.get("role") == "assistant"
+            )
+            if "await flow_wait" in prior:
                 return '```repl\ndone("p:c-verified")\n```'
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="child", query="child task", context="")\n'
-                "await rlm_wait(h)\n"
+                'h = flow_delegate(name="child", query="child task", context="")\n'
+                "await flow_wait(h)\n"
                 "```"
             )
 
-    agent = RLMFlow(_VerifyChild(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=8))
+    agent = RecursiveFlow(
+        _VerifyChild(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=8),
+    )
     g = _run(agent, agent.start("parent"))
 
     assert _types(g) == [
         "user_query",
-        "llm_action", "llm_output", "exec_action", "supervising_output",
-        "resume_action", "exec_output",
-        "llm_action", "llm_output", "exec_action", "done_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "supervising_output",
+        "resume_action",
+        "exec_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "done_output",
     ]
     _assert_seqs_monotonic(g)
     assert g.result() == "p:c-verified"
@@ -1073,24 +1130,33 @@ def test_multi_await_same_block_records_two_supervising_resume_pairs():
                 return '```repl\ndone("verified")\n```'
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="child", query="child task", context="")\n'
-                "child_results = await rlm_wait(h)\n"
-                'v = rlm_delegate(name="verify", query="verify task", context="")\n'
-                "verdict = await rlm_wait(v)\n"
+                'h = flow_delegate(name="child", query="child task", context="")\n'
+                "child_results = await flow_wait(h)\n"
+                'v = flow_delegate(name="verify", query="verify task", context="")\n'
+                "verdict = await flow_wait(v)\n"
                 'done("parent:" + verdict[0])\n'
                 "```"
             )
 
-    agent = RLMFlow(_Scripted(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=5))
+    agent = RecursiveFlow(
+        _Scripted(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=5),
+    )
     g = _run(agent, agent.start("parent task"))
 
     assert g.result() == "parent:verified"
     assert set(g.children) == {"root.child", "root.verify"}
     assert _types(g) == [
         "user_query",
-        "llm_action", "llm_output", "exec_action", "supervising_output",
-        "resume_action", "supervising_output",
-        "resume_action", "done_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "supervising_output",
+        "resume_action",
+        "supervising_output",
+        "resume_action",
+        "done_output",
     ]
     _assert_seqs_monotonic(g)
 
@@ -1112,28 +1178,43 @@ def test_multi_await_split_blocks_records_action_between_each_resume():
             if "alpha task" in joined:
                 return (
                     "```repl\n"
-                    'h2 = rlm_delegate(name="beta", query="beta task", context="")\n'
-                    "second = await rlm_wait(h2)\n"
+                    'h2 = flow_delegate(name="beta", query="beta task", context="")\n'
+                    "second = await flow_wait(h2)\n"
                     "```"
                 )
             return (
                 "```repl\n"
-                'h1 = rlm_delegate(name="alpha", query="alpha task", context="")\n'
-                "first = await rlm_wait(h1)\n"
+                'h1 = flow_delegate(name="alpha", query="alpha task", context="")\n'
+                "first = await flow_wait(h1)\n"
                 "```"
             )
 
-    agent = RLMFlow(_Scripted(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=8))
+    agent = RecursiveFlow(
+        _Scripted(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=8),
+    )
     g = _run(agent, agent.start("parent"))
 
     assert g.result() == "p:a+b"
     assert _types(g) == [
         "user_query",
-        "llm_action", "llm_output", "exec_action", "supervising_output",
-        "resume_action", "exec_output",
-        "llm_action", "llm_output", "exec_action", "supervising_output",
-        "resume_action", "exec_output",
-        "llm_action", "llm_output", "exec_action", "done_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "supervising_output",
+        "resume_action",
+        "exec_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "supervising_output",
+        "resume_action",
+        "exec_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "done_output",
     ]
     _assert_seqs_monotonic(g)
 
@@ -1145,31 +1226,41 @@ def test_intra_agent_loop_then_delegation():
         def chat(self, messages, *args, **kwargs):
             joined = "\n".join(m["content"] for m in messages)
             is_child_turn = any(
-                m["role"] == "user" and '"child task"' in m["content"]
-                for m in messages
+                m["role"] == "user" and '"child task"' in m["content"] for m in messages
             )
             if is_child_turn:
                 return '```repl\ndone("c")\n```'
             if "READY" not in joined:
                 return "```repl\nprint('READY')\n```"
-            if 'rlm_delegate(name="child"' not in joined:
+            if 'flow_delegate(name="child"' not in joined:
                 return (
                     "```repl\n"
-                    'h = rlm_delegate(name="child", query="child task", context="")\n'
-                    "results = await rlm_wait(h)\n"
+                    'h = flow_delegate(name="child", query="child task", context="")\n'
+                    "results = await flow_wait(h)\n"
                     'done("p:" + results[0])\n'
                     "```"
                 )
             return '```repl\ndone("p:c")\n```'
 
-    agent = RLMFlow(_Loopy(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=8))
+    agent = RecursiveFlow(
+        _Loopy(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=8),
+    )
     g = _run(agent, agent.start("parent"))
 
     assert _types(g) == [
         "user_query",
-        "llm_action", "llm_output", "exec_action", "exec_output",
-        "llm_action", "llm_output", "exec_action", "supervising_output",
-        "resume_action", "done_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "exec_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "supervising_output",
+        "resume_action",
+        "done_output",
     ]
     _assert_seqs_monotonic(g)
     assert g["root.child"].parent_node_id == g.nodes[7].id
@@ -1189,8 +1280,8 @@ class _DeepChainLLM(LLMClient):
         if depth < self.max_child_depth:
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="child", query="go deeper", context="")\n'
-                "results = await rlm_wait(h)\n"
+                'h = flow_delegate(name="child", query="go deeper", context="")\n'
+                "results = await flow_wait(h)\n"
                 'done(AGENT_ID + "->" + results[0])\n'
                 "```"
             )
@@ -1198,7 +1289,11 @@ class _DeepChainLLM(LLMClient):
 
     @staticmethod
     def _depth(messages):
-        system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+        system = (
+            messages[0]["content"]
+            if messages and messages[0]["role"] == "system"
+            else ""
+        )
         marker = "You are at recursion depth **"
         if marker not in system:
             return 0
@@ -1206,14 +1301,22 @@ class _DeepChainLLM(LLMClient):
 
 
 def test_depth_one_delegation():
-    agent = RLMFlow(_DeepChainLLM(max_child_depth=1), runtime=LocalRuntime(), config=RLMConfig(max_depth=1))
+    agent = RecursiveFlow(
+        _DeepChainLLM(max_child_depth=1),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1),
+    )
     g = _run(agent, agent.start("kick"))
     assert g["root.child"].depth == 1
     assert g.result() == "root->leaf:root.child"
 
 
 def test_depth_three_chain_each_level_records_supervising():
-    agent = RLMFlow(_DeepChainLLM(max_child_depth=3), runtime=LocalRuntime(), config=RLMConfig(max_depth=3))
+    agent = RecursiveFlow(
+        _DeepChainLLM(max_child_depth=3),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=3),
+    )
     g = _run(agent, agent.start("kick"))
 
     chain = ["root", "root.child", "root.child.child", "root.child.child.child"]
@@ -1221,21 +1324,33 @@ def test_depth_three_chain_each_level_records_supervising():
         sub = g[aid]
         assert _types(sub) == [
             "user_query",
-            "llm_action", "llm_output", "exec_action", "supervising_output",
-            "resume_action", "done_output",
+            "llm_action",
+            "llm_output",
+            "exec_action",
+            "supervising_output",
+            "resume_action",
+            "done_output",
         ]
         sup = next(s for s in sub.nodes if is_supervising(s))
         assert set(sup.waiting_on) == {aid + ".child"}
-    assert _types(g[chain[-1]]) == ["user_query", "llm_action", "llm_output", "exec_action", "done_output"]
+    assert _types(g[chain[-1]]) == [
+        "user_query",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "done_output",
+    ]
     _assert_seqs_monotonic(g)
-    assert g.result() == "root->root.child->root.child.child->leaf:root.child.child.child"
+    assert (
+        g.result() == "root->root.child->root.child.child->leaf:root.child.child.child"
+    )
 
 
 def test_eager_children_drains_depth_three_chain_in_one_parent_exec_step():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _DeepChainLLM(max_child_depth=3),
         runtime=LocalRuntime(),
-        config=RLMConfig(
+        config=FlowConfig(
             eager_children=True,
             max_depth=3,
             max_iterations=30,
@@ -1250,7 +1365,9 @@ def test_eager_children_drains_depth_three_chain_in_one_parent_exec_step():
 
     chain = ["root", "root.child", "root.child.child", "root.child.child.child"]
     assert g.finished
-    assert g.result() == "root->root.child->root.child.child->leaf:root.child.child.child"
+    assert (
+        g.result() == "root->root.child->root.child.child->leaf:root.child.child.child"
+    )
     for aid in chain[:-1]:
         sub = g[aid]
         assert _types(sub) == [
@@ -1284,18 +1401,21 @@ def test_depth_five_mixed_branching_tree():
                 return '```repl\ndone("leaf:" + AGENT_ID)\n```'
             n = self.fanouts[depth]
             delegations = "\n".join(
-                f'h{i} = rlm_delegate(name="c{i}", query="go", context="")' for i in range(n)
+                f'h{i} = flow_delegate(name="c{i}", query="go", context="")'
+                for i in range(n)
             )
             handles = ", ".join(f"h{i}" for i in range(n))
             return (
                 "```repl\n"
                 f"{delegations}\n"
-                f"results = await rlm_wait({handles})\n"
+                f"results = await flow_wait({handles})\n"
                 'done(AGENT_ID + "(" + ",".join(results) + ")")\n'
                 "```"
             )
 
-    agent = RLMFlow(_Branching(), runtime=LocalRuntime(), config=RLMConfig(max_depth=5))
+    agent = RecursiveFlow(
+        _Branching(), runtime=LocalRuntime(), config=FlowConfig(max_depth=5)
+    )
     g = _run(agent, agent.start("kick"))
 
     all_ids = sorted(sub.agent_id for sub in g.walk())
@@ -1306,13 +1426,23 @@ def test_depth_five_mixed_branching_tree():
     for aid in all_ids:
         sub = g[aid]
         if aid in leaves:
-            assert _types(sub) == ["user_query", "llm_action", "llm_output", "exec_action", "done_output"], aid
+            assert _types(sub) == [
+                "user_query",
+                "llm_action",
+                "llm_output",
+                "exec_action",
+                "done_output",
+            ], aid
         else:
             assert _types(sub) == [
-            "user_query",
-            "llm_action", "llm_output", "exec_action", "supervising_output",
-            "resume_action", "done_output",
-        ], aid
+                "user_query",
+                "llm_action",
+                "llm_output",
+                "exec_action",
+                "supervising_output",
+                "resume_action",
+                "done_output",
+            ], aid
             sup = next(s for s in sub.nodes if is_supervising(s))
             assert set(sup.waiting_on) == set(sub.children)
         assert sub.depth == aid.count(".")
@@ -1328,14 +1458,16 @@ def test_each_step_advances_runnable_agents_once():
             if depth < 2:
                 return (
                     "```repl\n"
-                    'h = rlm_delegate(name="c", query="deeper", context="")\n'
-                    "results = await rlm_wait(h)\n"
+                    'h = flow_delegate(name="c", query="deeper", context="")\n'
+                    "results = await flow_wait(h)\n"
                     'done("d" + str(' + str(depth) + ') + ":" + results[0])\n'
                     "```"
                 )
             return '```repl\ndone("leaf")\n```'
 
-    agent = RLMFlow(_Recursive(), runtime=LocalRuntime(), config=RLMConfig(max_depth=2))
+    agent = RecursiveFlow(
+        _Recursive(), runtime=LocalRuntime(), config=FlowConfig(max_depth=2)
+    )
     graph = agent.start("kick")
     snapshots = [graph]
     while not graph.finished:
@@ -1363,8 +1495,10 @@ def test_launch_subagents_one_spec_runs_through_engine():
                 'done("parent:" + r)\n```'
             )
 
-    agent = RLMFlow(
-        _Parent(), runtime=LocalRuntime(), config=RLMConfig(max_depth=2, max_iterations=6)
+    agent = RecursiveFlow(
+        _Parent(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=2, max_iterations=6),
     )
     g = _run(agent, agent.start("p"))
     assert g.result() == "parent:leaf-answer"
@@ -1381,15 +1515,15 @@ def test_launch_subagents_parallel_returns_ordered_results():
             if "task b" in convo:
                 return '```repl\ndone("B")\n```'
             return (
-                '```repl\nrs = await launch_subagents('
+                "```repl\nrs = await launch_subagents("
                 '[{"query": "task a"}, {"query": "task b"}])\n'
                 'done("|".join(rs))\n```'
             )
 
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _Parent(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=2, max_iterations=6, max_concurrency=2),
+        config=FlowConfig(max_depth=2, max_iterations=6, max_concurrency=2),
     )
     g = _run(agent, agent.start("p"))
     assert g.result() == "A|B"
@@ -1403,12 +1537,14 @@ def test_max_depth_refusal_when_child_would_exceed_limit():
                 return '```repl\ndone("done")\n```'
             return (
                 "```repl\n"
-                'r = rlm_delegate(name="c", query="go", context="")\n'
+                'r = flow_delegate(name="c", query="go", context="")\n'
                 'done(r if isinstance(r, str) else "ok")\n'
                 "```"
             )
 
-    agent = RLMFlow(_AlwaysDelegate(), runtime=LocalRuntime(), config=RLMConfig(max_depth=0))
+    agent = RecursiveFlow(
+        _AlwaysDelegate(), runtime=LocalRuntime(), config=FlowConfig(max_depth=0)
+    )
     g = _run(agent, agent.start("p"))
     # max_depth=0 means even the root can't delegate
     assert "refused" in g.result()
@@ -1429,7 +1565,9 @@ def test_max_iterations_forces_final_answer_turn():
             return "```repl\nx = 1\n```"
 
     llm = _Stalling()
-    agent = RLMFlow(llm, runtime=LocalRuntime(), config=RLMConfig(max_iterations=1, max_depth=0))
+    agent = RecursiveFlow(
+        llm, runtime=LocalRuntime(), config=FlowConfig(max_iterations=1, max_depth=0)
+    )
     final = _run(agent, agent.start("answer"))
 
     assert final.result() == "final answer"
@@ -1438,10 +1576,10 @@ def test_max_iterations_forces_final_answer_turn():
 
 def test_default_iteration_config_is_unbounded_root_and_bounded_children(tmp_path):
     workspace = Workspace.create(tmp_path / "ws")
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _StaticLLM('```repl\ndone("ok")\n```'),
         workspace=workspace,
-        config=RLMConfig(max_depth=1),
+        config=FlowConfig(max_depth=1),
     )
     graph = agent.start("parent")
 
@@ -1462,10 +1600,10 @@ def test_default_iteration_config_is_unbounded_root_and_bounded_children(tmp_pat
 
 def test_child_iteration_config_is_global_engine_policy(tmp_path):
     workspace = Workspace.create(tmp_path / "ws")
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _StaticLLM('```repl\ndone("ok")\n```'),
         workspace=workspace,
-        config=RLMConfig(max_depth=1, child_max_iterations=7),
+        config=FlowConfig(max_depth=1, child_max_iterations=7),
     )
     graph = agent.start("parent")
 
@@ -1491,10 +1629,10 @@ def test_child_iteration_config_is_global_engine_policy(tmp_path):
 
 def test_child_iteration_config_can_be_unbounded_globally(tmp_path):
     workspace = Workspace.create(tmp_path / "ws")
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _StaticLLM('```repl\ndone("ok")\n```'),
         workspace=workspace,
-        config=RLMConfig(max_depth=1, child_max_iterations=None),
+        config=FlowConfig(max_depth=1, child_max_iterations=None),
     )
     graph = agent.start("parent")
 
@@ -1523,13 +1661,17 @@ def test_terminate_marks_every_running_agent():
                 return "```repl\ny = 2\n```"
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="child", query="child task", context="")\n'
-                "r = await rlm_wait(h)\n"
+                'h = flow_delegate(name="child", query="child task", context="")\n'
+                "r = await flow_wait(h)\n"
                 "done(r[0])\n"
                 "```"
             )
 
-    agent = RLMFlow(_DelegatingThenStalling(), runtime=LocalRuntime(), config=RLMConfig(max_depth=2, max_iterations=10))
+    agent = RecursiveFlow(
+        _DelegatingThenStalling(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=2, max_iterations=10),
+    )
     # Obs→obs split: LLM half, then exec half (which spawns the
     # child and yields, producing the SupervisingOutput).
     g = agent.start("kickoff")
@@ -1550,7 +1692,11 @@ def test_budget_exceeded_records_result_node():
         def chat(self, messages, *args, **kwargs):
             return "```repl\nx = 1\n```"
 
-    agent = RLMFlow(_BudgetBuster(), runtime=LocalRuntime(), config=RLMConfig(max_budget=1, max_depth=0))
+    agent = RecursiveFlow(
+        _BudgetBuster(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_budget=1, max_depth=0),
+    )
     g = _run(agent, agent.start("p"))
     assert "budget exceeded" in g.result()
 
@@ -1566,7 +1712,11 @@ def test_no_code_block_records_error_node():
                 return "I forgot the code block."
             return '```repl\ndone("ok")\n```'
 
-    agent = RLMFlow(_Mute(), runtime=LocalRuntime(), config=RLMConfig(max_iterations=5, max_depth=0))
+    agent = RecursiveFlow(
+        _Mute(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_iterations=5, max_depth=0),
+    )
     g = _run(agent, agent.start("p"))
     assert any(is_errored(s) and s.error == "no_code_block" for s in g.nodes)
 
@@ -1588,13 +1738,23 @@ def test_no_code_block_keeps_action_in_trajectory():
                 return "Sure! Here's how I'll start: ..."  # no code block
             return '```repl\ndone("ok")\n```'
 
-    agent = RLMFlow(_MuteThenFix(), runtime=LocalRuntime(), config=RLMConfig(max_iterations=5, max_depth=0))
+    agent = RecursiveFlow(
+        _MuteThenFix(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_iterations=5, max_depth=0),
+    )
     g = _run(agent, agent.start("p"))
 
     assert _types(g) == [
         "user_query",
-        "llm_action", "llm_output", "exec_action", "error_output",
-        "llm_action", "llm_output", "exec_action", "done_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "error_output",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "done_output",
     ]
     bad_output = g.nodes[2]
     assert bad_output.code == ""
@@ -1621,21 +1781,25 @@ def test_resume_node_does_not_inject_child_result_into_prompt():
             prompt = messages[-1]["content"].lower()
             if "child task" in prompt:
                 return f'```repl\ndone("{secret}")\n```'
-            prior = "\n".join(m["content"] for m in messages if m.get("role") == "assistant")
-            if "await rlm_wait" in prior:
+            prior = "\n".join(
+                m["content"] for m in messages if m.get("role") == "assistant"
+            )
+            if "await flow_wait" in prior:
                 self.resume_messages = messages
                 return '```repl\ndone("parent:" + results[0])\n```'
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="child", query="child task", context="")\n'
-                "results = await rlm_wait(h)\n"
+                'h = flow_delegate(name="child", query="child task", context="")\n'
+                "results = await flow_wait(h)\n"
                 'marker = "RESUME_" + "STDOUT_MARKER"\n'
                 "print(marker)\n"
                 "```"
             )
 
     llm = _Scripted()
-    agent = RLMFlow(llm, runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=5))
+    agent = RecursiveFlow(
+        llm, runtime=LocalRuntime(), config=FlowConfig(max_depth=1, max_iterations=5)
+    )
     g = _run(agent, agent.start("parent task"))
 
     assert g.result() == f"parent:{secret}"
@@ -1657,19 +1821,25 @@ def test_repl_state_persists_across_resume():
             prompt = messages[-1]["content"].lower()
             if "child task" in prompt:
                 return '```repl\ndone("c")\n```'
-            prior = "\n".join(m["content"] for m in messages if m.get("role") == "assistant")
-            if "await rlm_wait" in prior:
+            prior = "\n".join(
+                m["content"] for m in messages if m.get("role") == "assistant"
+            )
+            if "await flow_wait" in prior:
                 # Resume turn — ``stash`` should still be in scope from prior block.
                 return '```repl\ndone("p:" + stash)\n```'
             return (
                 "```repl\n"
                 'stash = "remembered"\n'
-                'h = rlm_delegate(name="c", query="child task", context="")\n'
-                "await rlm_wait(h)\n"
+                'h = flow_delegate(name="c", query="child task", context="")\n'
+                "await flow_wait(h)\n"
                 "```"
             )
 
-    agent = RLMFlow(_Stateful(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=5))
+    agent = RecursiveFlow(
+        _Stateful(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=5),
+    )
     g = _run(agent, agent.start("p"))
     assert g.result() == "p:remembered"
 
@@ -1687,13 +1857,17 @@ def test_each_child_gets_its_own_runtime_session():
                 return '```repl\nprint(AGENT_ID, DEPTH)\ndone("child")\n```'
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="child", query="child task", context="")\n'
-                "results = await rlm_wait(h)\n"
+                'h = flow_delegate(name="child", query="child task", context="")\n'
+                "results = await flow_wait(h)\n"
                 "done(results[0])\n"
                 "```"
             )
 
-    agent = RLMFlow(_Scripted(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=5))
+    agent = RecursiveFlow(
+        _Scripted(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=5),
+    )
     g = _run(agent, agent.start("parent"))
 
     child = g["root.child"]
@@ -1708,13 +1882,17 @@ def test_each_child_gets_its_own_runtime_session():
 
 
 def test_spawn_child_is_overridable():
-    """User-facing seam: subclass ``RLMFlow`` and override ``spawn_child``."""
+    """User-facing seam: subclass ``RecursiveFlow`` and override ``spawn_child``."""
     seen: list[tuple[str, str]] = []
 
-    class _CustomFlow(RLMFlow):
-        def spawn_child(self, parent_agent_id, parent_node_id, name, query, context, **opts):
+    class _CustomFlow(RecursiveFlow):
+        def spawn_child(
+            self, parent_agent_id, parent_node_id, name, query, context, **opts
+        ):
             seen.append((parent_agent_id, name))
-            return super().spawn_child(parent_agent_id, parent_node_id, name, query, context, **opts)
+            return super().spawn_child(
+                parent_agent_id, parent_node_id, name, query, context, **opts
+            )
 
     class _Scripted(LLMClient):
         def chat(self, messages, *args, **kwargs):
@@ -1723,13 +1901,17 @@ def test_spawn_child_is_overridable():
                 return '```repl\ndone("c")\n```'
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="c", query="child task", context="")\n'
-                "r = await rlm_wait(h)\n"
+                'h = flow_delegate(name="c", query="child task", context="")\n'
+                "r = await flow_wait(h)\n"
                 'done("p:" + r[0])\n'
                 "```"
             )
 
-    agent = _CustomFlow(_Scripted(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=5))
+    agent = _CustomFlow(
+        _Scripted(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=5),
+    )
     g = _run(agent, agent.start("parent"))
     assert g.result() == "p:c"
     assert seen == [("root", "c")]
@@ -1738,7 +1920,7 @@ def test_spawn_child_is_overridable():
 def test_spawn_child_can_refuse_via_returning_string():
     """Returning a string from ``spawn_child`` is the documented refusal protocol."""
 
-    class _RefusingFlow(RLMFlow):
+    class _RefusingFlow(RecursiveFlow):
         def spawn_child(self, *a, **k):
             return "[refused: testing]"
 
@@ -1749,12 +1931,16 @@ def test_spawn_child_can_refuse_via_returning_string():
                 return '```repl\ndone("ok")\n```'
             return (
                 "```repl\n"
-                'r = rlm_delegate(name="c", query="go", context="")\n'
+                'r = flow_delegate(name="c", query="go", context="")\n'
                 "done(r)\n"
                 "```"
             )
 
-    agent = _RefusingFlow(_OneTry(), runtime=LocalRuntime(), config=RLMConfig(max_depth=1, max_iterations=3))
+    agent = _RefusingFlow(
+        _OneTry(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_depth=1, max_iterations=3),
+    )
     g = _run(agent, agent.start("p"))
     assert g.result() == "[refused: testing]"
     assert not g.children
@@ -1765,19 +1951,25 @@ def test_delegate_passes_child_context_payload(tmp_path):
         def chat(self, messages, *args, **kwargs):
             prompt = messages[-1]["content"].lower()
             if "child task" in prompt:
-                return '```repl\ndone(CONTEXT.read())\n```'
+                return "```repl\ndone(CONTEXT.read())\n```"
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="child", query="child task", context="child payload")\n'
-                "r = await rlm_wait(h)\n"
+                'h = flow_delegate(name="child", query="child task", context="child payload")\n'
+                "r = await flow_wait(h)\n"
                 "done(r[0])\n"
                 "```"
             )
 
     workspace = Workspace.create(tmp_path / "ws")
-    agent = RLMFlow(_Scripted(), workspace=workspace, config=RLMConfig(max_depth=1, max_iterations=5))
+    agent = RecursiveFlow(
+        _Scripted(),
+        workspace=workspace,
+        config=FlowConfig(max_depth=1, max_iterations=5),
+    )
     g = _run(agent, agent.start("parent", context="root payload"))
     assert g.result() == "child payload"
+    assert g.context() == "root payload"
+    assert g["root.child"].context() == "child payload"
     assert workspace.context.read("context", agent_id="root.child") == "child payload"
 
 
@@ -1786,25 +1978,31 @@ def test_redelegating_finished_child_creates_new_attempt(tmp_path):
         def chat(self, messages, *args, **kwargs):
             prompt = messages[-1]["content"].lower()
             if "child task" in prompt:
-                return '```repl\ndone(CONTEXT.read())\n```'
+                return "```repl\ndone(CONTEXT.read())\n```"
             return (
                 "```repl\n"
-                'h1 = rlm_delegate(name="child", query="first child task", context="first")\n'
-                "r1 = await rlm_wait(h1)\n"
-                'h2 = rlm_delegate(name="child", query="second child task", context="second")\n'
-                "r2 = await rlm_wait(h2)\n"
+                'h1 = flow_delegate(name="child", query="first child task", context="first")\n'
+                "r1 = await flow_wait(h1)\n"
+                'h2 = flow_delegate(name="child", query="second child task", context="second")\n'
+                "r2 = await flow_wait(h2)\n"
                 'done(r1[0] + "|" + r2[0])\n'
                 "```"
             )
 
     workspace = Workspace.create(tmp_path / "ws")
-    agent = RLMFlow(_Scripted(), workspace=workspace, config=RLMConfig(max_depth=1, max_iterations=5))
+    agent = RecursiveFlow(
+        _Scripted(),
+        workspace=workspace,
+        config=FlowConfig(max_depth=1, max_iterations=5),
+    )
     g = _run(agent, agent.start("parent"))
 
     assert g.result() == "first|second"
     assert "root.child" in g.agents
     assert "root.child_1" in g.agents
     assert list(g.children) == ["root.child", "root.child_1"]
+    assert g["root.child"].context() == "first"
+    assert g["root.child_1"].context() == "second"
     assert workspace.context.read("context", agent_id="root.child") == "first"
     assert workspace.context.read("context", agent_id="root.child_1") == "second"
 
@@ -1817,17 +2015,17 @@ def test_model_routing_is_stored_on_child_agent_meta():
                 return '```repl\ndone("c")\n```'
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="c", query="child-task", context="", model="fast")\n'
-                "r = await rlm_wait(h)\n"
-                'done(r[0])\n'
+                'h = flow_delegate(name="c", query="child-task", context="", model="fast")\n'
+                "r = await flow_wait(h)\n"
+                "done(r[0])\n"
                 "```"
             )
 
     fast_llm = _Scripted()
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _Scripted(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=1, max_iterations=5),
+        config=FlowConfig(max_depth=1, max_iterations=5),
         llm_clients={"fast": {"model": fast_llm, "description": "fast model"}},
     )
     g = _run(agent, agent.start("p"))
@@ -1839,13 +2037,25 @@ def test_model_routing_is_stored_on_child_agent_meta():
 
 def test_workspace_round_trips_states_and_context(tmp_path):
     ws = Workspace.create(tmp_path / "ws")
-    agent = RLMFlow(_StaticLLM('```repl\ndone("ok")\n```'), workspace=ws, config=RLMConfig(max_iterations=2))
+    agent = RecursiveFlow(
+        _StaticLLM('```repl\ndone("ok")\n```'),
+        workspace=ws,
+        config=FlowConfig(max_iterations=2),
+    )
     g = _run(agent, agent.start("p", context="hello"))
 
     assert g.result() == "ok"
+    assert g.context() == "hello"
     assert ws.context.read("context") == "hello"
     reloaded = ws.session.load_graph()
-    assert _types(reloaded) == ["user_query", "llm_action", "llm_output", "exec_action", "done_output"]
+    assert reloaded.context() == "hello"
+    assert _types(reloaded) == [
+        "user_query",
+        "llm_action",
+        "llm_output",
+        "exec_action",
+        "done_output",
+    ]
     assert ws.load_graph().tree() == reloaded.tree()
 
 
@@ -1876,7 +2086,11 @@ def test_graph_node_filters_separate_errors_results_and_predicates():
                 return "no code block here"
             return '```repl\ndone("ok")\n```'
 
-    agent = RLMFlow(_Stumbling(), runtime=LocalRuntime(), config=RLMConfig(max_iterations=5, max_depth=0))
+    agent = RecursiveFlow(
+        _Stumbling(),
+        runtime=LocalRuntime(),
+        config=FlowConfig(max_iterations=5, max_depth=0),
+    )
     g = _run(agent, agent.start("p"))
 
     errors = g.all_nodes.errors()

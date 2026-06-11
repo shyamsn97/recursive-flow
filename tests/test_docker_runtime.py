@@ -2,19 +2,19 @@
 
 These run everywhere — they don't shell out to ``docker``. The
 end-to-end tests live in ``tests/integration/test_docker_runtime.py``
-and are gated on ``RLMKIT_DOCKER_TEST=1`` with a working daemon.
+and are gated on ``RECURSIVE_FLOW_DOCKER_TEST=1`` with a working daemon.
 """
 
 from __future__ import annotations
 
-from rlmflow.runtime.docker import DockerRuntime
-from rlmflow.workspace import Workspace
+from rflow.runtime.docker import DockerRuntime
+from rflow.workspace import Workspace
 
 
 def test_argv_defaults_to_python_repl_entrypoint():
     rt = DockerRuntime("python:3.12-slim")
     assert rt.argv[:4] == ["docker", "run", "-i", "--rm"]
-    assert rt.argv[-4:] == ["python:3.12-slim", "python", "-m", "rlmflow.runtime.repl"]
+    assert rt.argv[-4:] == ["python:3.12-slim", "python", "-m", "rflow.runtime.repl"]
 
 
 def test_argv_includes_mounts_env_network_limits(tmp_path):
@@ -47,10 +47,10 @@ def test_custom_docker_bin_and_entrypoint():
     rt = DockerRuntime(
         "myimage",
         docker_bin="podman",
-        entrypoint_argv=["/opt/venv/bin/python", "-m", "rlmflow.runtime.repl"],
+        entrypoint_argv=["/opt/venv/bin/python", "-m", "rflow.runtime.repl"],
     )
     assert rt.argv[0] == "podman"
-    assert rt.argv[-3:] == ["/opt/venv/bin/python", "-m", "rlmflow.runtime.repl"]
+    assert rt.argv[-3:] == ["/opt/venv/bin/python", "-m", "rflow.runtime.repl"]
 
 
 def test_extra_args_are_spliced_before_image():

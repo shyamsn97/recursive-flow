@@ -17,8 +17,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from rlmflow import OpenAIClient, RLMConfig, RLMFlow, Workspace
-from rlmflow.runtime.local import LocalRuntime
+import rflow
+from rflow.runtime.local import LocalRuntime
 
 
 class CityForecast(BaseModel):
@@ -73,13 +73,15 @@ def main() -> None:
         if args.workspace
         else examples_root / "_runs" / "example-workspaces" / "structured-output"
     )
-    workspace = Workspace.create(workspace_path)
+    workspace = rflow.Workspace.create(workspace_path)
 
-    agent = RLMFlow(
-        OpenAIClient(args.model),
+    agent = rflow.RecursiveFlow(
+        rflow.OpenAIClient(args.model),
         runtime=LocalRuntime(workspace=workspace),
         workspace=workspace,
-        config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
+        config=rflow.FlowConfig(
+            max_depth=args.max_depth, max_iterations=args.max_iterations
+        ),
     )
 
     query = """Build a packing plan for my upcoming trip. The important weather info is in CONTEXT. Make sure to delegate each city to child agents.
@@ -91,7 +93,7 @@ def main() -> None:
         output_schema=PackingPlan,
     )
 
-    from rlmflow.utils.viz import live_view
+    from rflow.utils.viz import live_view
 
     with live_view() as view:
         view(graph)

@@ -1,19 +1,19 @@
-"""rlmflow hero animation.
+"""recursive-flow hero animation.
 
 Graph-first README animation. This intentionally skips an intro to RLMs:
-the video should immediately show what rlmflow offers - a recursive agent
+the video should immediately show what recursive-flow offers - a recursive agent
 run as a clean, typed execution graph.
 
 Run from the repo root.
 
 Quick preview (480p, fast)::
 
-    manim -pql docs/rlm_animation.py RLMFlowHero
+    manim -pql docs/rlm_animation.py RecursiveFlowHero
 
 High quality MP4 (1080p, the canonical render)::
 
-    manim -qh docs/rlm_animation.py RLMFlowHero
-    cp media/videos/rlm_animation/1080p60/RLMFlowHero.mp4 docs/rlm_animation.mp4
+    manim -qh docs/rlm_animation.py RecursiveFlowHero
+    cp media/videos/rlm_animation/1080p60/RecursiveFlowHero.mp4 docs/rlm_animation.mp4
 
 GIF for README / PyPI previews::
 
@@ -130,7 +130,7 @@ def fade_clear(scene, *mobjs, run_time=0.55):
         scene.play(FadeOut(grp), run_time=run_time)
 
 
-class RLMFlowHero(Scene):
+class RecursiveFlowHero(Scene):
     """Immediate graph-first animation."""
 
     def construct(self):
@@ -139,7 +139,7 @@ class RLMFlowHero(Scene):
 
     def _graph_first_animation(self):
         brand = Text(
-            "rlmflow",
+            "recursive-flow",
             font=CODE_FONT,
             font_size=28,
             color=WHITE_C,

@@ -1,0 +1,98 @@
+"""RecursiveFlow's data model — one recursive class.
+
+* :class:`Graph` — one agent, mutable, with per-agent invariants as flat
+  fields, ``nodes`` as its trajectory, and ``children`` for sub-agents.
+  Recursion lives in ``children``; cross-agent navigation goes through
+  ``graph[other_aid]`` or ``graph.agents``.
+* :class:`AgentsView`, :class:`NodesView`, :class:`EdgesView` — flat
+  query / mutation views over the subtree (``graph.agents``,
+  ``graph.all_nodes``, ``graph.edges``).
+* :class:`Node` and its subclasses — one immutable per-state payload.
+  See :mod:`rflow.graph.node` and ``docs/node_model.md``.
+* :class:`RuntimeRef` — serializable handle to a durable REPL session.
+* :class:`ChildHandle`, :class:`WaitRequest` — REPL protocol handles
+  the engine inspects for delegation / suspension.
+"""
+
+from rflow.graph.graph import (
+    AgentsView,
+    ContextPayload,
+    Edge,
+    EdgesView,
+    Graph,
+    NodesView,
+    RuntimeRef,
+)
+from rflow.graph.handles import ChildHandle, WaitRequest
+from rflow.graph.node import (
+    ActionNode,
+    CodeObservation,
+    DoneOutput,
+    ErrorOutput,
+    ExecAction,
+    ExecOutput,
+    LLMAction,
+    LLMOutput,
+    Node,
+    ObservationNode,
+    ResumeAction,
+    SupervisingOutput,
+    UserQuery,
+    is_action,
+    is_code_observation,
+    is_done,
+    is_errored,
+    is_exec_action,
+    is_exec_output,
+    is_llm_action,
+    is_llm_output,
+    is_observation,
+    is_resume_action,
+    is_resumed,
+    is_supervising,
+    is_user_query,
+    new_id,
+    parse_node_obj,
+)
+from rflow.graph.timeline import retrace_steps
+
+__all__ = [
+    "ActionNode",
+    "AgentsView",
+    "ChildHandle",
+    "CodeObservation",
+    "ContextPayload",
+    "DoneOutput",
+    "Edge",
+    "EdgesView",
+    "ErrorOutput",
+    "ExecAction",
+    "ExecOutput",
+    "Graph",
+    "LLMAction",
+    "LLMOutput",
+    "Node",
+    "NodesView",
+    "ObservationNode",
+    "ResumeAction",
+    "RuntimeRef",
+    "SupervisingOutput",
+    "UserQuery",
+    "WaitRequest",
+    "is_action",
+    "is_code_observation",
+    "is_done",
+    "is_errored",
+    "is_exec_action",
+    "is_exec_output",
+    "is_llm_action",
+    "is_llm_output",
+    "is_observation",
+    "is_resume_action",
+    "is_resumed",
+    "is_supervising",
+    "is_user_query",
+    "new_id",
+    "parse_node_obj",
+    "retrace_steps",
+]

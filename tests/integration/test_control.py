@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from rlmflow import (
+from rflow import (
     Graph,
     LLMClient,
     LLMUsage,
-    RLMConfig,
-    RLMFlow,
+    FlowConfig,
+    RecursiveFlow,
     is_done,
     is_user_query,
     is_supervising,
 )
-from rlmflow.runtime.local import LocalRuntime
+from rflow.runtime.local import LocalRuntime
 
 
 class ScriptedByQueryLLM(LLMClient):
@@ -45,21 +45,21 @@ def _done(text: str) -> str:
 def _delegate_one(child_name: str, query: str) -> str:
     return (
         "```repl\n"
-        f"h = rlm_delegate(name={child_name!r}, query={query!r}, context='')\n"
-        "results = await rlm_wait(h)\n"
+        f"h = flow_delegate(name={child_name!r}, query={query!r}, context='')\n"
+        "results = await flow_wait(h)\n"
         "done(results[0])\n"
         "```"
     )
 
 
-def _run(agent: RLMFlow, graph: Graph) -> Graph:
+def _run(agent: RecursiveFlow, graph: Graph) -> Graph:
     while not graph.finished:
         graph = agent.step(graph)
     return graph
 
 
 def test_step_loop_reaches_result_node():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=ScriptedByQueryLLM({"control-step": _done("direct-answer")}),
         runtime=LocalRuntime(),
     )
@@ -71,7 +71,7 @@ def test_step_loop_reaches_result_node():
 
 
 def test_graph_save_load_resumes_cleanly(tmp_path):
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=ScriptedByQueryLLM({"control-ckpt": _done("checkpoint-me")}),
         runtime=LocalRuntime(),
     )
@@ -87,7 +87,7 @@ def test_graph_save_load_resumes_cleanly(tmp_path):
 
 def test_run_history_is_just_a_list_of_graphs():
     """Each ``step()`` returns a new immutable Graph — history is just a list."""
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=ScriptedByQueryLLM({"control-rewind": _done("rewind-me")}),
         runtime=LocalRuntime(),
     )
@@ -104,7 +104,7 @@ def test_run_history_is_just_a_list_of_graphs():
 
 
 def test_supervising_state_lists_waiting_children():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=ScriptedByQueryLLM(
             {
                 "control-supervise": _delegate_one("child", "delegate-done"),
@@ -112,7 +112,7 @@ def test_supervising_state_lists_waiting_children():
             }
         ),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=2),
+        config=FlowConfig(max_depth=2),
     )
 
     # Two ``step``s: the LLM half then the exec half (which yields,

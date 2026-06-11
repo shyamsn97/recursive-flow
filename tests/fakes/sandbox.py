@@ -12,12 +12,12 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from rlmflow.llm import LLMClient
-from rlmflow.runtime.sandbox.remote import RemoteFileRuntime
+from rflow.llm import LLMClient
+from rflow.runtime.sandbox.remote import RemoteFileRuntime
 
 
-_REPL_DETECT = "from rlmflow.runtime.repl import main"
-_REMOTE_DIR_RE = re.compile(r"mkdir -p (/[^\s]*rlmflow-[a-f0-9]+)\s+(\S+)")
+_REPL_DETECT = "from rflow.runtime.repl import main"
+_REMOTE_DIR_RE = re.compile(r"mkdir -p (/[^\s]*recursive-flow-[a-f0-9]+)\s+(\S+)")
 _KILL_PID_RE = re.compile(r"kill \$\(cat ([^)]+)/pid\)")
 
 _inproc_sessions: dict[str, "_InProcessReplSession"] = {}
@@ -27,7 +27,7 @@ class _InProcessReplSession:
     """Hold a REPL instance and process queued input synchronously."""
 
     def __init__(self, remote_dir: str, workdir: str | None = None) -> None:
-        from rlmflow.runtime.repl import REPL
+        from rflow.runtime.repl import REPL
 
         self.remote_dir = Path(remote_dir)
         self.workdir = Path(workdir) if workdir else None

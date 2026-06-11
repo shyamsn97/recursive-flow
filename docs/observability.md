@@ -140,7 +140,7 @@ workspace.artifacts.list("skills")
 ## Live terminal
 
 ```python
-from rlmflow.utils.viz import live
+from rflow.utils.viz import live
 
 for graph in live(agent, agent.start(query)):
     pass
@@ -154,7 +154,7 @@ One row per agent, one column per step, colored by node type. Makes
 parallelism and the critical path obvious at a glance.
 
 ```python
-from rlmflow.utils.viz import gantt, gantt_html
+from rflow.utils.viz import gantt, gantt_html
 
 gantt(graphs)                                  # print to terminal (Rich)
 Path("run.html").write_text(gantt_html(graphs, title="run 1"))
@@ -165,7 +165,7 @@ Path("run.html").write_text(gantt_html(graphs, title="run 1"))
 Static renders of the graph for READMEs, issues, and post-mortems.
 
 ```python
-from rlmflow.utils.export import to_mermaid, to_dot, to_d2
+from rflow.utils.export import to_mermaid, to_dot, to_d2
 
 print(to_mermaid(graphs[-1]))                  # stateDiagram-v2 — paste into GitHub
 Path("run.dot").write_text(to_dot(graphs[-1]))
@@ -177,7 +177,7 @@ Path("run.d2").write_text(to_d2(graphs[-1]))
 Per-agent transcripts and ASCII tree boxes are one call:
 
 ```python
-from rlmflow.utils.viz import ascii_boxes, message_stream
+from rflow.utils.viz import ascii_boxes, message_stream
 
 print(message_stream("root.boid_js", graphs[-1]))
 print(ascii_boxes(graphs[-1]))
@@ -190,7 +190,7 @@ graph to a PNG (or SVG/PDF), or to a single self-contained HTML
 stepper.
 
 ```python
-from rlmflow.utils import save_image, save_steps, save_html
+from rflow.utils import save_image, save_steps, save_html
 
 save_image("runs/deep_research", "final.png")       # latest workspace snapshot
 save_html("runs/deep_research", "viewer.html")      # standalone viewer
@@ -223,19 +223,19 @@ save_steps(
 Image export needs `kaleido`:
 
 ```
-pip install rlmflow[image]
+pip install recursive-flow[image]
 ```
 
 For an animated GIF instead of separate frames, add Pillow:
 
 ```python
-from rlmflow.utils import save_gif
+from rflow.utils import save_gif
 
 save_gif(graphs, "trace.gif", duration=400)    # ~2.5 fps
 ```
 
 ```
-pip install rlmflow[image] pillow
+pip install recursive-flow[image] pillow
 ```
 
 The HTML stepper has no static-image dependency — it embeds Plotly
@@ -244,14 +244,14 @@ from CDN and runs in any browser.
 ## Viewer
 
 ```python
-from rlmflow.utils.viewer import open_viewer
+from rflow.utils.viewer import open_viewer
 
 open_viewer("runs/deep_research")              # workspace path
 open_viewer(graph)                             # single snapshot
 open_viewer(graphs)                            # explicit in-memory history
 ```
 
-Requires `rlmflow[viewer]`.
+Requires `recursive-flow[viewer]`.
 
 ## CLI
 
@@ -259,11 +259,11 @@ The same helpers are reachable from a shell. `view` and `render` take workspace
 directories.
 
 ```
-rlmflow view   runs/deep_research/
-rlmflow view   runs/deep_research/ --port 7861
-rlmflow render runs/deep_research/ -f gantt-html -o run1.html
-rlmflow render runs/deep_research/ -f mermaid          # stdout
-rlmflow render runs/deep_research/ -f dot -o graph.dot
-rlmflow render runs/deep_research/ -f tree
-rlmflow version
+recursive-flow view   runs/deep_research/
+recursive-flow view   runs/deep_research/ --port 7861
+recursive-flow render runs/deep_research/ -f gantt-html -o run1.html
+recursive-flow render runs/deep_research/ -f mermaid          # stdout
+recursive-flow render runs/deep_research/ -f dot -o graph.dot
+recursive-flow render runs/deep_research/ -f tree
+recursive-flow version
 ```

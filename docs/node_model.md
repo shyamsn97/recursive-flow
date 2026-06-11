@@ -1,6 +1,6 @@
 # Node Model
 
-`rlmflow` records every agent run as a typed trajectory. The trajectory is a
+`recursive-flow` records every agent run as a typed trajectory. The trajectory is a
 strict alternation of **observations** and **actions**:
 
 - **Observations** are inputs the system received or observed: a user query, an
@@ -165,16 +165,16 @@ recursive graph manifest links agents through `Graph.children`. Cross-agent
 edges are derived from the recursive graph structure and `SupervisingOutput`
 wait sets; there is no separate edge object to maintain by hand.
 
-Use the predicate helpers from `rlmflow.graph` when inspecting traces:
+Use the predicate helpers from `rflow.graph` when inspecting traces:
 
 ```python
-from rlmflow.graph import is_code_observation, is_done, is_supervising
+import rflow
 
 for node in graph.all_nodes:
-    if is_supervising(node):
+    if rflow.is_supervising(node):
         print(node.agent_id, "waiting on", node.waiting_on)
-    elif is_code_observation(node):
+    elif rflow.is_code_observation(node):
         print(node.agent_id, node.type)
-    elif is_done(node):
+    elif rflow.is_done(node):
         print("result:", node.result)
 ```

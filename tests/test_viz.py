@@ -1,7 +1,7 @@
 """Visualization & export tests: ``Graph.plot``, ``render_html``, ``save_*``.
 
 Replaces ``test_save_api.py`` and the viz/transcript tests that used to live
-in ``test_rlmflow_core.py``.
+in ``test_recursive_flow_core.py``.
 """
 
 from __future__ import annotations
@@ -10,10 +10,10 @@ import importlib.util
 
 import pytest
 
-from rlmflow import Graph, LLMClient, LLMUsage, RLMConfig, RLMFlow, Workspace
-from rlmflow.graph import DoneOutput, LLMOutput, SupervisingOutput, UserQuery
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.utils import (
+from rflow import Graph, LLMClient, LLMUsage, FlowConfig, RecursiveFlow, Workspace
+from rflow.graph import DoneOutput, LLMOutput, SupervisingOutput, UserQuery
+from rflow.runtime.local import LocalRuntime
+from rflow.utils import (
     render_html,
     resolve_graphs,
     save_gif,
@@ -21,9 +21,9 @@ from rlmflow.utils import (
     save_image,
     save_steps,
 )
-from rlmflow.utils.viz import LiveView, code_log, report_md, token_sparkline
-from rlmflow.utils.viz import _render_rich_tree
-from rlmflow.utils.viewer import _build_graph_figure, _scale_figure_elements
+from rflow.utils.viz import LiveView, code_log, report_md, token_sparkline
+from rflow.utils.viz import _render_rich_tree
+from rflow.utils.viewer import _build_graph_figure, _scale_figure_elements
 
 KALEIDO_INSTALLED = importlib.util.find_spec("kaleido") is not None
 PIL_INSTALLED = importlib.util.find_spec("PIL") is not None
@@ -39,8 +39,8 @@ class _DelegatingLLM(LLMClient):
 
     ROOT = (
         "```repl\n"
-        "h = rlm_delegate(name='child', query='do the thing', context='')\n"
-        "results = await rlm_wait(h)\n"
+        "h = flow_delegate(name='child', query='do the thing', context='')\n"
+        "results = await flow_wait(h)\n"
         "done('root:' + results[0])\n"
         "```"
     )
@@ -55,10 +55,10 @@ class _DelegatingLLM(LLMClient):
 
 
 def _run_steps() -> list[Graph]:
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=_DelegatingLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=2),
+        config=FlowConfig(max_depth=2),
     )
     graph = agent.start("kick off")
     graphs = [graph]
@@ -71,10 +71,10 @@ def _run_steps() -> list[Graph]:
 
 def _run_workspace(tmp_path) -> Workspace:
     workspace = Workspace.create(tmp_path / "workspace")
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=_DelegatingLLM(),
         workspace=workspace,
-        config=RLMConfig(max_depth=2),
+        config=FlowConfig(max_depth=2),
     )
     graph = agent.start("kick off")
     while not graph.finished:
@@ -147,7 +147,7 @@ def test_plot_static_formats_render_each_kind():
     assert g.plot("tree").startswith("● root")
     assert g.plot("mermaid").startswith("stateDiagram-v2")
     assert g.plot("flowchart").startswith("flowchart TD")
-    assert g.plot("dot").startswith("digraph rlmflow")
+    assert g.plot("dot").startswith('digraph "recursive-flow"')
     assert "root" in g.plot("d2")
 
 
@@ -332,7 +332,7 @@ def test_transcript_renders_query_action_result_chain():
         def chat(self, *a, **kw):
             return '```repl\ndone("ok")\n```'
 
-    agent = RLMFlow(_OneShot(), runtime=LocalRuntime(), config=RLMConfig(max_iterations=2))
+    agent = RecursiveFlow(_OneShot(), runtime=LocalRuntime(), config=FlowConfig(max_iterations=2))
     graph = agent.start("say ok")
     while not graph.finished:
         graph = agent.step(graph)
@@ -435,7 +435,7 @@ def test_viz_helpers_accept_workspace_and_path(tmp_path):
 
     assert "tok over" in token_sparkline(workspace)
     assert "## Result" in report_md(workspace.root)
-    assert "rlm_delegate(name='child', query='do the thing', context='')" in code_log(workspace.root)
+    assert "flow_delegate(name='child', query='do the thing', context='')" in code_log(workspace.root)
 
 
 @pytest.mark.skipif(not PLOTLY_INSTALLED, reason="plotly not installed")

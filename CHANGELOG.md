@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **rlmflow** are recorded here. The format follows
+All notable changes to **recursive-flow** are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is on `0.x`, breaking changes can land on minor bumps —
@@ -17,11 +17,11 @@ each one is called out under **Breaking** below.
   `list[str]` in spec order, even for a one-item list. Sequential pipelines use
   one-item calls and thread each result into the next spec's `context`;
   parallel fanout uses a multi-item list. The launcher is registered as a real
-  core tool and composes over `rlm_delegate` / `rlm_wait`, so it behaves
+  core tool and composes over `flow_delegate` / `flow_wait`, so it behaves
   identically on local and remote runtimes.
 - **Shared LLM scheduler channel.** All agent LLM turns and
   `llm_query_batched(...)` calls now route through one per-run `LLMChannel`,
-  keyed by model/client. `RLMConfig.llm_max_concurrency` controls the global
+  keyed by model/client. `FlowConfig.llm_max_concurrency` controls the global
   LLM request cap; unsafe clients are serialized behind a per-client lock, and
   safe clients can run concurrently within the channel limit. Batched one-shot
   calls now also accept common sampling kwargs: `temperature`, `top_p`,
@@ -37,13 +37,13 @@ each one is called out under **Breaking** below.
   manual viewer/interactive checks.
 - **Tinker inference client.** `TinkerClient` adapts the Tinker SDK and
   `tinker-cookbook` renderers to the `LLMClient` interface, with an optional
-  `rlmflow[tinker]` extra and a live-view example in `examples/providers/tinker_agent.py`.
+  `recursive-flow[tinker]` extra and a live-view example in `examples/providers/tinker_agent.py`.
 - **Stricter local install checks.** `make install` now runs `ruff check .`
   through the existing lint target before installing the package.
 - **Supervisor injection example.** `examples/control/injection/` generates a
   real word-search run, forks it, replaces supervising nodes with prompt-based
   graph edits, validates structured results, and continues with a live LLM.
-- **Simpler iteration defaults.** `RLMConfig.max_iterations` is unbounded by
+- **Simpler iteration defaults.** `FlowConfig.max_iterations` is unbounded by
   default (`None`), while delegated children use the global
   `child_max_iterations=20` engine policy by default.
 - **Direct child-writes-file prompt pattern.** The default prompt's multi-file
@@ -54,7 +54,7 @@ each one is called out under **Breaking** below.
 
 ### Breaking
 
-- **`rlm_delegate` / `rlm_wait` are now internal primitives, and
+- **`flow_delegate` / `flow_wait` are now internal primitives, and
   `launch_subagent` has been removed.** Agent code, the default prompt,
   examples, and docs all use `launch_subagents([...])` instead. The AST check
   (`check_wait_syntax`) now permits `await launch_subagents(...)` at
@@ -64,7 +64,7 @@ each one is called out under **Breaking** below.
   the launchers, an un-awaited delegate is no longer expressible, so the
   orphaned-delegate detection, its `ErrorOutput(error="orphaned_delegates")`
   node, and the remote exception-injection path are gone.
-- **`RLMConfig.async_children` renamed to `eager_children`.** Same semantics
+- **`FlowConfig.async_children` renamed to `eager_children`.** Same semantics
   (work-conserving child drain once a parent is supervising); update config
   literals and any persisted `agent.json` fixtures.
 - **`Node.injected` and `Node.injected_reason` removed.** Injected controller
@@ -97,11 +97,11 @@ each one is called out under **Breaking** below.
 
 ### Breaking
 
-- **`delegate` / `wait` renamed to `rlm_delegate` / `rlm_wait`.** The
+- **`delegate` / `wait` renamed to `flow_delegate` / `flow_wait`.** The
   two engine-bound REPL tools used names that were too generic and
   shadowed common identifiers in agent code. They are now namespaced as
-  `rlm_delegate(*, name, query, context, max_iterations=None,
-  model="default")` and `rlm_wait(*handles)`. The default system prompt,
+  `flow_delegate(*, name, query, context, max_iterations=None,
+  model="default")` and `flow_wait(*handles)`. The default system prompt,
   built-in examples, error messages (`OrphanedDelegatesError`,
   refusal strings), and the AST check that enforces `yield` before
   `wait` all use the new names. Update agent prompts, custom prompt
@@ -133,7 +133,7 @@ each one is called out under **Breaking** below.
 - **LLM clients retry transient failures via `tenacity`.** The
   `chat` and `stream` methods on `OpenAIClient` and
   `AnthropicClient` retry on transient HTTP / protocol errors. The
-  module-level `_`-prefixed helpers and constants in `rlmflow/llm.py`
+  module-level `_`-prefixed helpers and constants in `recursive-flow/llm.py`
   are now public.
 - **Workspace step retracing.** `Workspace.load_steps()` returns the
   full history as a list of progressive `Graph` snapshots. The
@@ -189,7 +189,7 @@ each one is called out under **Breaking** below.
 - Removed the redundant `CONTEXT.fork()` REPL helper; pass `CONTEXT.read()` or
   a slice explicitly to `delegate(...)`.
 - Added public prompt customization docs covering `PromptBuilder`,
-  `RLMConfig.system_prompt`, and dynamic prompt overrides.
+  `FlowConfig.system_prompt`, and dynamic prompt overrides.
 
 ## [0.2.0] — 2026-05-08
 
@@ -201,7 +201,7 @@ each one is called out under **Breaking** below.
   silent footgun where children inherited the parent's payload by
   accident; every delegation now declares its child's input explicitly.
   Migration: `delegate("name", "query")` → `delegate("name", "query", "")`.
-- `RLMFlow.start(query, *, context=None)` — `context` is keyword-only
+- `RecursiveFlow.start(query, *, context=None)` — `context` is keyword-only
   and optional (root agent gets `""` if omitted). No call-site changes
   needed for callers passing only a query.
 
@@ -226,26 +226,26 @@ each one is called out under **Breaking** below.
 - CI workflow (`.github/workflows/ci.yml`): ruff + pytest matrix on
   3.11 / 3.12 / 3.13, runs on every PR and `push: main`. Tag-driven
   publishing remains in `release.yml`.
-- Coverage instrumentation: `pytest-cov` in `[dev]`, `--cov=rlmflow` in
+- Coverage instrumentation: `pytest-cov` in `[dev]`, `--cov=recursive-flow` in
   CI, `[tool.coverage.*]` config in `pyproject.toml`.
 - OOLONG benchmark harness under `benchmarks/oolong/` — runnable
   flat-vs-RLM comparison adapted from Prime Intellect's reference
   environment.
-- `rlmflow.utils.save_image(node, path, ...)` — render a node's
+- `rflow.utils.save_image(node, path, ...)` — render a node's
   graph to PNG/SVG/PDF. Markers, edges, and fonts auto-scale via
   `element_mult` so the tree stays visually balanced on the larger
   export canvas. Promoted from a one-off notebook helper.
-- `rlmflow.utils.save_steps(states, dir, ...)` — multi-snapshot
+- `rflow.utils.save_steps(states, dir, ...)` — multi-snapshot
   variant: writes one image per state under `dir`.
-- `rlmflow.utils.render_html(states, ...)` /
-  `rlmflow.utils.save_html(states, path, ...)` — single-file
+- `rflow.utils.render_html(states, ...)` /
+  `rflow.utils.save_html(states, path, ...)` — single-file
   standalone stepper. Each slide pairs the Plotly graph for one
   snapshot with that snapshot's transcript and a node table; bottom
   nav has arrows + dots, plus keyboard left/right. Drop the file in
   a PR comment, attach to a CI artifact, or commit it next to the
   trace it came from. Promoted from
   `examples/blog_needle_graph.py:render_html_viewer`.
-- `rlmflow.utils.save_gif(states, path, ...)` — animate a trace as
+- `rflow.utils.save_gif(states, path, ...)` — animate a trace as
   an autoplay GIF. Renders each state to PNG with kaleido, then
   stitches frames with Pillow. Lazy-imports Pillow (raises a clear
   ImportError otherwise) so `[image]` stays focused on still
@@ -266,11 +266,11 @@ each one is called out under **Breaking** below.
   can't share the same vertical band. Default off for `node.plot`
   (on-screen alternation still looks fine), default on for
   `save_image` / `save_steps` / `save_gif` / `Node.save_image`.
-- CLI: `rlmflow render <trace> -f steps -o frames/` gains
+- CLI: `recursive-flow render <trace> -f steps -o frames/` gains
   `--marker-mult`, `--text-mult`, `--normalize-labels` /
   `--no-normalize-labels` flags (also work with `-f image`). One
   invocation now replaces the per-blog one-off scripts.
-- `[image]` optional extra (`pip install rlmflow[image]`) — pulls
+- `[image]` optional extra (`pip install recursive-flow[image]`) — pulls
   `plotly` and `kaleido` for static image export.
 
 ### Changed
@@ -310,13 +310,13 @@ each one is called out under **Breaking** below.
 
 ## [0.1.2] — 2026-04-29
 
-- Renamed package to `rlmflow`. Session and context layout consolidated
+- Renamed package to `recursive-flow`. Session and context layout consolidated
   under `Workspace` with explicit `fork()`. Major engine refactor toward
   the typed-node graph model.
 
 ## [0.1.1] — 2026-04-23
 
-- `rlmflow` CLI shipped: `view`, `render`, `version` subcommands;
+- `recursive-flow` CLI shipped: `view`, `render`, `version` subcommands;
   `render -f` accepts mermaid / mermaid-flowchart / mermaid-sequence /
   dot / d2 / tree / ascii-boxes / gantt-html / report-md / code-log /
   error-summary / tokens.
@@ -325,7 +325,7 @@ each one is called out under **Breaking** below.
 
 Initial release.
 
-- Recursive `RLMFlow` engine with typed nodes (`QueryNode`,
+- Recursive `RecursiveFlow` engine with typed nodes (`QueryNode`,
   `ActionNode`, `ObservationNode`, `SupervisingNode`, `ResumeNode`,
   `ResultNode`, `ErrorNode`).
 - Runtimes: `LocalRuntime`, `SubprocessRuntime`, `DockerRuntime`,
@@ -339,11 +339,11 @@ Initial release.
 - Optional extras: `[openai]`, `[anthropic]`, `[viewer]`, `[all]`,
   `[dev]`.
 
-[Unreleased]: https://github.com/shyamsn97/rlmflow/compare/v0.3.2...HEAD
-[0.3.2]: https://github.com/shyamsn97/rlmflow/compare/v0.2.1...v0.3.2
-[0.2.1]: https://github.com/shyamsn97/rlmflow/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/shyamsn97/rlmflow/compare/v0.1.3...v0.2.0
-[0.1.3]: https://github.com/shyamsn97/rlmflow/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/shyamsn97/rlmflow/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/shyamsn97/rlmflow/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/shyamsn97/rlmflow/releases/tag/v0.1.0
+[Unreleased]: https://github.com/shyamsn97/recursive-flow/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/shyamsn97/recursive-flow/compare/v0.2.1...v0.3.2
+[0.2.1]: https://github.com/shyamsn97/recursive-flow/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/shyamsn97/recursive-flow/compare/v0.1.3...v0.2.0
+[0.1.3]: https://github.com/shyamsn97/recursive-flow/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/shyamsn97/recursive-flow/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/shyamsn97/recursive-flow/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/shyamsn97/recursive-flow/releases/tag/v0.1.0

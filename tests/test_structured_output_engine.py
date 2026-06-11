@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from rlmflow import Graph, LLMClient, RLMConfig, RLMFlow, is_done, is_errored
-from rlmflow.runtime.local import LocalRuntime
+from rflow import Graph, LLMClient, FlowConfig, RecursiveFlow, is_done, is_errored
+from rflow.runtime.local import LocalRuntime
 from tests.helpers import StaticLLM
 
 
@@ -23,17 +23,17 @@ class ScriptedLLM(LLMClient):
         return self.replies.pop(0)
 
 
-def _run_to_completion(agent: RLMFlow, graph: Graph) -> Graph:
+def _run_to_completion(agent: RecursiveFlow, graph: Graph) -> Graph:
     while not graph.finished:
         graph = agent.step(graph)
     return graph
 
 
 def test_run_with_pydantic_output_schema_returns_model_and_persists_json_result():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone({"city": "Austin", "temp_f": 95.5})\n```'),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
 
     result = agent.run("give weather advice", output_schema=WeatherAdvice)
@@ -53,7 +53,7 @@ def test_run_with_pydantic_output_schema_returns_model_and_persists_json_result(
 
 
 def test_reusing_flow_for_plain_run_clears_root_output_schema():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         ScriptedLLM(
             [
                 '```repl\ndone({"city": "Austin", "temp_f": 95.5})\n```',
@@ -61,7 +61,7 @@ def test_reusing_flow_for_plain_run_clears_root_output_schema():
             ]
         ),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
 
     assert isinstance(agent.run("structured", output_schema=WeatherAdvice), WeatherAdvice)
@@ -76,7 +76,7 @@ def test_reusing_flow_for_plain_run_clears_root_output_schema():
 
 
 def test_run_can_continue_finished_graph_with_plain_phase():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         ScriptedLLM(
             [
                 '```repl\ndone({"city": "Austin", "temp_f": 95.5})\n```',
@@ -84,7 +84,7 @@ def test_run_can_continue_finished_graph_with_plain_phase():
             ]
         ),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
 
     assert isinstance(agent.run("structured", output_schema=WeatherAdvice), WeatherAdvice)
@@ -101,7 +101,7 @@ def test_run_can_continue_finished_graph_with_plain_phase():
 
 
 def test_run_can_continue_finished_graph_with_new_structured_phase():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         ScriptedLLM(
             [
                 '```repl\ndone("plain first")\n```',
@@ -109,7 +109,7 @@ def test_run_can_continue_finished_graph_with_new_structured_phase():
             ]
         ),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
 
     assert agent.run("plain") == "plain first"
@@ -125,10 +125,10 @@ def test_run_can_continue_finished_graph_with_new_structured_phase():
 
 
 def test_start_from_graph_rejects_unfinished_graph():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone("ok")\n```'),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     graph = agent.start("unfinished")
 
@@ -143,7 +143,7 @@ def test_invalid_structured_done_records_error_then_repairs():
         "required": ["score"],
         "additionalProperties": False,
     }
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         ScriptedLLM(
             [
                 '```repl\ndone({"score": "bad"})\n```',
@@ -151,7 +151,7 @@ def test_invalid_structured_done_records_error_then_repairs():
             ]
         ),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=5),
+        config=FlowConfig(max_iterations=5),
     )
     graph = agent.start("return a score", output_schema=schema)
 
@@ -167,10 +167,10 @@ def test_invalid_structured_done_records_error_then_repairs():
 
 
 def test_plain_child_under_structured_parent_does_not_inherit_parent_schema():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone({"city": "Austin", "temp_f": 95.5})\n```'),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     graph = agent.start("parent wants weather advice", output_schema=WeatherAdvice)
     parent_node_id = graph.current().id
@@ -197,10 +197,10 @@ def test_structured_child_gets_its_own_schema():
         "properties": {"score": {"type": "integer"}},
         "required": ["score"],
     }
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone({"city": "Austin", "temp_f": 95.5})\n```'),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     graph = agent.start("parent wants weather advice", output_schema=WeatherAdvice)
     parent_node_id = graph.current().id

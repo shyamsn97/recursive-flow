@@ -27,13 +27,13 @@ Inject an `ExecOutput` when you want the next LLM turn to see controller-authore
 feedback without pretending the model wrote a REPL block.
 
 ```python
-from rlmflow import ExecOutput
+import rflow
 
 graph = agent.start("Wait for a controller note, then finish.")
 
 graph = graph.inject(
     target="root",
-    node=ExecOutput(
+    node=rflow.ExecOutput(
         output="Injected controller observation: submit your final answer now.",
         content="Injected controller observation: submit your final answer now.",
     ),
@@ -52,11 +52,11 @@ Inject an `ExecAction` when the controller wants to run a specific REPL action
 through the normal runtime path. The common case is immediate finalization:
 
 ```python
-from rlmflow import ExecAction
+import rflow
 
 graph = graph.inject(
     target="root.worker",
-    node=ExecAction(code='done("message budget exhausted; best available answer")'),
+    node=rflow.ExecAction(code='done("message budget exhausted; best available answer")'),
 )
 
 graph = agent.step(graph)  # executes the injected action and writes DoneOutput

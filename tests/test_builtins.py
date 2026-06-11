@@ -6,14 +6,14 @@ from inspect import Parameter, signature
 
 import pytest
 
-from rlmflow import LLMClient, RLMConfig, RLMFlow
-from rlmflow.graph.handles import ChildHandle
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.tools import get_repl_tools, tool
-from rlmflow.tools.builtins import make_delegate
+from rflow import LLMClient, FlowConfig, RecursiveFlow
+from rflow.graph.handles import ChildHandle
+from rflow.runtime.local import LocalRuntime
+from rflow.tools import get_repl_tools, tool
+from rflow.tools.builtins import make_delegate
 
 
-def test_rlm_delegate_is_keyword_only():
+def test_flow_delegate_is_keyword_only():
     spawned: list[tuple[str, str, str]] = []
 
     def spawn_child(parent_agent_id, parent_node_id, name, query, context, **kwargs):
@@ -47,10 +47,10 @@ class _EchoLLM(LLMClient):
 
 
 def test_llm_query_batched_validates_list_shape(tmp_path):
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         _EchoLLM(),
         runtime=LocalRuntime(workspace=tmp_path / "workspace"),
-        config=RLMConfig(max_concurrency=1),
+        config=FlowConfig(max_concurrency=1),
     )
 
     params = signature(agent.llm_query_batched).parameters
@@ -88,10 +88,10 @@ def test_llm_query_batched_validates_structured_outputs(tmp_path):
         "additionalProperties": False,
     }
     llm = _InventoryLLM()
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm,
         runtime=LocalRuntime(workspace=tmp_path / "workspace"),
-        config=RLMConfig(max_concurrency=2),
+        config=FlowConfig(max_concurrency=2),
     )
 
     results = agent.llm_query_batched(
@@ -124,23 +124,23 @@ def test_get_repl_tools_lets_local_tool_call_visible_tool(tmp_path):
 
 def test_get_repl_tools_hides_internal_primitives_by_default(tmp_path):
     runtime = LocalRuntime(workspace=tmp_path / "workspace")
-    RLMFlow(_EchoLLM(), runtime=runtime, config=RLMConfig(max_depth=1))
+    RecursiveFlow(_EchoLLM(), runtime=runtime, config=FlowConfig(max_depth=1))
 
     visible = runtime.execute(
-        "from rlmflow.tools import get_repl_tools\n"
+        "from rflow.tools import get_repl_tools\n"
         "tools = get_repl_tools()\n"
-        "print('rlm_delegate' in tools, 'rlm_wait' in tools, 'done' in tools)"
+        "print('flow_delegate' in tools, 'flow_wait' in tools, 'done' in tools)"
     )
     assert visible == "False False True"
 
     hidden = runtime.execute(
-        "from rlmflow.tools import get_repl_tools\n"
+        "from rflow.tools import get_repl_tools\n"
         "tools = get_repl_tools(include_hidden=True)\n"
-        "print('rlm_delegate' in tools, 'rlm_wait' in tools)"
+        "print('flow_delegate' in tools, 'flow_wait' in tools)"
     )
     assert hidden == "True True"
 
 
 def test_get_repl_tools_requires_active_context():
-    with pytest.raises(RuntimeError, match="No active RLMFlow tool context"):
+    with pytest.raises(RuntimeError, match="No active RecursiveFlow tool context"):
         get_repl_tools()

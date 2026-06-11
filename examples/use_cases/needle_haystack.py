@@ -1,14 +1,14 @@
 """Needle in a massive in-memory CONTEXT.
 
 Inspired by alexzhang13/rlm-minimal's million-line magic-number demo. This
-version stores the haystack in RLMFlow's `CONTEXT` instead of writing many
+version stores the haystack in RecursiveFlow's `CONTEXT` instead of writing many
 files, so the agent must use `CONTEXT.lines(...)` and parallel child agents.
 
 Usage:
     python examples/use_cases/needle_haystack.py
     python examples/use_cases/needle_haystack.py --num-lines 1000000 --no-viz
     python examples/use_cases/needle_haystack.py --viewer
-    python examples/use_cases/needle_haystack.py --docker-image rlmflow:local
+    python examples/use_cases/needle_haystack.py --docker-image recursive-flow:local
 """
 
 from __future__ import annotations
@@ -18,10 +18,9 @@ import random
 import string
 from pathlib import Path
 
-from rlmflow.llm import AnthropicClient, OpenAIClient
-from rlmflow.rlm import RLMConfig, RLMFlow
-from rlmflow.runtime.docker import DockerRuntime
-from rlmflow.runtime.local import LocalRuntime
+import rflow
+from rflow.runtime.docker import DockerRuntime
+from rflow.runtime.local import LocalRuntime
 
 
 def generate_massive_context(
@@ -62,7 +61,7 @@ def main():
     parser.add_argument(
         "--docker-image",
         default=None,
-        help="If set, run agent code inside this Docker image (e.g. rlmflow:local).",
+        help="If set, run agent code inside this Docker image (e.g. recursive-flow:local).",
     )
     parser.add_argument("--max-depth", type=int, default=1)
     parser.add_argument("--max-iterations", type=int, default=15)
@@ -94,16 +93,16 @@ def main():
         return LocalRuntime(workspace=workspace)
 
     llm = (
-        AnthropicClient(args.model)
+        rflow.AnthropicClient(args.model)
         if args.model.startswith("claude")
-        else OpenAIClient(args.model)
+        else rflow.OpenAIClient(args.model)
     )
     llm_clients = None
     if args.fast_model:
         fast = (
-            AnthropicClient(args.fast_model)
+            rflow.AnthropicClient(args.fast_model)
             if args.fast_model.startswith("claude")
-            else OpenAIClient(args.fast_model)
+            else rflow.OpenAIClient(args.fast_model)
         )
         llm_clients = {
             "fast": {
@@ -112,10 +111,12 @@ def main():
             },
         }
 
-    agent = RLMFlow(
+    agent = rflow.RecursiveFlow(
         llm_client=llm,
         runtime=make_runtime(),
-        config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
+        config=rflow.FlowConfig(
+            max_depth=args.max_depth, max_iterations=args.max_iterations
+        ),
         llm_clients=llm_clients,
         runtime_factory=make_runtime,
     )
@@ -131,7 +132,7 @@ def main():
             graph = agent.step(graph)
             print(graph.tree())
     else:
-        from rlmflow.utils.viz import live
+        from rflow.utils.viz import live
 
         graphs = live(agent, graph)
         graph = graphs[-1]
@@ -142,7 +143,7 @@ def main():
     print(f"Workspace saved to {workspace}")
 
     if args.viewer:
-        from rlmflow.utils.viewer import open_viewer
+        from rflow.utils.viewer import open_viewer
 
         open_viewer(workspace)
 

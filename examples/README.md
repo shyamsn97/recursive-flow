@@ -28,29 +28,29 @@ vary; run `--help` for the exact values.
 |---|---|---|
 | `--model MODEL` | varies | Main LLM. Prefix decides client (`claude*` → Anthropic, else OpenAI). |
 | `--fast-model MODEL` | varies | Optional cheap secondary model registered as `fast` for delegates. |
-| `--docker-image IMAGE` | unset | If set, run agent code inside this Docker image. Must have `rlmflow` installed. Leaving this unset uses `LocalRuntime`. |
+| `--docker-image IMAGE` | unset | If set, run agent code inside this Docker image. Must have `recursive-flow` installed. Leaving this unset uses `LocalRuntime`. |
 | `--max-depth N` | `3` | Max delegation depth. |
 | `--max-iterations N` | `15` | Max LLM calls per agent. |
 | `--no-viz` | off | Disable the live terminal visualization. |
 
 ## Running under Docker
 
-The repo ships a `Dockerfile` at its root that builds an image with `rlmflow`
+The repo ships a `Dockerfile` at its root that builds an image with `recursive-flow`
 preinstalled. Build it once:
 
 ```bash
-docker build -t rlmflow:local .
+docker build -t recursive-flow:local .
 ```
 
-Then just pass `--docker-image rlmflow:local` to any example — presence of
+Then just pass `--docker-image recursive-flow:local` to any example — presence of
 the flag is what enables the Docker runtime:
 
 ```bash
-python examples/use_cases/summarizer.py                 --docker-image rlmflow:local
-python examples/use_cases/needle_haystack.py            --docker-image rlmflow:local
-python examples/use_cases/needle_haystack_filesystem.py --docker-image rlmflow:local
-python examples/basics/showcase.py                        --docker-image rlmflow:local
-python examples/use_cases/coding_agent/agent.py --workspace ./proj --docker-image rlmflow:local
+python examples/use_cases/summarizer.py                 --docker-image recursive-flow:local
+python examples/use_cases/needle_haystack.py            --docker-image recursive-flow:local
+python examples/use_cases/needle_haystack_filesystem.py --docker-image recursive-flow:local
+python examples/basics/showcase.py                        --docker-image recursive-flow:local
+python examples/use_cases/coding_agent/agent.py --workspace ./proj --docker-image recursive-flow:local
 ```
 
 The host workspace is bind-mounted at `/workspace` inside the container, so
@@ -60,8 +60,8 @@ Each compute example writes its durable run state into its workspace. Reopen or
 export it with:
 
 ```bash
-rlmflow view path/to/workspace
-rlmflow render path/to/workspace -f html -o viewer.html
+recursive-flow view path/to/workspace
+recursive-flow render path/to/workspace -f html -o viewer.html
 ```
 
 The workspace is the saved run.
@@ -78,17 +78,17 @@ python examples/sandboxes/e2b_agent.py --model gpt-5
 python examples/sandboxes/daytona_agent.py --model gpt-5
 ```
 
-Install the matching extra first: `rlmflow[modal]`, `rlmflow[e2b]`,
-`rlmflow[daytona]`, or `rlmflow[sandbox]` for all three.
+Install the matching extra first: `recursive-flow[modal]`, `recursive-flow[e2b]`,
+`recursive-flow[daytona]`, or `recursive-flow[sandbox]` for all three.
 
 For fully locked-down runs, `DockerRuntime` takes the usual Docker knobs
 directly when built by hand:
 
 ```python
-from rlmflow.runtime.docker import DockerRuntime
+from rflow.runtime.docker import DockerRuntime
 
 runtime = DockerRuntime(
-    image="rlmflow:local",
+    image="recursive-flow:local",
     mounts={"./data": "/workspace"},
     env={"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]},
     network="none",       # air-gap the container

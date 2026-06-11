@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rlmflow import Graph, LLMClient, RLMConfig, RLMFlow, Workspace
+from rflow import Graph, LLMClient, FlowConfig, RecursiveFlow, Workspace
 
 
 class StaticLLM(LLMClient):
@@ -12,7 +12,7 @@ class StaticLLM(LLMClient):
         return '```repl\ndone("ok")\n```'
 
 
-def _run(engine: RLMFlow, graph: Graph) -> Graph:
+def _run(engine: RecursiveFlow, graph: Graph) -> Graph:
     while not graph.finished:
         graph = engine.step(graph)
     return graph
@@ -20,10 +20,10 @@ def _run(engine: RLMFlow, graph: Graph) -> Graph:
 
 def test_workspace_session_records_states(tmp_path: Path):
     workspace = Workspace.create(tmp_path / "b1")
-    engine = RLMFlow(
+    engine = RecursiveFlow(
         llm_client=StaticLLM(),
         workspace=workspace,
-        config=RLMConfig(max_iterations=2),
+        config=FlowConfig(max_iterations=2),
     )
 
     final = _run(engine, engine.start("test query"))
@@ -43,10 +43,10 @@ def test_workspace_session_records_states(tmp_path: Path):
 def test_workspace_fork_copies_user_files_session_and_context(tmp_path: Path):
     source = Workspace.create(tmp_path / "b1")
     source.path("marker.txt").write_text("copied")
-    engine = RLMFlow(
+    engine = RecursiveFlow(
         llm_client=StaticLLM(),
         workspace=source,
-        config=RLMConfig(max_iterations=2),
+        config=FlowConfig(max_iterations=2),
     )
     _run(engine, engine.start("test query", context="payload"))
 
@@ -64,10 +64,10 @@ def test_workspace_fork_copies_user_files_session_and_context(tmp_path: Path):
 
 def test_workspace_fork_isolates_subsequent_session_writes(tmp_path: Path):
     source = Workspace.create(tmp_path / "b1")
-    source_engine = RLMFlow(
+    source_engine = RecursiveFlow(
         llm_client=StaticLLM(),
         workspace=source,
-        config=RLMConfig(max_iterations=2),
+        config=FlowConfig(max_iterations=2),
     )
     _run(source_engine, source_engine.start("source"))
     source_state_count = sum(
@@ -75,10 +75,10 @@ def test_workspace_fork_isolates_subsequent_session_writes(tmp_path: Path):
     )
 
     forked = source.fork(new_dir=tmp_path / "b2")
-    fork_engine = RLMFlow(
+    fork_engine = RecursiveFlow(
         llm_client=StaticLLM(),
         workspace=forked,
-        config=RLMConfig(max_iterations=2),
+        config=FlowConfig(max_iterations=2),
     )
     _run(fork_engine, fork_engine.start("fork"))
 

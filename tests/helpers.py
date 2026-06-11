@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from rlmflow import Graph, LLMClient, RLMConfig, RLMFlow
-from rlmflow.runtime.local import LocalRuntime
+from rflow import Graph, LLMClient, FlowConfig, RecursiveFlow
+from rflow.runtime.local import LocalRuntime
 
 
 class StaticLLM(LLMClient):
@@ -14,18 +14,18 @@ class StaticLLM(LLMClient):
         return self.reply
 
 
-def run_to_completion(agent: RLMFlow, graph: Graph) -> Graph:
+def run_to_completion(agent: RecursiveFlow, graph: Graph) -> Graph:
     while not graph.finished:
         graph = agent.step(graph)
     return graph
 
 
-def make_agent(reply: str = '```repl\ndone("ok")\n```', **config_kwargs) -> RLMFlow:
+def make_agent(reply: str = '```repl\ndone("ok")\n```', **config_kwargs) -> RecursiveFlow:
     config_kwargs.setdefault("max_iterations", 3)
-    return RLMFlow(
+    return RecursiveFlow(
         StaticLLM(reply),
         runtime=LocalRuntime(),
-        config=RLMConfig(**config_kwargs),
+        config=FlowConfig(**config_kwargs),
     )
 
 

@@ -1,16 +1,16 @@
-"""Release-contract tests for the public RLMFlow surface."""
+"""Release-contract tests for the public RecursiveFlow surface."""
 
 from __future__ import annotations
 
-from rlmflow import (
+from rflow import (
     Graph,
     LLMClient,
     LLMUsage,
-    RLMConfig,
-    RLMFlow,
+    FlowConfig,
+    RecursiveFlow,
     is_done,
 )
-from rlmflow.runtime.local import LocalRuntime
+from rflow.runtime.local import LocalRuntime
 
 
 class DoneLLM(LLMClient):
@@ -32,8 +32,8 @@ class DoneLLM(LLMClient):
 class DelegatingLLM(LLMClient):
     ROOT_REPLY = (
         "```repl\n"
-        'h = rlm_delegate(name="child", query="do the thing", context="")\n'
-        "results = await rlm_wait(h)\n"
+        'h = flow_delegate(name="child", query="do the thing", context="")\n'
+        "results = await flow_wait(h)\n"
         "done(results[0])\n"
         "```"
     )
@@ -71,7 +71,7 @@ class BudgetBusterLLM(LLMClient):
         return '```repl\nprint("still going")\n```'
 
 
-def _run(agent: RLMFlow, graph: Graph) -> Graph:
+def _run(agent: RecursiveFlow, graph: Graph) -> Graph:
     while not graph.finished:
         graph = agent.step(graph)
     return graph
@@ -82,7 +82,7 @@ def _run(agent: RLMFlow, graph: Graph) -> Graph:
 
 def test_chat_smoke_returns_string_and_sets_last_usage():
     llm = DoneLLM(text="hi there", input_tokens=12, output_tokens=4)
-    agent = RLMFlow(llm_client=llm, runtime=LocalRuntime())
+    agent = RecursiveFlow(llm_client=llm, runtime=LocalRuntime())
 
     result = agent.chat([{"role": "user", "content": "say hi"}])
 
@@ -97,10 +97,10 @@ def test_chat_smoke_returns_string_and_sets_last_usage():
 
 def test_max_budget_stops_the_loop():
     llm = BudgetBusterLLM(input_tokens=50, output_tokens=50)
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=llm,
         runtime=LocalRuntime(),
-        config=RLMConfig(max_budget=150, max_iterations=100),
+        config=FlowConfig(max_budget=150, max_iterations=100),
     )
 
     result = agent.run("loop forever")
@@ -113,10 +113,10 @@ def test_max_budget_stops_the_loop():
 
 
 def test_graph_tokens_sum_parent_and_child_usage():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=DelegatingLLM(input_tokens=10, output_tokens=5),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=2),
+        config=FlowConfig(max_depth=2),
     )
 
     final = _run(agent, agent.start("root task"))
@@ -135,10 +135,10 @@ def test_graph_tokens_sum_parent_and_child_usage():
 
 
 def test_graph_save_load_round_trip(tmp_path):
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=DelegatingLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=2),
+        config=FlowConfig(max_depth=2),
     )
     final = _run(agent, agent.start("checkpoint me"))
 
@@ -162,8 +162,8 @@ def test_tree_displays_model_label_per_agent():
         def chat(self, messages, *args, **kwargs):
             return (
                 "```repl\n"
-                'h = rlm_delegate(name="fast_worker", query="use fast", context="", model="fast")\n'
-                "r = await rlm_wait(h)\n"
+                'h = flow_delegate(name="fast_worker", query="use fast", context="", model="fast")\n'
+                "r = await flow_wait(h)\n"
                 "done(r[0])\n"
                 "```"
             )
@@ -174,10 +174,10 @@ def test_tree_displays_model_label_per_agent():
         def chat(self, messages, *args, **kwargs):
             return '```repl\ndone("fast-result")\n```'
 
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=ModelAwareLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=1),
+        config=FlowConfig(max_depth=1),
         llm_clients={"fast": {"model": FastLLM(), "description": "tiny"}},
     )
     final = _run(agent, agent.start("test"))

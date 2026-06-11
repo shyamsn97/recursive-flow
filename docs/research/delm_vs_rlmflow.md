@@ -1,23 +1,23 @@
-# DeLM vs. RLMFlow: Research and Adoption Plan
+# DeLM vs. RecursiveFlow: Research and Adoption Plan
 
 This note compares DeLM, "Decentralized Language Models with shared context",
-against the current `rlmflow` architecture and sketches what it would take to
+against the current `recursive-flow` architecture and sketches what it would take to
 make DeLM-style coordination a first-class approach in this repo.
 
 Sources:
 
 - DeLM repository: <https://github.com/yuzhenmao/DeLM>
 - DeLM paper: <https://arxiv.org/abs/2606.10662>
-- Local `rlmflow` architecture docs: `README.md`, `docs/internals.md`,
-  `docs/control.md`, and the core implementation under `rlmflow/`.
+- Local `recursive-flow` architecture docs: `README.md`, `docs/internals.md`,
+  `docs/control.md`, and the core implementation under `recursive-flow/`.
 
 ## Short Answer
 
-It is very feasible to add DeLM-style coordination to `rlmflow`, but it should
+It is very feasible to add DeLM-style coordination to `recursive-flow`, but it should
 not replace the RLM graph model.
 
 DeLM is best understood as a coordination layer: many workers operate
-asynchronously over a shared verified context and a shared task queue. RLMFlow is
+asynchronously over a shared verified context and a shared task queue. RecursiveFlow is
 best understood as an execution substrate: each worker is an inspectable,
 replayable, forkable recursive execution graph with code execution,
 subdelegation, structured outputs, graph surgery, and durable workspaces.
@@ -31,19 +31,19 @@ DeLM-style coordinator
   admission-time verifier
   finalizer
 
-RLMFlow workers
-  each task is solved by one RLMFlow graph
+RecursiveFlow workers
+  each task is solved by one RecursiveFlow graph
   each graph remains inspectable, forkable, replayable, injectable
   completed worker graphs emit candidate lessons into the shared context
 ```
 
-That gives us DeLM's cross-worker progress sharing without giving up RLMFlow's
+That gives us DeLM's cross-worker progress sharing without giving up RecursiveFlow's
 main advantage: transparent execution graphs.
 
 Difficulty estimate:
 
 - Prototype: moderate. A credible local prototype can be built as an outer
-  orchestrator around existing `RLMFlow` workers.
+  orchestrator around existing `RecursiveFlow` workers.
 - Production-quality research system: high. The hard parts are verification,
   concurrent shared-state admission, context unfolding, benchmark harnesses, and
   evaluation discipline.
@@ -86,9 +86,9 @@ discoveries. The public README describes each solver thread as owning its own
 planner, delegated implementer runs, Docker container, and local memory, while
 `SharedLessons` holds cross-thread notes.
 
-## What RLMFlow Is Today
+## What RecursiveFlow Is Today
 
-RLMFlow is centered on a recursive execution graph.
+RecursiveFlow is centered on a recursive execution graph.
 
 One `Graph` is one agent's trajectory plus its child graphs. Each agent has
 flat invariants such as `agent_id`, `depth`, `query`, `runtime`, and
@@ -124,7 +124,7 @@ The engine loop is explicit and inspectable:
 
 - `NodeScheduler` decides which graph agents are runnable.
 - `act(...)` projects runnable agents into pure action intents.
-- `RLMFlow.apply_one(...)` materializes those actions as persisted graph nodes.
+- `RecursiveFlow.apply_one(...)` materializes those actions as persisted graph nodes.
 - `Workspace` and `Session` write durable per-agent logs and `graph.json`.
 - Runtimes execute REPL code locally, in Docker, or in sandbox backends.
 - Fork, replay, continuation, injection, and graph surgery operate on the same
@@ -137,7 +137,7 @@ This is not just an agent harness. It is an execution trace system.
 The difference is not "multi-agent vs. single-agent." Both systems are
 multi-agent. The difference is the coordination topology.
 
-RLMFlow is tree-structured and supervisor-centered. A parent launches children,
+RecursiveFlow is tree-structured and supervisor-centered. A parent launches children,
 children may launch their own children, and results bubble upward. The graph is
 a recursive tree, and every delegation has a clear parent supervision point.
 
@@ -148,16 +148,16 @@ problem-level memory and work queue.
 
 This affects everything:
 
-- In RLMFlow, child results are primarily private to the parent that awaited
+- In RecursiveFlow, child results are primarily private to the parent that awaited
   them, unless the parent chooses to pass them onward.
 - In DeLM, admitted lessons are visible to all future workers.
-- In RLMFlow, scheduling follows the recursive graph and supervision state.
+- In RecursiveFlow, scheduling follows the recursive graph and supervision state.
 - In DeLM, scheduling follows queue availability and worker capacity.
-- In RLMFlow, correctness is usually enforced by local verification inside a
+- In RecursiveFlow, correctness is usually enforced by local verification inside a
   graph, structured outputs, tests, or human graph edits.
 - In DeLM, correctness of shared memory requires admission-time verification,
   because a bad shared lesson can poison many workers.
-- In RLMFlow, a run is naturally explainable as a tree of typed node logs.
+- In RecursiveFlow, a run is naturally explainable as a tree of typed node logs.
 - In DeLM, the global process is naturally explainable as task/lesson evolution
   across many local trajectories.
 
@@ -173,7 +173,7 @@ make recursive, tool-using model reasoning controllable, resumable, and
 inspectable?
 
 DeLM makes the coordination among many attempts state-based. The agents may be
-ordinary planner/implementer loops, RLMFlow workers, or some other harness. The
+ordinary planner/implementer loops, RecursiveFlow workers, or some other harness. The
 central question is: how do we let many parallel workers share useful progress
 without routing everything through a single orchestrator?
 
@@ -203,7 +203,7 @@ programmatic reasoning. In its OOLONG discussion, vanilla DeLM underperforms
 RLM on aggregation-heavy tasks where code-mediated execution is valuable, while
 combining RLM with DeLM gives the best result.
 
-That matches the architecture here. RLMFlow already gives workers a strong local
+That matches the architecture here. RecursiveFlow already gives workers a strong local
 reasoning substrate:
 
 - code execution through the REPL
@@ -224,7 +224,7 @@ DeLM gives a missing outer layer:
 - compact global state that later workers read by default
 - coarse-to-fine unfolding when a lesson needs detail
 
-So the product direction should be "RLMFlow workers inside a DeLM-style
+So the product direction should be "RecursiveFlow workers inside a DeLM-style
 coordinator", not "replace recursive language models with DeLM."
 
 ## What "Make This Our Approach" Could Mean
@@ -234,7 +234,7 @@ There are three plausible interpretations.
 ### Option 1: Add DeLM As An Example
 
 Build a runnable example under `examples/control/` or `examples/use_cases/`
-showing several RLMFlow workers solving subtasks with a shared notes file.
+showing several RecursiveFlow workers solving subtasks with a shared notes file.
 
 This is easy, but mostly cosmetic. It would demonstrate the idea but not create
 a reusable abstraction.
@@ -245,7 +245,7 @@ Best for: validating prompts and user experience quickly.
 
 ### Option 2: Add A Reusable Coordinator Library
 
-Add a new module, likely under `rlmflow/control/` or `rlmflow/coordination/`,
+Add a new module, likely under `recursive-flow/control/` or `recursive-flow/coordination/`,
 that provides:
 
 - `SharedTaskQueue`
@@ -256,7 +256,7 @@ that provides:
 - `DeLMCoordinator`
 - `SolverThread` or `WorkerRun`
 
-Each worker run would be a normal `RLMFlow` execution in its own branch or
+Each worker run would be a normal `RecursiveFlow` execution in its own branch or
 workspace. The coordinator would assign tasks, inject the current shared context
 into each worker, collect completed worker graphs, ask a verifier to admit or
 reject lessons, and enqueue follow-up tasks when needed.
@@ -292,7 +292,7 @@ Rough effort: one to two focused weeks.
 
 What we can build quickly:
 
-- a local coordinator that runs N RLMFlow workers
+- a local coordinator that runs N RecursiveFlow workers
 - a shared JSONL lesson store
 - a simple task queue
 - structured worker outputs
@@ -346,12 +346,12 @@ Needed additions:
 - cost accounting and ablations
 - manual audit workflow for verifier false accepts/rejects
 
-This is the level required before claiming that `rlmflow` has meaningfully
+This is the level required before claiming that `recursive-flow` has meaningfully
 adopted DeLM as a research approach.
 
 ## Recommended Architecture
 
-Add DeLM as an outer orchestration layer that treats RLMFlow as the worker
+Add DeLM as an outer orchestration layer that treats RecursiveFlow as the worker
 runtime.
 
 ```text
@@ -365,7 +365,7 @@ DeLMCoordinator
 Worker loop
   claim task
   read compact shared context
-  run RLMFlow task in isolated workspace/branch
+  run RecursiveFlow task in isolated workspace/branch
   produce structured WorkerResult
   propose one or more SharedLesson entries
   submit entries for verification/admission
@@ -386,7 +386,7 @@ Finalizer
   produces final answer or patch from admitted context
 ```
 
-The critical design rule: RLMFlow graph logs should remain the source of
+The critical design rule: RecursiveFlow graph logs should remain the source of
 evidence, while shared lessons are compact derived state. Do not store only the
 lesson and throw away the graph. A lesson should always be able to point back to
 the worker graph, node ids, command output, file diffs, or source spans that
@@ -451,9 +451,9 @@ For long-context QA, useful lesson types would include:
 - "this source is irrelevant for the question"
 - "unfold this raw span if reasoning about subclaim Q"
 
-## How This Maps Onto Existing RLMFlow Pieces
+## How This Maps Onto Existing RecursiveFlow Pieces
 
-RLMFlow already has several pieces we can reuse.
+RecursiveFlow already has several pieces we can reuse.
 
 `Workspace` and `Session` can store per-worker traces. Each worker can run in a
 forked workspace or a sibling workspace under one problem directory. The
@@ -492,7 +492,7 @@ This is the most important hard part. DeLM works only if shared context is more
 reliable than raw chat messages. Bad lessons are worse than no lessons because
 they become global state.
 
-For `rlmflow`, a verifier should check each proposed lesson against:
+For `recursive-flow`, a verifier should check each proposed lesson against:
 
 - the worker's `Graph`
 - relevant `ExecOutput` / `ErrorOutput`
@@ -584,7 +584,7 @@ For a coding prototype:
 1. Create one problem workspace.
 2. Initialize a shared task queue with N solver tasks like "attempt a fix from
    scratch; read shared lessons first".
-3. Start N RLMFlow workers, each in its own workspace branch/directory.
+3. Start N RecursiveFlow workers, each in its own workspace branch/directory.
 4. Give each worker a compact rendering of admitted lessons as context.
 5. Require each worker to return structured output:
    - final status
@@ -623,15 +623,15 @@ Risk: low.
 
 ### Phase 1: Local DeLM Coordinator Prototype
 
-Add a module that can run multiple RLMFlow workers over a shared queue in a
+Add a module that can run multiple RecursiveFlow workers over a shared queue in a
 single Python process.
 
 Likely files:
 
-- `rlmflow/coordination/__init__.py`
-- `rlmflow/coordination/models.py`
-- `rlmflow/coordination/store.py`
-- `rlmflow/coordination/coordinator.py`
+- `recursive-flow/coordination/__init__.py`
+- `recursive-flow/coordination/models.py`
+- `recursive-flow/coordination/store.py`
+- `recursive-flow/coordination/coordinator.py`
 - `examples/control/shared_context/...`
 
 Features:
@@ -701,27 +701,27 @@ Features:
   - unverified shared context
   - no unfolding
   - centralized parent-only sharing
-  - RLMFlow worker alone
-  - DeLM coordinator with RLMFlow workers
+  - RecursiveFlow worker alone
+  - DeLM coordinator with RecursiveFlow workers
 
 Risk: high to very high.
 
 ## API Sketch
 
 The API should make the coordinator feel like a separate mode, not mutate
-`RLMFlow.run(...)` into something ambiguous.
+`RecursiveFlow.run(...)` into something ambiguous.
 
 ```python
-from rlmflow import RLMFlow, Workspace
-from rlmflow.coordination import DeLMCoordinator, SharedTask
+import rflow
+from rflow.coordination import DeLMCoordinator, SharedTask
 
-workspace = Workspace.create("./runs/my-problem")
+workspace = rflow.Workspace.create("./runs/my-problem")
 
-worker_factory = lambda ws: RLMFlow(
+worker_factory = lambda ws: rflow.RecursiveFlow(
     llm_client=llm,
     workspace=ws,
     runtime=runtime_factory(ws),
-    config=RLMConfig(max_depth=2, child_max_iterations=12),
+    config=rflow.FlowConfig(max_depth=2, child_max_iterations=12),
 )
 
 coordinator = DeLMCoordinator(
@@ -779,7 +779,7 @@ A future viewer could show this as two linked views:
 
 - problem-level timeline: tasks claimed, lessons proposed, lessons admitted,
   finalization
-- worker graph view: the existing RLMFlow graph for each task
+- worker graph view: the existing RecursiveFlow graph for each task
 
 That preserves conceptual clarity:
 
@@ -792,9 +792,9 @@ That preserves conceptual clarity:
 I would avoid calling the module `delm` directly unless we intentionally want to
 brand it as an implementation of the paper. Safer names:
 
-- `rlmflow.coordination`
-- `rlmflow.shared_context`
-- `rlmflow.swarm`
+- `rflow.coordination`
+- `rflow.shared_context`
+- `rflow.swarm`
 
 User-facing names could be:
 
@@ -808,7 +808,7 @@ Internally, the design can still reference DeLM.
 
 The biggest product risk is making shared context feel magical. Users need to
 understand what was admitted, why it was trusted, and which evidence supports
-it. If the shared context is opaque, this moves away from RLMFlow's strongest
+it. If the shared context is opaque, this moves away from RecursiveFlow's strongest
 identity.
 
 The biggest research risk is verifier quality. A bad verifier can either admit
@@ -825,17 +825,17 @@ unfolding should be part of the real design, not a later afterthought.
 
 ## Recommendation
 
-Make DeLM-style coordination a first-class optional layer in `rlmflow`, but keep
-RLMFlow's recursive graph semantics intact.
+Make DeLM-style coordination a first-class optional layer in `recursive-flow`, but keep
+RecursiveFlow's recursive graph semantics intact.
 
 The best near-term milestone is:
 
-1. Build a local `DeLMCoordinator` prototype around existing `RLMFlow` workers.
+1. Build a local `DeLMCoordinator` prototype around existing `RecursiveFlow` workers.
 2. Use structured outputs for worker results and lesson proposals.
 3. Store every admitted lesson with graph/node evidence refs.
 4. Add a deterministic example and one real LLM example.
 5. Add an ablation harness comparing:
-   - independent parallel RLMFlow attempts
+   - independent parallel RecursiveFlow attempts
    - centralized parent with `launch_subagents`
    - shared-context workers with verified lessons
 
@@ -845,7 +845,7 @@ queue semantics, context hierarchy, and benchmarks.
 The strategic framing should be:
 
 ```text
-RLMFlow makes one agent trajectory transparent and controllable.
+RecursiveFlow makes one agent trajectory transparent and controllable.
 DeLM-style coordination makes many trajectories share verified progress.
 Together: inspectable decentralized test-time reasoning.
 ```

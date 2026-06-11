@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rlmflow import Graph, RLMConfig, RLMFlow, Workspace
-from rlmflow.llm import LLMClient
+from rflow import Graph, FlowConfig, RecursiveFlow, Workspace
+from rflow.llm import LLMClient
 
 
 class StaticLLM(LLMClient):
@@ -13,7 +13,7 @@ class StaticLLM(LLMClient):
         return '```repl\ndone("ok")\n```'
 
 
-def _run(engine: RLMFlow, graph: Graph) -> Graph:
+def _run(engine: RecursiveFlow, graph: Graph) -> Graph:
     while not graph.finished:
         graph = engine.step(graph)
     return graph
@@ -39,15 +39,15 @@ def test_workspace_fork_carries_flat_runtime_tree(tmp_path: Path):
     )
 
 
-def test_rlmflow_persists_root_graph_to_workspace(tmp_path: Path):
+def test_recursive_flow_persists_root_graph_to_workspace(tmp_path: Path):
     workspace = Workspace.create(tmp_path / "workspace")
-    engine = RLMFlow(
+    engine = RecursiveFlow(
         llm_client=StaticLLM(),
         workspace=workspace,
-        config=RLMConfig(max_iterations=2),
+        config=FlowConfig(max_iterations=2),
     )
 
     final = _run(engine, engine.start("test query"))
 
-    assert __import__("rlmflow").is_done(final.current())
+    assert __import__("rflow").is_done(final.current())
     assert workspace.load_graph().agent_id == final.agent_id

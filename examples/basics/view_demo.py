@@ -1,6 +1,6 @@
 """Generate a synthetic Graph trace and open the viewer.
 
-No LLM or runtime needed. This builds fake RLMFlow graph snapshots to
+No LLM or runtime needed. This builds fake RecursiveFlow graph snapshots to
 demonstrate the viewer UI.
 
     python examples/basics/view_demo.py
@@ -8,16 +8,8 @@ demonstrate the viewer UI.
 
 from __future__ import annotations
 
-from rlmflow.graph import (
-    DoneOutput,
-    ErrorOutput,
-    Graph,
-    LLMOutput,
-    Node,
-    SupervisingOutput,
-    UserQuery,
-)
-from rlmflow.utils.viewer import open_viewer
+import rflow
+from rflow.utils.viewer import open_viewer
 
 QUERY = "Create a boids simulation in plain HTML + JS"
 CFG = {"model": "gpt-5", "max_depth": 3, "max_iterations": 8}
@@ -77,9 +69,9 @@ META: dict[str, dict] = {
 
 
 def snapshot(
-    agent_states: dict[str, list[Node]],
+    agent_states: dict[str, list[rflow.Node]],
     spawn_states: dict[str, str] | None = None,
-) -> Graph:
+) -> rflow.Graph:
     """Build a recursive :class:`Graph` from per-agent state lists.
 
     ``spawn_states`` maps a child agent id → the parent state id that
@@ -87,7 +79,7 @@ def snapshot(
     """
     spawn_states = spawn_states or {}
 
-    def build(aid: str) -> Graph:
+    def build(aid: str) -> rflow.Graph:
         meta = META[aid]
         states = tuple(agent_states.get(aid, ()))
         kids = {
@@ -95,7 +87,7 @@ def snapshot(
             for cid in agent_states
             if META[cid].get("parent_agent_id") == aid
         }
-        return Graph.from_meta_dict(
+        return rflow.Graph.from_meta_dict(
             {**meta, "parent_node_id": spawn_states.get(aid)},
             nodes=states,
             children=kids,
@@ -103,11 +95,10 @@ def snapshot(
 
     return build("root")
 
+    # ── snapshot 0: root just got its query ──────────────────────────────
 
-# ── snapshot 0: root just got its query ──────────────────────────────
 
-
-root_q = UserQuery(
+root_q = rflow.UserQuery(
     agent_id="root",
     seq=0,
     content="Create a boids simulation in plain HTML + JS.",
@@ -119,7 +110,7 @@ g0 = snapshot({"root": [root_q]})
 # ── snapshot 1: root spawned three children, now waiting ─────────────
 
 
-root_action = LLMOutput(
+root_action = rflow.LLMOutput(
     agent_id="root",
     seq=1,
     reply="I'll split this into files and delegate each part.",
@@ -132,7 +123,7 @@ root_action = LLMOutput(
         'done("\\n".join(results))'
     ),
 )
-root_sup = SupervisingOutput(
+root_sup = rflow.SupervisingOutput(
     agent_id="root",
     seq=2,
     waiting_on=[
@@ -141,9 +132,15 @@ root_sup = SupervisingOutput(
         "root.script_js",
     ],
 )
-child_index_q = UserQuery(agent_id="root.index_html", seq=0, content="Write index.html")
-child_style_q = UserQuery(agent_id="root.style_css", seq=0, content="Write style.css")
-child_script_q = UserQuery(agent_id="root.script_js", seq=0, content="Write script.js")
+child_index_q = rflow.UserQuery(
+    agent_id="root.index_html", seq=0, content="Write index.html"
+)
+child_style_q = rflow.UserQuery(
+    agent_id="root.style_css", seq=0, content="Write style.css"
+)
+child_script_q = rflow.UserQuery(
+    agent_id="root.script_js", seq=0, content="Write script.js"
+)
 
 FIRST_SPAWNS = {
     "root.index_html": root_action.id,
@@ -165,17 +162,17 @@ g1 = snapshot(
 # ── snapshot 2: two simple children done, script.js spawns sub-agents ──
 
 
-child_index_done = DoneOutput(
+child_index_done = rflow.DoneOutput(
     agent_id="root.index_html",
     seq=1,
     result="Created index.html with canvas element",
 )
-child_style_done = DoneOutput(
+child_style_done = rflow.DoneOutput(
     agent_id="root.style_css",
     seq=1,
     result="Created style.css with dark theme",
 )
-script_action = LLMOutput(
+script_action = rflow.LLMOutput(
     agent_id="root.script_js",
     seq=1,
     reply="Splitting into core/renderer/controls.",
@@ -187,7 +184,7 @@ script_action = LLMOutput(
         "])"
     ),
 )
-script_sup = SupervisingOutput(
+script_sup = rflow.SupervisingOutput(
     agent_id="root.script_js",
     seq=2,
     waiting_on=[
@@ -196,9 +193,15 @@ script_sup = SupervisingOutput(
         "root.script_js.controls",
     ],
 )
-sub_core_q = UserQuery(agent_id="root.script_js.boids_core", seq=0, content="Core boids")
-sub_render_q = UserQuery(agent_id="root.script_js.renderer", seq=0, content="Canvas renderer")
-sub_controls_q = UserQuery(agent_id="root.script_js.controls", seq=0, content="UI controls")
+sub_core_q = rflow.UserQuery(
+    agent_id="root.script_js.boids_core", seq=0, content="Core boids"
+)
+sub_render_q = rflow.UserQuery(
+    agent_id="root.script_js.renderer", seq=0, content="Canvas renderer"
+)
+sub_controls_q = rflow.UserQuery(
+    agent_id="root.script_js.controls", seq=0, content="UI controls"
+)
 
 SECOND_SPAWNS = {
     **FIRST_SPAWNS,
@@ -224,17 +227,17 @@ g2 = snapshot(
 # ── snapshot 3: leaf agents finish (one errors mid-stream) ───────────
 
 
-sub_core_done = DoneOutput(
+sub_core_done = rflow.DoneOutput(
     agent_id="root.script_js.boids_core",
     seq=1,
     result="Implemented separation, alignment, and cohesion",
 )
-sub_render_done = DoneOutput(
+sub_render_done = rflow.DoneOutput(
     agent_id="root.script_js.renderer",
     seq=1,
     result="Implemented requestAnimationFrame renderer",
 )
-sub_controls_err = ErrorOutput(
+sub_controls_err = rflow.ErrorOutput(
     agent_id="root.script_js.controls",
     seq=1,
     error="no_code_block",
@@ -258,17 +261,17 @@ g3 = snapshot(
 # ── snapshot 4: script.js retries, finishes, then root completes ─────
 
 
-sub_controls_done = DoneOutput(
+sub_controls_done = rflow.DoneOutput(
     agent_id="root.script_js.controls",
     seq=2,
     result="Implemented UI controls",
 )
-script_done = DoneOutput(
+script_done = rflow.DoneOutput(
     agent_id="root.script_js",
     seq=3,
     result="Created script.js by combining core, renderer, and controls",
 )
-root_done = DoneOutput(
+root_done = rflow.DoneOutput(
     agent_id="root",
     seq=3,
     result="Created boids simulation: index.html, style.css, script.js",
@@ -282,7 +285,11 @@ g4 = snapshot(
         "root.script_js": [child_script_q, script_action, script_sup, script_done],
         "root.script_js.boids_core": [sub_core_q, sub_core_done],
         "root.script_js.renderer": [sub_render_q, sub_render_done],
-        "root.script_js.controls": [sub_controls_q, sub_controls_err, sub_controls_done],
+        "root.script_js.controls": [
+            sub_controls_q,
+            sub_controls_err,
+            sub_controls_done,
+        ],
     },
     spawn_nodes=SECOND_SPAWNS,
 )
@@ -295,7 +302,11 @@ g5 = snapshot(
         "root.script_js": [child_script_q, script_action, script_sup, script_done],
         "root.script_js.boids_core": [sub_core_q, sub_core_done],
         "root.script_js.renderer": [sub_render_q, sub_render_done],
-        "root.script_js.controls": [sub_controls_q, sub_controls_err, sub_controls_done],
+        "root.script_js.controls": [
+            sub_controls_q,
+            sub_controls_err,
+            sub_controls_done,
+        ],
     },
     spawn_nodes=SECOND_SPAWNS,
 )

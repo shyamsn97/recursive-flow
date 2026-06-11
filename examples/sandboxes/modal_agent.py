@@ -1,4 +1,4 @@
-"""Run a platformer-building RLMFlow task inside a Modal Sandbox.
+"""Run a platformer-building RecursiveFlow task inside a Modal Sandbox.
 
 Setup:
     pip install -e ".[openai,modal]"
@@ -21,12 +21,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from rlmflow import OpenAIClient, RLMConfig, RLMFlow, Workspace  # noqa: E402
-from rlmflow.runtime.sandbox.modal import ModalRuntime  # noqa: E402
-from rlmflow.tools import FILE_TOOLS  # noqa: E402
-from rlmflow.utils.viz import live  # noqa: E402
+import rflow  # noqa: E402
+from rflow.runtime.sandbox.modal import ModalRuntime  # noqa: E402
+from rflow.tools import FILE_TOOLS  # noqa: E402
+from rflow.utils.viz import live  # noqa: E402
 
-REMOTE_REPO = "/opt/rlmflow"
+REMOTE_REPO = "/opt/recursive-flow"
 
 PLATFORMER_QUERY = """\
 Build a simple 2D side-scrolling platformer in plain HTML/CSS/JS under output/.
@@ -48,7 +48,7 @@ def log(message: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run RLMFlow inside Modal.")
+    parser = argparse.ArgumentParser(description="Run RecursiveFlow inside Modal.")
     parser.add_argument("--model", default="gpt-5")
     parser.add_argument(
         "--fast-model",
@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Recursive sub-agent depth. Defaults to 1 so delegation is enabled.",
     )
-    parser.add_argument("--app-name", default="rlmflow")
+    parser.add_argument("--app-name", default="recursive-flow")
     parser.add_argument(
         "--sandbox-timeout",
         type=int,
@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_turn(agent: RLMFlow, query: str, *, use_live: bool) -> str:
+def run_turn(agent: rflow.RecursiveFlow, query: str, *, use_live: bool) -> str:
     graph = agent.start(query)
     if use_live:
         graphs = live(agent, graph)
@@ -109,18 +109,18 @@ def run_platformer_task(
     use_live: bool,
 ) -> None:
     log(
-        "creating RLMFlow agent with "
+        "creating RecursiveFlow agent with "
         f"model={model}, fast_model={fast_model}, "
         f"max_iterations={max_iterations}, max_depth={max_depth}"
     )
-    agent = RLMFlow(
-        llm_client=OpenAIClient(model=model),
+    agent = rflow.RecursiveFlow(
+        llm_client=rflow.OpenAIClient(model=model),
         runtime=runtime,
         runtime_factory=runtime.clone,
-        config=RLMConfig(max_iterations=max_iterations, max_depth=max_depth),
+        config=rflow.FlowConfig(max_iterations=max_iterations, max_depth=max_depth),
         llm_clients={
             "fast": {
-                "model": OpenAIClient(model=fast_model),
+                "model": rflow.OpenAIClient(model=fast_model),
                 "description": f"cheaper/faster model ({fast_model}); prefer for delegated subtasks.",
             },
         },
@@ -129,7 +129,7 @@ def run_platformer_task(
     print(run_turn(agent, PLATFORMER_QUERY, use_live=use_live))
 
 
-def local_rlmflow_image() -> modal.Image:
+def local_recursive_flow_image() -> modal.Image:
     log(f"preparing Modal image from local checkout: {REPO_ROOT} -> {REMOTE_REPO}")
     return (
         modal.Image.debian_slim()
@@ -155,7 +155,7 @@ def local_rlmflow_image() -> modal.Image:
 
 def main() -> None:
     args = parse_args()
-    workspace = Workspace.create(
+    workspace = rflow.Workspace.create(
         REPO_ROOT / "examples" / "_runs" / "example-workspaces" / "sandbox-modal"
     )
     log(f"workspace: {workspace.root}")
@@ -163,7 +163,7 @@ def main() -> None:
         app_name=args.app_name,
         workspace=workspace,
         remote_workdir=args.remote_workdir,
-        image=local_rlmflow_image(),
+        image=local_recursive_flow_image(),
         timeout=args.sandbox_timeout,
         repl_timeout=args.repl_timeout,
         verbose=not args.quiet_runtime,

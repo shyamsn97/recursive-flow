@@ -18,13 +18,12 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from rlmflow.llm import LLMClient, LLMUsage
-from rlmflow.rlm import RLMConfig, RLMFlow
-from rlmflow.runtime.local import LocalRuntime
+import rflow
+from rflow.runtime.local import LocalRuntime
 
 
 @dataclass
-class TimelineLLM(LLMClient):
+class TimelineLLM(rflow.LLMClient):
     started_at: float = field(default_factory=time.perf_counter)
     events: list[tuple[float, str]] = field(default_factory=list)
 
@@ -32,7 +31,7 @@ class TimelineLLM(LLMClient):
         self.events.append((time.perf_counter() - self.started_at, label))
 
     def chat(self, messages, *args, **kwargs) -> str:
-        self.last_usage = LLMUsage(input_tokens=1, output_tokens=1)
+        self.last_usage = rflow.LLMUsage(input_tokens=1, output_tokens=1)
         # An agent's query lives in its system prompt, so scan the whole
         # conversation rather than just the latest "continue" nudge.
         convo = "\n".join(m["content"].lower() for m in messages)
@@ -65,10 +64,10 @@ class TimelineLLM(LLMClient):
 
 def run_case(*, eager_children: bool) -> None:
     llm = TimelineLLM()
-    agent = RLMFlow(
+    agent = rflow.RecursiveFlow(
         llm,
         runtime=LocalRuntime(),
-        config=RLMConfig(
+        config=rflow.FlowConfig(
             eager_children=eager_children,
             max_depth=2,
             max_iterations=8,

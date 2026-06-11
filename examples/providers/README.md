@@ -1,12 +1,12 @@
 # Providers
 
-Examples that connect RLMFlow to another model, tool, or inference provider.
+Examples that connect RecursiveFlow to another model, tool, or inference provider.
 
 Run commands below from the repository root after installing the matching extra.
 
 ## DSPy
 
-Use RLMFlow as the LM behind a DSPy program.
+Use RecursiveFlow as the LM behind a DSPy program.
 
 ```bash
 export OPENAI_API_KEY=...
@@ -17,7 +17,7 @@ python examples/providers/dspy_drop_in.py
 ## MCP Weather
 
 Starts a local FastMCP weather server backed by the real Open-Meteo API, registers
-its tools with RLMFlow, delegates Seattle/Austin forecasts to child agents, and
+its tools with RecursiveFlow, delegates Seattle/Austin forecasts to child agents, and
 combines the packing advice.
 
 ```bash
@@ -53,7 +53,7 @@ The run calls Open-Meteo over the network and saves a workspace at
 
 ## Tinker
 
-Run RLMFlow with Tinker inference and the live terminal graph view.
+Run RecursiveFlow with Tinker inference and the live terminal graph view.
 
 ```bash
 export TINKER_API_KEY=...

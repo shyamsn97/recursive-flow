@@ -1,8 +1,8 @@
-"""Showcase the Graph-centric RLMFlow API.
+"""Showcase the Graph-centric RecursiveFlow API.
 
 This walks through the pieces that matter after the engine refactor:
 
-1. Step-by-step execution returning :class:`~rlmflow.graph.Graph` snapshots.
+1. Step-by-step execution returning :class:`~rflow.graph.Graph` snapshots.
 2. Workspace persistence through ``workspace.load_graph()``.
 3. Session layout and latest-state inspection.
 4. Optional in-process history by keeping graph snapshots.
@@ -20,12 +20,9 @@ import argparse
 import tempfile
 from pathlib import Path
 
-from rlmflow.graph import Graph
-from rlmflow.llm import LLMClient, LLMUsage
-from rlmflow.rlm import RLMConfig, RLMFlow
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.tools import FILE_TOOLS
-from rlmflow.workspace import Workspace
+import rflow
+from rflow.runtime.local import LocalRuntime
+from rflow.tools import FILE_TOOLS
 
 BOLD = "\033[1m"
 DIM = "\033[2m"
@@ -35,11 +32,11 @@ YELLOW = "\033[33m"
 RESET = "\033[0m"
 
 
-class DemoLLM(LLMClient):
+class DemoLLM(rflow.LLMClient):
     """Deterministic LLM for an offline showcase."""
 
     def chat(self, messages, *args, **kwargs) -> str:
-        self.last_usage = LLMUsage(input_tokens=80, output_tokens=20)
+        self.last_usage = rflow.LLMUsage(input_tokens=80, output_tokens=20)
         prompt = messages[-1]["content"].lower()
         if "hello.py" in prompt and "goodbye.py" in prompt:
             return (
@@ -66,18 +63,22 @@ def banner(msg: str) -> None:
     print(f"{'=' * 60}{RESET}\n")
 
 
-def make_agent(workspace: Workspace, *, max_depth: int, max_iterations: int) -> RLMFlow:
+def make_agent(
+    workspace: rflow.Workspace, *, max_depth: int, max_iterations: int
+) -> rflow.RecursiveFlow:
     runtime = LocalRuntime(workspace=workspace)
     runtime.register_tools(FILE_TOOLS)
-    return RLMFlow(
+    return rflow.RecursiveFlow(
         llm_client=DemoLLM(),
         runtime=runtime,
         workspace=workspace,
-        config=RLMConfig(max_depth=max_depth, max_iterations=max_iterations),
+        config=rflow.FlowConfig(max_depth=max_depth, max_iterations=max_iterations),
     )
 
 
-def run(agent: RLMFlow, graph: Graph, no_viz: bool) -> list[Graph]:
+def run(
+    agent: rflow.RecursiveFlow, graph: rflow.Graph, no_viz: bool
+) -> list[rflow.Graph]:
     if no_viz:
         history = [graph]
         step = 0
@@ -88,7 +89,7 @@ def run(agent: RLMFlow, graph: Graph, no_viz: bool) -> list[Graph]:
             print(f"-- step {step} --")
             print(graph.tree())
         return history
-    from rlmflow.utils.viz import live
+    from rflow.utils.viz import live
 
     return live(agent, graph)
 
@@ -101,7 +102,7 @@ def main() -> None:
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Workspace.create(Path(tmpdir) / "workspace")
+        workspace = rflow.Workspace.create(Path(tmpdir) / "workspace")
         agent = make_agent(
             workspace,
             max_depth=args.max_depth,

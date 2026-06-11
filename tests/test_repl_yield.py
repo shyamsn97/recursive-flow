@@ -1,9 +1,9 @@
-"""REPL await protocol — only `await rlm_wait(...)` suspends.
+"""REPL await protocol — only `await flow_wait(...)` suspends.
 
 Covers the REPL yield protocol matrix in `docs/internals.md`. The engine must:
 
 1. Suspend (and surface ``WaitRequest.agent_ids``) only when the
-   block does ``await rlm_wait(...)`` at top level.
+   block does ``await flow_wait(...)`` at top level.
 2. Reject top-level ``yield``; it is no longer part of the action language.
 3. Leave generic generator code alone: helpers defined inside the
    block, generator expressions, and ``yield from`` inside helpers
@@ -12,10 +12,10 @@ Covers the REPL yield protocol matrix in `docs/internals.md`. The engine must:
 
 from __future__ import annotations
 
-from rlmflow.graph import ChildHandle, WaitRequest
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.runtime.repl import REPL, _has_top_level_await
-from rlmflow.tools.builtins import SHOW_VARS
+from rflow.graph import ChildHandle, WaitRequest
+from rflow.runtime.local import LocalRuntime
+from rflow.runtime.repl import REPL, _has_top_level_await
+from rflow.tools.builtins import SHOW_VARS
 
 
 # ── _has_top_level_await ─────────────────────────────────────────────
@@ -28,10 +28,10 @@ def _awaits(code: str) -> bool:
 
 
 def test_top_level_await_detected():
-    assert _awaits("await rlm_wait(h)")
-    assert _awaits("x = await rlm_wait(h)")
-    assert _awaits("if cond:\n    await rlm_wait(h)\nelse:\n    pass")
-    assert _awaits("for h in handles:\n    await rlm_wait(h)")
+    assert _awaits("await flow_wait(h)")
+    assert _awaits("x = await flow_wait(h)")
+    assert _awaits("if cond:\n    await flow_wait(h)\nelse:\n    pass")
+    assert _awaits("for h in handles:\n    await flow_wait(h)")
 
 
 def test_await_inside_nested_function_is_not_top_level():
@@ -151,9 +151,9 @@ def test_top_level_yield_handle_is_rejected():
 def test_await_wait_suspends_with_correct_agent_ids():
     r = _new_repl()
     handle = ChildHandle(agent_id="root.kid")
-    r.namespace["rlm_wait"] = lambda *hs: WaitRequest([h.agent_id for h in hs])
+    r.namespace["flow_wait"] = lambda *hs: WaitRequest([h.agent_id for h in hs])
     r.namespace["h"] = handle
-    suspended, payload = r.start("print('x')\nresult = await rlm_wait(h)\n")
+    suspended, payload = r.start("print('x')\nresult = await flow_wait(h)\n")
     assert suspended is True
     request, pre = payload
     assert isinstance(request, WaitRequest)
@@ -163,10 +163,10 @@ def test_await_wait_suspends_with_correct_agent_ids():
 
 def test_multiple_handles_in_one_wait():
     r = _new_repl()
-    r.namespace["rlm_wait"] = lambda *hs: WaitRequest([h.agent_id for h in hs])
+    r.namespace["flow_wait"] = lambda *hs: WaitRequest([h.agent_id for h in hs])
     r.namespace["h1"] = ChildHandle(agent_id="root.a")
     r.namespace["h2"] = ChildHandle(agent_id="root.b")
-    suspended, (request, _) = r.start("await rlm_wait(h1, h2)")
+    suspended, (request, _) = r.start("await flow_wait(h1, h2)")
     assert suspended is True
     assert request.agent_ids == ["root.a", "root.b"]
 
@@ -231,9 +231,9 @@ def test_keyboard_interrupt_in_block_is_captured():
 
 def test_resume_returns_send_value_to_block():
     r = _new_repl()
-    r.namespace["rlm_wait"] = lambda *hs: WaitRequest([h.agent_id for h in hs])
+    r.namespace["flow_wait"] = lambda *hs: WaitRequest([h.agent_id for h in hs])
     r.namespace["h"] = ChildHandle(agent_id="root.kid")
-    suspended, _ = r.start("result = await rlm_wait(h)\nprint('got', result)\n")
+    suspended, _ = r.start("result = await flow_wait(h)\nprint('got', result)\n")
     assert suspended is True
     suspended, out = r.resume(send_value=["payload"])
     assert suspended is False

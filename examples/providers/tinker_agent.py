@@ -1,4 +1,4 @@
-"""Run RLMFlow with Tinker inference.
+"""Run RecursiveFlow with Tinker inference.
 
 Requires Tinker credentials and optional dependencies:
 
@@ -12,13 +12,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from rlmflow import RLMConfig, RLMFlow, TinkerClient, Workspace
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.utils.viz import live
+import rflow
+from rflow.runtime.local import LocalRuntime
+from rflow.utils.viz import live
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a tiny RLMFlow task with Tinker.")
+    parser = argparse.ArgumentParser(
+        description="Run a tiny RecursiveFlow task with Tinker."
+    )
     parser.add_argument(
         "--base-model",
         default="Qwen/Qwen3-8B",
@@ -43,19 +45,19 @@ def main() -> None:
     args = parser.parse_args()
 
     examples_root = Path(__file__).resolve().parents[1]
-    workspace = Workspace.create(
+    workspace = rflow.Workspace.create(
         examples_root / "_runs" / "example-workspaces" / "tinker-workspace"
     )
-    llm = TinkerClient(
+    llm = rflow.TinkerClient(
         base_model=None if args.model_path else args.base_model,
         model_path=args.model_path,
         renderer=args.renderer,
         max_tokens=args.max_tokens,
     )
-    agent = RLMFlow(
+    agent = rflow.RecursiveFlow(
         llm_client=llm,
         runtime=LocalRuntime(workspace=workspace),
-        config=RLMConfig(max_iterations=args.max_iterations),
+        config=rflow.FlowConfig(max_iterations=args.max_iterations),
     )
     print(f"Query: {args.query}\n")
     graph = agent.start(args.query)

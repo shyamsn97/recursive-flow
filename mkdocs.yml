@@ -1,9 +1,9 @@
-# site_name: REPLACE_rlmflow
+# site_name: REPLACE_recursive-flow
 # copyright: Copyright (c) 2023-present REPLACE_FULL_NAME <REPLACE_EMAIL>
 
 
 # mkdocs.yml
-site_name: rlmflow Docs
+site_name: recursive-flow Docs
 
 theme:
   name: material

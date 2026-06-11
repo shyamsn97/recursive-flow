@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import BaseModel, TypeAdapter
 
-from rlmflow.integrations.structured import StructuredOutputError, StructuredOutputParser
+from rflow.integrations.structured import StructuredOutputError, StructuredOutputParser
 
 
 class WeatherAdvice(BaseModel):

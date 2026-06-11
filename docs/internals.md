@@ -1,9 +1,9 @@
-# RLMFlow Internals
+# RecursiveFlow Internals
 
 A deep reference for the engine's mechanics: data model, step
 lifecycle, REPL/await protocol, resume semantics, persistence, and
-the extension seams on `RLMFlow`. If you want to subclass the
-engine, debug a weird run, or write something on top of rlmflow,
+the extension seams on `RecursiveFlow`. If you want to subclass the
+engine, debug a weird run, or write something on top of recursive-flow,
 this is the doc.
 
 User-facing topic guides ([control](control.md), [observability](observability.md),
@@ -16,8 +16,8 @@ User-facing topic guides ([control](control.md), [observability](observability.m
 
 ```
                 ┌────────────────────────────────────────────────┐
-                │                    RLMFlow                     │  ← state + every overridable method
-                │  (rlmflow/rlm.py — ~1k lines, one class)       │
+                │                    RecursiveFlow                     │  ← state + every overridable method
+                │  (recursive-flow/flow.py — ~1k lines, one class)       │
                 └──┬───────────────┬───────────────────┬────────┘
    pure helpers ───┼───────────────┼───────────────────┼─────────────────┐
                    ▼               ▼                   ▼                 ▼
@@ -31,7 +31,7 @@ User-facing topic guides ([control](control.md), [observability](observability.m
                   RuntimeRef        →   Runtime  (REPL: start_code, resume_code)
 ```
 
-- **`RLMFlow`** owns state (sessions, runtimes, config, pool) and the
+- **`RecursiveFlow`** owns state (sessions, runtimes, config, pool) and the
   loop. Every overridable seam — `step`, `apply_one`, `step_llm`,
   `step_exec`, `step_after_supervising`, `reply_to`, `call_llm`,
   `extract_code`, `build_messages`, `inject_env`, `spawn_child`, etc.
@@ -45,7 +45,7 @@ User-facing topic guides ([control](control.md), [observability](observability.m
   sandbox runtimes (`ModalRuntime`, `E2BRuntime`, `DaytonaRuntime`).
 
 The principle: **if something needs engine state to do its job, it's
-a method on `RLMFlow`. If it's a pure function of its arguments, it's
+a method on `RecursiveFlow`. If it's a pure function of its arguments, it's
 in `engine/*`. No middle category, no kwarg bags.**
 
 ---
@@ -215,7 +215,7 @@ All model requests route through a shared `LLMChannel`. Agent turns call
 `LLMChannel.call(model, messages)`, and `llm_query_batched(...)` submits
 its prompts to `LLMChannel.batch(...)` instead of creating its own nested
 executor. The channel owns the run-wide LLM concurrency cap
-(`RLMConfig.llm_max_concurrency`, falling back to the normal engine
+(`FlowConfig.llm_max_concurrency`, falling back to the normal engine
 concurrency when unset), preserves batch result order, and uses
 per-request `LLMClient.completion(...) -> (text, usage)` so usage
 accounting never reads a racy shared `last_usage`. Batched one-shot
@@ -254,13 +254,13 @@ observation just like `step_exec`.
 
 Agents delegate through one launcher — `await launch_subagents([...])`. This is
 a plain `async def` installed in the REPL namespace; it spawns its children via
-the internal `rlm_delegate(...)`
-primitive and then performs a single `await rlm_wait(*handles)`. So while
+the internal `flow_delegate(...)`
+primitive and then performs a single `await flow_wait(*handles)`. So while
 agents only ever write the launchers, the value the engine actually suspends on
-is still the `WaitRequest` produced by that internal `rlm_wait` — which
+is still the `WaitRequest` produced by that internal `flow_wait` — which
 propagates up through the launcher's `await` chain to the top-level driver. The
-rest of this section describes that suspension point; `rlm_delegate` /
-`rlm_wait` are internal plumbing, not part of the agent-facing surface.
+rest of this section describes that suspension point; `flow_delegate` /
+`flow_wait` are internal plumbing, not part of the agent-facing surface.
 
 The engine **only** intercepts top-level `await` values that resolve to a
 `WaitRequest`.
@@ -361,7 +361,7 @@ whole block a coroutine. (This mirrors why a `yield` inside a nested
 #### Decision 2 — suspend or finish?
 
 Once the block is a coroutine, the engine drives it with `send()`. Each
-suspension surfaces whatever `rlm_wait(...)` awaited:
+suspension surfaces whatever `flow_wait(...)` awaited:
 
 ```python
 request = coro.send(prev_value)        # advance to the next await
@@ -370,7 +370,7 @@ if isinstance(request, WaitRequest):
 # else: TypeError — only a launcher's WaitRequest can suspend
 ```
 
-A launcher's internal `await rlm_wait(...)` evaluates to a `WaitRequest`, which
+A launcher's internal `await flow_wait(...)` evaluates to a `WaitRequest`, which
 is the only value the engine knows how to suspend on. Awaiting anything else is
 an error. When the coroutine raises `StopIteration`, the block is done and
 the engine records the captured stdout.
@@ -390,10 +390,10 @@ single `ExecAction → ExecOutput`.
 
 ### Implementation
 
-- `rlmflow/runtime/repl.py::_has_top_level_await(tree)` — AST walk that
+- `recursive-flow/runtime/repl.py::_has_top_level_await(tree)` — AST walk that
   skips `FunctionDef` / `AsyncFunctionDef` / `Lambda` / `ClassDef` /
   comprehension bodies.
-- `rlmflow/runtime/repl.py::REPL.start()` / `REPL.advance()` — compile
+- `recursive-flow/runtime/repl.py::REPL.start()` / `REPL.advance()` — compile
   with top-level-await, then `coro.send(...)` until the coroutine
   suspends on a `WaitRequest` (return suspended) or raises
   `StopIteration` (done).
@@ -418,10 +418,10 @@ results = await launch_subagents([
 print(len(results))
 ```
 
-the flow is (the launcher spawns each child via the internal `rlm_delegate` and
-suspends on a single `await rlm_wait(*handles)`):
+the flow is (the launcher spawns each child via the internal `flow_delegate` and
+suspends on a single `await flow_wait(*handles)`):
 
-1. The parent REPL runs until the launcher's `await rlm_wait(*handles)`.
+1. The parent REPL runs until the launcher's `await flow_wait(*handles)`.
 2. The coroutine suspends. The assignment to `results` has **not**
    happened yet.
 3. The graph records a `SupervisingOutput(waiting_on=[a, b])`.
@@ -432,7 +432,7 @@ suspends on a single `await rlm_wait(*handles)`):
 6. The line becomes equivalent to `results = child_results`.
 7. The same stateful REPL continues and runs `print(len(results))`.
 8. If the resumed code ends without `done(...)` or another
-   `await rlm_wait(...)`, the engine records an `ExecOutput`
+   `await flow_wait(...)`, the engine records an `ExecOutput`
    (`resumed_from=[...]`) and the next LLM turn continues in the same
    stateful REPL — variables assigned after the wait are still in
    scope.
@@ -482,10 +482,10 @@ results = await launch_subagents([
 print(f"got {len(results)} child results")
 ```
 
-Runtime execution (the launcher expands to `rlm_delegate` + `await rlm_wait`):
+Runtime execution (the launcher expands to `flow_delegate` + `await flow_wait`):
 
-1. The launcher's `rlm_delegate(...)` calls create four child agents.
-2. Its single `await rlm_wait(*handles)` suspends the root coroutine.
+1. The launcher's `flow_delegate(...)` calls create four child agents.
+2. Its single `await flow_wait(*handles)` suspends the root coroutine.
 3. The graph records `SupervisingOutput(waiting_on=[...4 ids...])`.
 
 ```
@@ -504,7 +504,7 @@ root.analyst       [0] UserQuery
 ```
 
 Data location: child outputs do not exist yet. Root REPL is suspended
-inside the launcher at `await rlm_wait(*handles)`. `results` does not exist
+inside the launcher at `await flow_wait(*handles)`. `results` does not exist
 yet in the top-level namespace.
 
 #### Step 2 — children run
@@ -651,7 +651,7 @@ but the live Python coroutine that suspended inside the runtime is
 gone.
 
 `engine/replay.py::replay_to_suspension(graph, target, runtime)` handles
-this. It re-runs the action code with `rlm_delegate` in *replay mode*
+this. It re-runs the action code with `flow_delegate` in *replay mode*
 (returns existing child handles instead of spawning new ones), so the
 coroutine pauses again at the same `await` the original recorded. The
 regular resume path then takes over.
@@ -666,7 +666,7 @@ def step_after_supervising(self, graph, last):
     runtime = self.inject_env(graph, resume_action)
     if not runtime.suspended:
         # Live coroutine is gone — process restart, fork, etc.
-        # Replay action code with rlm_delegate in replay mode so the
+        # Replay action code with flow_delegate in replay mode so the
         # coroutine pauses at the same await we recorded.
         replay_to_suspension(graph, last, runtime)
     # Now the runtime is suspended at the right await; resume.
@@ -720,8 +720,8 @@ workspace/
   (`query`, `system_prompt`, `config`, `runtime`, etc.) to
   `agent.json`. Called on agent creation only.
 - `session.write_transcript(agent_id, transcript)` — update the agent's
-  flat LLM chat history. Called from `RLMFlow.transcript_recorder.record_turn()`
-  (a `TranscriptRecorder` living in `rlmflow/engine/transcript.py`)
+  flat LLM chat history. Called from `RecursiveFlow.transcript_recorder.record_turn()`
+  (a `TranscriptRecorder` living in `recursive-flow/engine/transcript.py`)
   inside `reply_to()`, and from `record_terminal()` when an agent
   finishes via `done(...)`. **Append-only**: each call adds just the
   new messages since the last call, never rewrites the prefix.
@@ -768,7 +768,7 @@ full    = CONTEXT.read()        # full payload
 ```
 
 The launchers forward their `context=` argument to the internal
-`rlm_delegate(*, name, query, context)`, which writes the child's context
+`flow_delegate(*, name, query, context)`, which writes the child's context
 payload under `context/<child_id>/context.txt` before the child's first
 `UserQuery` is appended.
 
@@ -785,22 +785,22 @@ self.runtime_sessions: dict[str, Runtime] = {ROOT_RUNTIME_ID: root_runtime}
 
 Three methods own the lifecycle:
 
-- `RLMFlow.runtime_for(ref)` — return the runtime bound to `ref`.
+- `RecursiveFlow.runtime_for(ref)` — return the runtime bound to `ref`.
   Lazily restores on a fresh engine attached to a forked or reloaded
   workspace (the dict only holds `ROOT_RUNTIME_ID` after a cold
   start; everything else is materialized on demand by cloning the
   root or calling `runtime_factory`).
-- `RLMFlow.create_runtime_session(parent_runtime, *, agent_id)` —
+- `RecursiveFlow.create_runtime_session(parent_runtime, *, agent_id)` —
   allocate a fresh runtime session for a freshly-spawned child.
   Called from `spawn_child()`.
-- `RLMFlow.inject_env(graph, node)` — clear and re-seed
+- `RecursiveFlow.inject_env(graph, node)` — clear and re-seed
   `runtime.env` and the REPL namespace before each code execution
   or resume. Pushes `AGENT_ID`, `DEPTH`, `MAX_DEPTH`,
   `PARENT_NODE_ID`, `DONE_RESULT`, `DELEGATED`, plus `CONTEXT` /
   `SESSION` proxies.
 
-`register_tools(runtime)` binds the core `done` / `rlm_wait` /
-`rlm_delegate` closures to `runtime.env`. The `rlm_delegate` closure
+`register_tools(runtime)` binds the core `done` / `flow_wait` /
+`flow_delegate` closures to `runtime.env`. The `flow_delegate` closure
 captures `self.spawn_child` so it can call back into engine state. The
 agent-facing `launch_subagents` launcher is registered as a real core tool and
 composes over those closures at call time, so it works identically on local and
@@ -811,9 +811,9 @@ shipped variants.
 
 ---
 
-## RLMFlow — the overridable surface
+## RecursiveFlow — the overridable surface
 
-Every public method on `RLMFlow` is an extension seam. Subclass and
+Every public method on `RecursiveFlow` is an extension seam. Subclass and
 override what you want; the default implementations call `super()`
 or pure helpers from `engine/*`.
 
@@ -831,36 +831,36 @@ Every override actually works. The engine calls these through
 `self`, so the dispatch goes through your subclass:
 
 ```python
-class LoggingFlow(RLMFlow):
+class LoggingFlow(RecursiveFlow):
     def extract_code(self, text):
         code = super().extract_code(text)
         return None if code is None else PRELUDE + code
 
-class RetryingFlow(RLMFlow):
+class RetryingFlow(RecursiveFlow):
     def call_llm(self, messages, *, client=None):
         for _ in range(3):
             try: return super().call_llm(messages, client=client)
             except TransientError: ...
         raise
 
-class TracingFlow(RLMFlow):
+class TracingFlow(RecursiveFlow):
     def apply_one(self, action):
         log.info("apply %s on %s", type(action).__name__, action.agent_id)
         return super().apply_one(action)
 
-class CachedExecFlow(RLMFlow):
+class CachedExecFlow(RecursiveFlow):
     def step_exec(self, graph, llm_output):
         if hit := self.cache.get(llm_output.code):
             return self._write_cached(graph, llm_output, hit)
         return super().step_exec(graph, llm_output)
 
-class RoutedFlow(RLMFlow):
+class RoutedFlow(RecursiveFlow):
     def llm_client_for(self, graph):
         if graph.depth >= 2:
             return self.llm_clients["fast"]
         return super().llm_client_for(graph)
 
-class GatedSpawnFlow(RLMFlow):
+class GatedSpawnFlow(RecursiveFlow):
     def spawn_child(self, *args, **kwargs):
         if self.quota_exceeded(args[0]):
             return "[refused: quota exceeded]"
@@ -875,7 +875,7 @@ use `PromptBuilder` sections instead. See
 
 ## Concurrency
 
-`RLMFlow.step()` plans every runnable agent's next action, then
+`RecursiveFlow.step()` plans every runnable agent's next action, then
 applies them through `self.pool`. The pool is a small abstraction
 with one method:
 
@@ -885,10 +885,10 @@ class Pool(ABC):
     def execute(self, tasks: list[tuple[str, Callable[[], Any]]]) -> dict[str, Any]: ...
 ```
 
-Three shipped pools (`rlmflow/utils/pool.py`):
+Three shipped pools (`recursive-flow/utils/pool.py`):
 
 - `ThreadPool(max_workers)` — `concurrent.futures.ThreadPoolExecutor`.
-  Used by default when `RLMConfig.max_concurrency >= 2`.
+  Used by default when `FlowConfig.max_concurrency >= 2`.
 - `SequentialPool` — runs one task at a time. Used when
   `max_concurrency` is `None`, `0`, or `1`. Useful for debugging
   and rate-limited setups.
@@ -899,11 +899,11 @@ Default `max_concurrency = os.cpu_count()`. Agent work is mostly LLM
 I/O, so the threadpool is essentially free; explicit `None` is the
 opt-out.
 
-You can also pass a custom `pool=` to `RLMFlow(...)`:
+You can also pass a custom `pool=` to `RecursiveFlow(...)`:
 
 ```python
-agent = RLMFlow(..., pool=ThreadPool(max_workers=4))
-agent = RLMFlow(..., pool=lambda tasks: my_async_scheduler(tasks))
+agent = RecursiveFlow(..., pool=ThreadPool(max_workers=4))
+agent = RecursiveFlow(..., pool=lambda tasks: my_async_scheduler(tasks))
 ```
 
 ---
@@ -948,7 +948,7 @@ the next round.
 
 ### Budget
 
-`apply_one` enforces `RLMConfig.max_budget` at the top of every call.
+`apply_one` enforces `FlowConfig.max_budget` at the top of every call.
 When exceeded, it writes
 `DoneOutput(result=f"[budget exceeded: {n} tokens]")` and skips the
 handler entirely.
@@ -963,7 +963,7 @@ if parent.depth >= self.config.max_depth:
     return f"[refused: max depth {self.config.max_depth}] Do this directly."
 ```
 
-The string return is the documented refusal protocol — `rlm_delegate(...)`
+The string return is the documented refusal protocol — `flow_delegate(...)`
 in the REPL gets back a string instead of a `ChildHandle`, so the
 parent's code can detect it (`isinstance(h, str)`) and recover.
 

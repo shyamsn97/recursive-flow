@@ -19,7 +19,7 @@ isolated runtime:
 
 ```python
 DockerRuntime(
-    image="rlmflow:local",
+    image="recursive-flow:local",
     network="none",           # no outbound traffic
     cpus=1.0,                 # CPU quota
     memory="512m",            # OOM cap
@@ -66,9 +66,9 @@ rejection string and the engine will record it as the action's
 observation:
 
 ```python
-from rlmflow import RLMFlow
+import rflow
 
-class ReviewingRLM(RLMFlow):
+class ReviewingFlow(rflow.RecursiveFlow):
     def _run_code(self, view, code: str):
         if "rm -rf" in code and input(f"run? {code}\n> ") != "y":
             return False, "rejected by reviewer"

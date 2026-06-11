@@ -1,7 +1,7 @@
 # Supervisor Injection Example
 
 This directory demonstrates prompt-based graph surgery on a real saved
-`RLMFlow` run. The point is injection: replace a real `SupervisingOutput` node,
+`RecursiveFlow` run. The point is injection: replace a real `SupervisingOutput` node,
 truncate the now-obsolete children, materialize the edited graph as a workspace,
 and continue with an explicitly bound agent.
 
@@ -18,7 +18,7 @@ and continue with an explicitly bound agent.
 The generated workspace directories are normal workspaces. Inspect them with:
 
 ```bash
-rlmflow view examples/_runs/word-search-workspace/word-search-baseline
+recursive-flow view examples/_runs/word-search-workspace/word-search-baseline
 ```
 
 ## Flow

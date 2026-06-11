@@ -17,22 +17,24 @@ Run:
 
 from __future__ import annotations
 
-from rlmflow.graph import DoneOutput, Graph, LLMOutput, UserQuery
+import rflow
 
 
-def build_graph() -> Graph:
-    root_q = UserQuery(agent_id="root", seq=0, content="ship pkg")
-    root_action = LLMOutput(agent_id="root", seq=1, reply="split", code="...")
+def build_graph() -> rflow.Graph:
+    root_q = rflow.UserQuery(agent_id="root", seq=0, content="ship pkg")
+    root_action = rflow.LLMOutput(agent_id="root", seq=1, reply="split", code="...")
 
-    writer_q = UserQuery(agent_id="root.write", seq=0, content="write code")
-    writer_action = LLMOutput(agent_id="root.write", seq=1, reply="lint", code="...")
-    linter_q = UserQuery(agent_id="root.write.linter", seq=0, content="lint pass")
-    linter_done = DoneOutput(agent_id="root.write.linter", seq=1, result="clean")
+    writer_q = rflow.UserQuery(agent_id="root.write", seq=0, content="write code")
+    writer_action = rflow.LLMOutput(
+        agent_id="root.write", seq=1, reply="lint", code="..."
+    )
+    linter_q = rflow.UserQuery(agent_id="root.write.linter", seq=0, content="lint pass")
+    linter_done = rflow.DoneOutput(agent_id="root.write.linter", seq=1, result="clean")
 
-    test_q = UserQuery(agent_id="root.test", seq=0, content="run pytest")
-    test_done = DoneOutput(agent_id="root.test", seq=1, result="3 passed")
+    test_q = rflow.UserQuery(agent_id="root.test", seq=0, content="run pytest")
+    test_done = rflow.DoneOutput(agent_id="root.test", seq=1, result="3 passed")
 
-    linter = Graph.from_meta_dict(
+    linter = rflow.Graph.from_meta_dict(
         {
             "agent_id": "root.write.linter",
             "depth": 2,
@@ -41,7 +43,7 @@ def build_graph() -> Graph:
         },
         nodes=[linter_q, linter_done],
     )
-    writer = Graph.from_meta_dict(
+    writer = rflow.Graph.from_meta_dict(
         {
             "agent_id": "root.write",
             "depth": 1,
@@ -51,7 +53,7 @@ def build_graph() -> Graph:
         nodes=[writer_q, writer_action],
         children={"root.write.linter": linter},
     )
-    tester = Graph.from_meta_dict(
+    tester = rflow.Graph.from_meta_dict(
         {
             "agent_id": "root.test",
             "depth": 1,
@@ -60,7 +62,7 @@ def build_graph() -> Graph:
         },
         nodes=[test_q, test_done],
     )
-    return Graph.from_meta_dict(
+    return rflow.Graph.from_meta_dict(
         {"agent_id": "root", "depth": 0, "query": "ship pkg"},
         nodes=[root_q, root_action],
         children={"root.write": writer, "root.test": tester},
@@ -91,20 +93,26 @@ def main() -> None:
 
     banner("dotted-path descent")
     same_linter = g["root"]["root.write"]["root.write.linter"]
-    print(f"g['root']['root.write']['root.write.linter'] is g[full] -> "
-          f"{same_linter is linter}")
+    print(
+        f"g['root']['root.write']['root.write.linter'] is g[full] -> "
+        f"{same_linter is linter}"
+    )
 
     banner("walk() / subtree() depth-first")
     for sub in g.walk():
         indent = "  " * sub.depth
         tip = sub.current()
-        print(f"{indent}{sub.agent_id}  ({len(sub.nodes)} states, tip="
-              f"{tip.type if tip else 'empty'})")
+        print(
+            f"{indent}{sub.agent_id}  ({len(sub.nodes)} states, tip="
+            f"{tip.type if tip else 'empty'})"
+        )
 
     banner("parent links")
     for sub in g.walk():
-        print(f"{sub.agent_id:<24} parent_id={sub.parent_id!s:<12} "
-              f"parent_node_id={(sub.parent_node_id or '-')[:14]}")
+        print(
+            f"{sub.agent_id:<24} parent_id={sub.parent_id!s:<12} "
+            f"parent_node_id={(sub.parent_node_id or '-')[:14]}"
+        )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Sandbox Examples
 
-These examples run a single RLMFlow task whose Python code executes inside a
+These examples run a single RecursiveFlow task whose Python code executes inside a
 remote sandbox: build a simple 2D side-scrolling platformer in plain HTML,
 CSS, and JavaScript. They use `OpenAIClient`, so set `OPENAI_API_KEY` before
 running them.
@@ -29,14 +29,14 @@ python examples/sandboxes/modal_agent.py --model gpt-5
 ```
 
 The Modal example builds its image from this local checkout by copying
-the repo into `/opt/rlmflow` and running `pip install -e /opt/rlmflow`
+the repo into `/opt/recursive-flow` and running `pip install -e /opt/recursive-flow`
 inside the image.
 
 Useful Modal sandbox args:
 
 ```bash
 python examples/sandboxes/modal_agent.py \
-  --app-name rlmflow-dev \
+  --app-name recursive-flow-dev \
   --sandbox-timeout 600 \
   --remote-workdir /workspace
 ```
@@ -51,15 +51,15 @@ python examples/sandboxes/e2b_agent.py --model gpt-5
 ```
 
 By default, `E2BRuntime` starts from E2B's base template and runs
-`python -m pip install -q rlmflow` inside the sandbox. Pass
+`python -m pip install -q recursive-flow` inside the sandbox. Pass
 `template=...` and `setup_commands=[]` if you maintain a prebuilt
-template with `rlmflow` already installed.
+template with `recursive-flow` already installed.
 
 Useful E2B sandbox args:
 
 ```bash
 python examples/sandboxes/e2b_agent.py \
-  --template rlmflow-dev \
+  --template recursive-flow-dev \
   --skip-setup \
   --sandbox-timeout 600 \
   --remote-workdir /workspace
@@ -75,14 +75,14 @@ python examples/sandboxes/daytona_agent.py --model gpt-5
 ```
 
 By default, `DaytonaRuntime` creates a default Python sandbox and runs
-`python -m pip install -q rlmflow` inside it. Pass provider-specific
+`python -m pip install -q recursive-flow` inside it. Pass provider-specific
 `create_params` and `setup_commands=[]` for a prebuilt snapshot.
 
 Useful Daytona sandbox args:
 
 ```bash
 python examples/sandboxes/daytona_agent.py \
-  --snapshot rlmflow-dev \
+  --snapshot recursive-flow-dev \
   --skip-setup \
   --create-timeout 120 \
   --remote-workdir /workspace

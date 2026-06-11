@@ -4,7 +4,7 @@ direct_scan_workspace := $(base_workspace)/word-search-direct-scan
 cols_direct_workspace := $(base_workspace)/word-search-cols-direct
 
 render_baseline:
-	rlmflow render ./$(baseline_workspace) \
+	recursive-flow render ./$(baseline_workspace) \
 	--format steps \
 	--out ./$(baseline_workspace)/frames/baseline \
 	--width 1600 \
@@ -12,7 +12,7 @@ render_baseline:
 	--scale 2
 
 render_direct_scan:
-	rlmflow render ./$(direct_scan_workspace) \
+	recursive-flow render ./$(direct_scan_workspace) \
 	--format steps \
 	--out ./$(direct_scan_workspace)/frames/direct-scan \
 	--width 1600 \
@@ -20,7 +20,7 @@ render_direct_scan:
 	--scale 2
 
 render_cols_direct:
-	rlmflow render ./$(cols_direct_workspace) \
+	recursive-flow render ./$(cols_direct_workspace) \
 	--format steps \
 	--out ./$(cols_direct_workspace)/frames/cols-direct \
 	--width 1600 \

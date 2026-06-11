@@ -1,6 +1,6 @@
 # Use Cases
 
-Larger examples that use RLMFlow for a concrete workload.
+Larger examples that use RecursiveFlow for a concrete workload.
 
 - `summarizer.py` does recursive map-reduce summarization over a long document.
 - `needle_haystack.py` searches a huge in-memory `CONTEXT`.

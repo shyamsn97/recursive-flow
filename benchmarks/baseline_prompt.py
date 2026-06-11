@@ -1,29 +1,29 @@
 """Baseline (no-delegation) prompt — useful as a control in benchmarks.
 
 Drops every delegation rule, the recursion section, and the multi-agent
-examples so the agent doesn't waste turns proposing `rlm_delegate(...)` calls
-that the runtime would refuse anyway (the engine filters `rlm_delegate` /
-`rlm_wait` out of the tools section when ``max_depth == 0``).
+examples so the agent doesn't waste turns proposing `flow_delegate(...)` calls
+that the runtime would refuse anyway (the engine filters `flow_delegate` /
+`flow_wait` out of the tools section when ``max_depth == 0``).
 
 Useful as a control when comparing against the recursive version: same
 model, same tools, same task — minus delegation. Lives under
-``benchmarks/`` rather than ``rlmflow/prompts/`` because it isn't part
+``benchmarks/`` rather than ``rflow/prompts/`` because it isn't part
 of the core library surface; benchmarks that want it pass it in
 explicitly::
 
     from benchmarks.baseline_prompt import BASELINE_BUILDER
 
-    engine = RLMFlow(
+    engine = RecursiveFlow(
         llm_client=...,
-        config=RLMConfig(max_depth=0, ...),
+        config=FlowConfig(max_depth=0, ...),
         prompt_builder=BASELINE_BUILDER,
     )
 """
 
 from __future__ import annotations
 
-from rlmflow.prompts.builder import PromptBuilder
-from rlmflow.prompts.default import CONTEXT_TEXT
+from rflow.prompts.builder import PromptBuilder
+from rflow.prompts.default import CONTEXT_TEXT
 
 ROLE_BASELINE_TEXT = """
 You are an agent with a Python REPL. You solve tasks by writing and executing Python programs.

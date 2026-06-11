@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from types import ModuleType, SimpleNamespace
 
-from rlmflow.llm import TinkerClient
+from rflow.llm import TinkerClient
 
 
 class _FakeSamplingParams:

@@ -5,17 +5,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from rlmflow import (
+from rflow import (
     Graph,
     UserQuery,
-    RLMConfig,
-    RLMFlow,
+    FlowConfig,
+    RecursiveFlow,
     DoneOutput,
     Workspace,
 )
-from rlmflow.llm import LLMClient
-from rlmflow.workspace import ContextVariable, FileContext, FileSession, FileStore
-from rlmflow.workspace import graph_fingerprint
+from rflow.llm import LLMClient
+from rflow.workspace import ContextVariable, FileContext, FileSession, FileStore
+from rflow.workspace import graph_fingerprint
 
 
 class DummyLLM(LLMClient):
@@ -214,15 +214,15 @@ def test_workspace_sync_graph_prunes_payloads_and_caches_fingerprint(tmp_path: P
     assert workspace.path("notes.txt").read_text(encoding="utf-8") == "keep me"
 
 
-# ── RLMFlow start round-trip ────────────────────────────────────────
+# ── RecursiveFlow start round-trip ────────────────────────────────────────
 
 
-def test_rlm_start_seeds_context_and_persists_files(tmp_path: Path):
+def test_flow_start_seeds_context_and_persists_files(tmp_path: Path):
     workspace = Workspace.create(tmp_path / "workspace")
-    engine = RLMFlow(
+    engine = RecursiveFlow(
         llm_client=DummyLLM(),
         workspace=workspace,
-        config=RLMConfig(max_iterations=2),
+        config=FlowConfig(max_iterations=2),
     )
     # Engine semantics are obs-to-obs — one ``step`` advances by a
     # single obs→obs transition, so the LLM half writes
@@ -244,13 +244,13 @@ def test_rlm_start_seeds_context_and_persists_files(tmp_path: Path):
 
 
 def test_runtime_workspace_path_auto_attaches_workspace(tmp_path: Path):
-    from rlmflow.runtime.local import LocalRuntime
+    from rflow.runtime.local import LocalRuntime
 
     root = tmp_path / "workspace"
-    engine = RLMFlow(
+    engine = RecursiveFlow(
         llm_client=DummyLLM(),
         runtime=LocalRuntime(workspace=root),
-        config=RLMConfig(max_iterations=2),
+        config=FlowConfig(max_iterations=2),
     )
     engine.step(engine.start("persist graph automatically"))
 
