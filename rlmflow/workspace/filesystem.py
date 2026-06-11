@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from rlmflow.graph import WorkspaceRef, parse_node_obj
+from rlmflow.graph import Graph, parse_node_obj
 from rlmflow.workspace.artifacts import ArtifactStore
 from rlmflow.workspace.base import BaseWorkspace, Context, Session, build_graph
 from rlmflow.workspace.context_helpers import (
@@ -204,7 +204,6 @@ class Workspace(BaseWorkspace):
         *,
         session: Session | None = None,
         context: Context | None = None,
-        branch_id: str = "main",
         uri: str | None = None,
     ) -> None:
         self.root = Path(root).resolve()
@@ -212,7 +211,6 @@ class Workspace(BaseWorkspace):
         self.session = session or FileSession(self.root)
         self.context = context or FileContext(self.root)
         self.artifacts = ArtifactStore(self.root)
-        self.branch_id = branch_id
         self.uri = uri or str(self.root)
 
     @classmethod
@@ -220,24 +218,34 @@ class Workspace(BaseWorkspace):
         cls,
         dir: str | Path,
         *,
-        branch_id: str = "main",
         session: Session | None = None,
         context: Context | None = None,
     ) -> Workspace:
-        return cls(dir, session=session, context=context, branch_id=branch_id)
+        return cls(dir, session=session, context=context)
 
     @classmethod
-    def open(cls, ref: WorkspaceRef) -> Workspace:
-        return cls.create(ref.root, branch_id=ref.branch_id)
+    def from_graph(
+        cls,
+        graph: Graph,
+        dir: str | Path | None = None,
+    ) -> Workspace:
+        """Create a workspace from ``graph``."""
+
+        if dir is None:
+            raise TypeError("Workspace.from_graph(...) requires a workspace path")
+        root = Path(dir).resolve()
+        if root.exists():
+            shutil.rmtree(root)
+        workspace = cls.create(root)
+        workspace.sync_graph(graph)
+        return workspace
 
     @classmethod
     def open_path(
         cls,
         dir: str | Path,
-        *,
-        branch_id: str = "main",
     ) -> Workspace:
-        return cls.create(dir, branch_id=branch_id)
+        return cls.create(dir)
 
     @staticmethod
     def check_path(path: str | Path) -> bool:
@@ -269,7 +277,6 @@ class Workspace(BaseWorkspace):
         self,
         new_location: str | Path | None = None,
         *,
-        new_branch_id: str | None = None,
         new_dir: str | Path | None = None,
     ) -> Workspace:
         location = new_location if new_location is not None else new_dir
@@ -277,7 +284,6 @@ class Workspace(BaseWorkspace):
             raise TypeError("fork() requires a new workspace location")
 
         new_root = Path(location).resolve()
-        branch_id = new_branch_id or _branch_id_from_location(location)
         if new_root.exists():
             shutil.rmtree(new_root)
         new_root.mkdir(parents=True, exist_ok=True)
@@ -302,22 +308,11 @@ class Workspace(BaseWorkspace):
             new_root,
             session=self.session.fork(new_root),
             context=self.context.fork(new_root),
-            branch_id=branch_id,
         )
         graph = forked.session.load_graph()
         if graph.nodes or graph.children:
-            ref = WorkspaceRef(root=str(forked.root), branch_id=graph.branch_id)
-            for agent in graph.walk():
-                agent.workspace = ref
-            forked.session.rewrite_graph(graph)
+            forked.sync_graph(graph)
         return forked
-
-
-def _branch_id_from_location(location: str | Path) -> str:
-    text = str(location).rstrip("/")
-    if "://" in text:
-        return text.rsplit("/", 1)[-1] or "branch"
-    return Path(text).name or "branch"
 
 
 def _prune_agent_dirs(base: Path, agent_ids: list[str]) -> None:

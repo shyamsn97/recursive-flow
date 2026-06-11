@@ -35,6 +35,7 @@ from rlmflow import (
     is_errored,
     is_resumed,
     is_supervising,
+    parallel_step,
 )
 from rlmflow.runtime.local import LocalRuntime
 from rlmflow.utils.trace import load_trace, save_trace
@@ -82,6 +83,18 @@ _agent = make_agent
 _run = run_to_completion
 
 
+class _RecordingPool:
+    def __init__(self) -> None:
+        self.ids: list[str] = []
+
+    def execute(self, tasks):
+        self.ids.extend(task_id for task_id, _ in tasks)
+        return {task_id: fn() for task_id, fn in tasks}
+
+    def run_until_idle(self, tasks, refill):
+        return self.execute(tasks)
+
+
 # ── lifecycle ────────────────────────────────────────────────────────
 
 
@@ -105,6 +118,68 @@ def test_step_drives_one_shot_to_result():
     assert is_done(graph.current())
     assert graph.result() == "ok"
     assert _types(graph) == ["user_query", "llm_action", "llm_output", "exec_action", "done_output"]
+
+
+def test_step_accepts_per_call_pool_override():
+    agent = _agent()
+    graph = agent.start("say ok")
+    pool = _RecordingPool()
+
+    graph = agent.step(graph, pool=pool)
+
+    assert pool.ids == ["root"]
+    assert graph.current().type == "llm_output"
+
+
+def test_parallel_step_runs_multiple_graphs_on_one_pool():
+    agent1 = _agent('```repl\ndone("one")\n```')
+    agent2 = _agent('```repl\ndone("two")\n```')
+    graph1 = agent1.start("one")
+    graph2 = agent2.start("two")
+    pool = _RecordingPool()
+
+    graph1, graph2 = parallel_step(
+        [(agent1, graph1), (agent2, graph2)],
+        pool=pool,
+    )
+
+    assert pool.ids == ["0:root", "1:root"]
+    assert graph1.current().type == "llm_output"
+    assert graph2.current().type == "llm_output"
+
+    graph1, graph2 = parallel_step(
+        [(agent1, graph1), (agent2, graph2)],
+        pool=pool,
+    )
+
+    assert pool.ids == ["0:root", "1:root", "0:root", "1:root"]
+    assert graph1.result() == "one"
+    assert graph2.result() == "two"
+
+
+def test_parallel_step_with_one_graph_matches_step():
+    step_agent = _agent('```repl\ndone("ok")\n```')
+    parallel_agent = _agent('```repl\ndone("ok")\n```')
+    step_graph = step_agent.start("say ok")
+    parallel_graph = parallel_agent.start("say ok")
+
+    step_graph = step_agent.step(step_graph)
+    [parallel_graph] = parallel_step([(parallel_agent, parallel_graph)])
+
+    assert _types(parallel_graph) == _types(step_graph)
+    assert parallel_graph.current().type == step_graph.current().type
+
+
+def test_parallel_step_rejects_eager_children():
+    agent = _agent(eager_children=True)
+    graph = agent.start("say ok")
+
+    try:
+        parallel_step([(agent, graph)], pool=_RecordingPool())
+    except ValueError as exc:
+        assert "eager_children=True" in str(exc)
+    else:
+        raise AssertionError("parallel_step accepted eager_children=True")
 
 
 def test_step_skips_workspace_sync_when_graph_fingerprint_matches(tmp_path, monkeypatch):

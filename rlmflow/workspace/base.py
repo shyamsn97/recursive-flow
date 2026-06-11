@@ -11,23 +11,12 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from rlmflow.graph import Graph, Node, WorkspaceRef, retrace_steps
+from rlmflow.graph import Graph, Node, retrace_steps
 from rlmflow.workspace.graph_load import build_graph
 from rlmflow.workspace.sync import engine_state_path, excluded, sync_lock_for
 
 if TYPE_CHECKING:
     from rlmflow.workspace.artifacts import ArtifactStore
-
-
-def graph_with_workspace(graph: Graph, workspace: BaseWorkspace) -> Graph:
-    """Return a graph copy stamped with ``workspace`` refs."""
-
-    out = graph.copy(deep=True)
-    ref = WorkspaceRef(root=str(workspace.root), branch_id=workspace.branch_id)
-    for agent in out.walk():
-        agent.workspace = ref
-        agent.branch_id = workspace.branch_id
-    return out
 
 
 def graph_fingerprint(graph: Graph) -> str:
@@ -157,7 +146,6 @@ class BaseWorkspace(ABC):
     session: Session
     context: Context
     artifacts: ArtifactStore
-    branch_id: str
     uri: str | None = None
 
     @abstractmethod
@@ -172,10 +160,17 @@ class BaseWorkspace(ABC):
     def fork(
         self,
         new_location: str | Path | None = None,
-        *,
-        new_branch_id: str | None = None,
     ) -> BaseWorkspace:
-        """Create a durable branch copy."""
+        """Create a durable workspace copy."""
+
+    @classmethod
+    @abstractmethod
+    def from_graph(
+        cls,
+        graph: Graph,
+        dir: str | Path | None = None,
+    ) -> BaseWorkspace:
+        """Create a workspace from ``graph``."""
 
     def path(self, *parts: str) -> Path:
         """Return a path inside the materialized workspace root."""
@@ -254,9 +249,6 @@ class BaseWorkspace(ABC):
             shutil.rmtree(incoming)
             self.commit()
 
-    def ref(self) -> WorkspaceRef:
-        return WorkspaceRef(root=str(self.root), branch_id=self.branch_id)
-
     def sync_graph(
         self,
         graph: Graph,
@@ -266,7 +258,7 @@ class BaseWorkspace(ABC):
     ) -> Graph:
         """Make durable graph-owned workspace state match ``graph``."""
 
-        synced = graph_with_workspace(graph, self) if restamp else graph.copy(deep=True)
+        synced = graph.copy(deep=True)
         self.session.rewrite_graph(synced)
         if prune:
             self.prune_graph_payloads(synced)
@@ -276,7 +268,7 @@ class BaseWorkspace(ABC):
     def sync_graph_if_changed(self, graph: Graph) -> Graph:
         """Sync ``graph`` only if it differs from this workspace's graph."""
 
-        candidate = graph_with_workspace(graph, self)
+        candidate = graph.copy(deep=True)
         candidate_hash = graph_fingerprint(candidate)
         if getattr(self, "_graph_fingerprint", None) == candidate_hash:
             return self.session.load_graph()
@@ -292,7 +284,7 @@ class BaseWorkspace(ABC):
     def mark_graph_synced(self, graph: Graph) -> Graph:
         """Record that ``graph`` is this workspace's current durable graph."""
 
-        synced = graph_with_workspace(graph, self)
+        synced = graph.copy(deep=True)
         self._remember_graph_fingerprint(graph_fingerprint(synced))
         return graph
 
@@ -324,5 +316,4 @@ __all__ = [
     "Session",
     "build_graph",
     "graph_fingerprint",
-    "graph_with_workspace",
 ]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from rlmflow.graph.node import ActionNode, Node, ObservationNode
-from rlmflow.graph.node_state import inherit_node_state
+from rlmflow.graph.node_state import stamp_node_for_position
 from rlmflow.graph.truncation import (
     apply_descendant_truncation,
     invalidate_ancestors_after_child_edit,
@@ -106,18 +106,12 @@ def _replace_node_at_index(
 
     old = owner.nodes[index]
     fixed = _node_for_replacement(
+        owner,
         old,
         node,
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,
     )
-    if (
-        output_schema is None
-        and inherit_output_schema
-        and fixed.output_schema is None
-        and owner.output_schema is not None
-    ):
-        fixed = fixed.update(output_schema=owner.output_schema)
     if truncate == "none":
         owner.nodes[index] = fixed
     else:
@@ -126,6 +120,7 @@ def _replace_node_at_index(
 
 
 def _node_for_replacement(
+    owner: Graph,
     old: Node,
     new: Node,
     *,
@@ -134,11 +129,12 @@ def _node_for_replacement(
 ) -> Node:
     """Stamp ``new`` into ``old``'s graph position with a fresh id."""
 
-    fields = new.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
-    fixed = new.__class__(agent_id=old.agent_id, seq=old.seq, **fields)
-    return inherit_node_state(
+    return stamp_node_for_position(
         source=old,
-        replacement=fixed,
+        replacement=new,
+        agent_id=old.agent_id,
+        seq=old.seq,
+        graph_output_schema=owner.output_schema,
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,
     )

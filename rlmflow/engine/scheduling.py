@@ -7,7 +7,8 @@ state, public override methods, sessions, runtimes, and pools.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from typing import Any
 
 from rlmflow.engine.actions import act
 from rlmflow.engine.replay import can_resume
@@ -17,7 +18,64 @@ from rlmflow.graph import (
 )
 
 
-def step(engine, graph: Graph) -> Graph:
+def _sync_and_plan_step(
+    engine,
+    graph: Graph,
+    *,
+    task_prefix: str = "",
+    allow_eager_children: bool = True,
+) -> tuple[Any, Graph, list[tuple[str, Callable[[], None]]]]:
+    if engine.workspace is not None:
+        graph = engine.workspace.sync_graph_if_changed(graph)
+    else:
+        persisted = engine.session.load_graph()
+        persisted_agents = set(persisted.agents)
+        changed = persisted_agents != set(graph.agents)
+        if not changed:
+            for aid in persisted_agents:
+                current = persisted.agents[aid].nodes
+                proposed = graph.agents[aid].nodes
+                if len(proposed) != len(current):
+                    changed = True
+                    break
+                for old, new in zip(current, proposed, strict=True):
+                    if old.id != new.id:
+                        changed = True
+                        break
+                    if old.model_dump(mode="python") != new.model_dump(mode="python"):
+                        changed = True
+                        break
+                if changed:
+                    break
+        if changed:
+            graph = engine.commit_graph(graph)
+
+    if engine.config.eager_children and not allow_eager_children:
+        raise ValueError(
+            "parallel_step(...) does not support eager_children=True. "
+            "Set eager_children=False so the coordinator owns global scheduling."
+        )
+
+    runnable = engine.node_scheduler.runnable_agents(graph)
+    if not runnable:
+        return engine, graph, []
+    plan = act(
+        graph,
+        config=engine.config,
+        runnable=runnable,
+        terminate_requested=engine.terminate_requested,
+    )
+    if not plan:
+        return engine, graph, []
+    prefix = f"{task_prefix}:" if task_prefix else ""
+    tasks = [
+        (f"{prefix}{aid}", lambda action=action: engine.apply_one(action))
+        for aid, action in plan.items()
+    ]
+    return engine, graph, tasks
+
+
+def step(engine, graph: Graph, *, pool: Any = None) -> Graph:
     """Advance the run by one synchronized or async-child batch.
 
     If ``graph`` has been edited outside normal execution (injection,
@@ -26,67 +84,66 @@ def step(engine, graph: Graph) -> Graph:
     via ``append_node`` rather than rewriting the graph for every new node.
     """
 
-    engine = engine.for_graph(graph)
-    if engine.workspace is not None:
-        graph = engine.workspace.sync_graph_if_changed(graph)
-    else:
-        persisted = engine.session.load_graph()
-        edit_kind = graph_edit_kind(persisted, graph)
-        if edit_kind != "same":
-            graph = engine.commit_graph(graph)
+    engine, graph, tasks = _sync_and_plan_step(engine, graph)
+    if not tasks:
+        return graph
 
-    runnable = engine.node_scheduler.runnable_agents(graph)
-    if not runnable:
-        return graph
-    plan = act(
-        graph,
-        config=engine.config,
-        runnable=runnable,
-        terminate_requested=engine.terminate_requested,
-    )
-    if not plan:
-        return graph
-    tasks = [
-        (aid, (lambda action=action: engine.apply_one(action)))
-        for aid, action in plan.items()
-    ]
+    runner = pool or engine.pool
     if engine.config.eager_children:
-        engine.pool.run_until_idle(tasks, engine._refill_eager_children)
+        runner.run_until_idle(tasks, engine._refill_eager_children)
     else:
-        engine.pool.execute(tasks)
+        runner.execute(tasks)
+
     graph = engine.session.load_graph()
     if engine.workspace is not None:
         engine.workspace.mark_graph_synced(graph)
     return graph
 
 
-def graph_edit_kind(persisted: Graph, candidate: Graph) -> str:
-    """Classify ``candidate`` relative to persisted session state."""
+def parallel_step(
+    pairs: Sequence[tuple[Any, Graph]],
+    *,
+    pool: Any = None,
+) -> list[Graph]:
+    """Advance several independent graphs with one shared action batch.
 
-    persisted_agents = set(persisted.agents)
-    candidate_agents = set(candidate.agents)
-    if persisted_agents != candidate_agents:
-        return "structural"
+    This is the cross-graph equivalent of :func:`step`: all graphs are synced
+    and planned first, then every runnable action is executed through one pool.
+    ``eager_children=True`` is intentionally rejected because its refill loop is
+    graph-local; a global eager scheduler needs a separate design.
+    """
 
-    different = False
-    for aid in persisted_agents:
-        current = persisted.agents[aid].nodes
-        proposed = candidate.agents[aid].nodes
-        if len(proposed) < len(current):
-            return "structural"
-        for old, new in zip(current, proposed[: len(current)], strict=True):
-            if old.id != new.id:
-                return "structural"
-            if old.model_dump(mode="python") != new.model_dump(mode="python"):
-                return "structural"
-        if len(proposed) > len(current):
-            different = True
-    return "different" if different else "same"
+    synced: list[tuple[Any, Graph]] = []
+    tasks: list[tuple[str, Callable[[], None]]] = []
+    prefix_tasks = len(pairs) > 1
+    for index, (agent, graph) in enumerate(pairs):
+        task_prefix = str(index) if prefix_tasks else ""
+        engine, graph, planned = _sync_and_plan_step(
+            agent,
+            graph,
+            task_prefix=task_prefix,
+            allow_eager_children=False,
+        )
+        synced.append((engine, graph))
+        tasks.extend(planned)
+
+    if tasks:
+        runner = pool or synced[0][0].pool
+        runner.execute(tasks)
+
+    out: list[Graph] = []
+    for engine, graph in synced:
+        if tasks:
+            graph = engine.session.load_graph()
+            if engine.workspace is not None:
+                engine.workspace.mark_graph_synced(graph)
+        out.append(graph)
+    return out
 
 
 def refill_eager_children(
     engine,
-    done_id: str,
+    _done_id: str,
     _result: object,
     active_ids: set[str],
 ) -> list[tuple[str, Callable[[], None]]]:
@@ -127,4 +184,4 @@ def refill_eager_children(
     return tasks
 
 
-__all__ = ["refill_eager_children", "step"]
+__all__ = ["parallel_step", "refill_eager_children", "step"]

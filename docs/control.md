@@ -118,13 +118,13 @@ graph = agent.step(graph)
 See [`injections.md`](injections.md) for the concise guide and
 [`examples/control/controller_injection.py`](../examples/control/controller_injection.py) for a runnable offline demo.
 
-## Branch workspaces
+## Workspace copies
 
-Use `Workspace.fork(...)` when a branch needs isolated files, session,
+Use `Workspace.fork(...)` when a run needs isolated files, session,
 and context stores:
 
 ```python
-branch = workspace.fork(new_branch_id="repair", new_dir="./repair-workspace")
+copy = workspace.fork(new_dir="./repair-workspace")
 ```
 
 ## Replay

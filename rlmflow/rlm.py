@@ -113,7 +113,6 @@ from rlmflow.workspace import (
     SessionVariable,
     Workspace,
 )
-from rlmflow.workspace.base import graph_with_workspace
 
 
 def _child_config(
@@ -176,11 +175,9 @@ class RLMFlow(LLMClient):
         node_scheduler: NodeScheduler | None = None,
         output_parser: Callable[[str, Schema], Any] | None = None,
     ) -> None:
-        if workspace is None and runtime is None:
-            raise ValueError("RLMFlow requires either runtime= or workspace=.")
-        if workspace is not None and runtime is None:
-            runtime = LocalRuntime(workspace=workspace)
-        if workspace is None:
+        if runtime is None:
+            runtime = LocalRuntime(workspace=workspace) if workspace else LocalRuntime()
+        elif workspace is None:
             runtime_workspace = getattr(runtime, "workspace", None)
             if runtime_workspace is not None:
                 runtime_root = Path(runtime_workspace).resolve()
@@ -202,13 +199,13 @@ class RLMFlow(LLMClient):
 
         self.llm_clients: dict[str, LLMClient] = {}
         self.model_descriptions: dict[str, str] = {}
-        llm_thread_safe: dict[str, bool] = {}
+        self.llm_thread_safe: dict[str, bool] = {}
         for key, entry in (llm_clients or {}).items():
             self.llm_clients[key] = entry["model"]
             if "description" in entry:
                 self.model_descriptions[key] = entry["description"]
             if "thread_safe" in entry:
-                llm_thread_safe[key] = bool(entry["thread_safe"])
+                self.llm_thread_safe[key] = bool(entry["thread_safe"])
         if "default" not in self.llm_clients:
             self.llm_clients["default"] = self.llm_client
         self.llm_channel = LLMChannel(
@@ -219,7 +216,7 @@ class RLMFlow(LLMClient):
                 else self.config.max_concurrency
             ),
             request_timeout=self.config.llm_request_timeout,
-            thread_safe=llm_thread_safe,
+            thread_safe=self.llm_thread_safe,
         )
 
         self.runtime_sessions: dict[str, Runtime] = {ROOT_RUNTIME_ID: runtime}
@@ -252,8 +249,7 @@ class RLMFlow(LLMClient):
             )
         if self.workspace is not None:
             persisted = self.session.load_graph()
-            if persisted.finished and persisted.branch_id != self.workspace.branch_id:
-                persisted = graph_with_workspace(persisted, self.workspace)
+            if persisted.finished:
                 return self._start_from_graph(
                     persisted,
                     query=query,
@@ -262,7 +258,6 @@ class RLMFlow(LLMClient):
                     context_metadata=context_metadata,
                     output_schema=output_schema,
                 )
-
         durable_output_schema = self._register_output_schema(agent_id, output_schema)
 
         self.context.write(
@@ -278,11 +273,9 @@ class RLMFlow(LLMClient):
         context_info = self._context_info(agent_id)
         root = Graph(
             agent_id=agent_id,
-            branch_id=self.workspace.branch_id if self.workspace else "main",
             depth=0,
             query=query,
             config=self.node_config(),
-            workspace=self.workspace.ref() if self.workspace else None,
             runtime=RuntimeRef(id=ROOT_RUNTIME_ID),
         )
         initial_query = prepare_node_for_append(
@@ -334,17 +327,6 @@ class RLMFlow(LLMClient):
         context_metadata: dict[str, Any] | None = None,
         output_schema: Schema | None = None,
     ) -> Graph:
-        engine = self.for_graph(graph)
-        if engine is not self:
-            return engine._start_from_graph(
-                graph,
-                query=query,
-                context=context,
-                contexts=contexts,
-                context_metadata=context_metadata,
-                output_schema=output_schema,
-            )
-
         committed = self.commit_graph(graph)
         if not committed.finished:
             raise ValueError(
@@ -401,7 +383,7 @@ class RLMFlow(LLMClient):
         )
         return self.run(query)
 
-    def step(self, graph: Graph) -> Graph:
+    def step(self, graph: Graph, *, pool: Any = None) -> Graph:
         """Advance the run by one synchronized batch.
 
         Two phases:
@@ -415,26 +397,28 @@ class RLMFlow(LLMClient):
 
         Returns a freshly-loaded :class:`Graph` snapshot.
         """
-        return scheduling.step(self, graph)
+        return scheduling.step(self, graph, pool=pool)
 
-    def for_graph(self, graph: Graph) -> RLMFlow:
-        """Return an engine bound to ``graph``'s workspace, if any."""
+    def clone(self, **overrides: Any) -> RLMFlow:
+        """Return a new engine with selected constructor arguments overridden."""
 
-        ref = graph.workspace
-        if ref is None:
-            return self
-        if (
-            self.workspace is not None
-            and Path(ref.root).resolve() == self.workspace.root
-        ):
-            return self
-        return self.with_workspace(Workspace.create(ref.root, branch_id=ref.branch_id))
+        allowed = {
+            "llm_client",
+            "runtime",
+            "config",
+            "runtime_factory",
+            "llm_clients",
+            "pool",
+            "prompt_builder",
+            "workspace",
+            "node_scheduler",
+            "output_parser",
+        }
+        unknown = set(overrides) - allowed
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise TypeError(f"unknown RLMFlow.clone(...) override(s): {names}")
 
-    def with_workspace(self, workspace: Workspace) -> RLMFlow:
-        """Return a sibling engine using ``workspace`` as durable state."""
-
-        if self.workspace is not None and workspace.root == self.workspace.root:
-            return self
         llm_clients = {
             key: {
                 "model": client,
@@ -443,20 +427,46 @@ class RLMFlow(LLMClient):
                     if key in self.model_descriptions
                     else {}
                 ),
+                **(
+                    {"thread_safe": self.llm_thread_safe[key]}
+                    if key in self.llm_thread_safe
+                    else {}
+                ),
             }
             for key, client in self.llm_clients.items()
             if key != "default" or client is not self.llm_client
         }
+        params: dict[str, Any] = {
+            "llm_client": self.llm_client,
+            "runtime": self.runtime,
+            "config": self.config,
+            "runtime_factory": self.runtime_factory,
+            "llm_clients": llm_clients,
+            "pool": self.pool,
+            "prompt_builder": self.prompt_builder,
+            "workspace": self.workspace,
+            "node_scheduler": self.node_scheduler,
+            "output_parser": self.output_parser,
+        }
+        params.update(overrides)
+        if "workspace" in overrides and "runtime" not in overrides:
+            params["runtime"] = None
         return type(self)(
-            self.llm_client,
-            config=self.config,
-            runtime_factory=self.runtime_factory,
-            llm_clients=llm_clients,
-            pool=self.pool,
-            prompt_builder=self.prompt_builder,
-            workspace=workspace,
-            node_scheduler=self.node_scheduler,
+            params.pop("llm_client"),
+            **params,
         )
+
+    def attach_workspace(self, workspace: Workspace) -> RLMFlow:
+        """Bind this engine to ``workspace`` in place and return ``self``."""
+
+        self.workspace = workspace
+        self.session = workspace.session
+        self.context = workspace.context
+        self.transcript_recorder = TranscriptRecorder(self.session)
+        self.runtime = LocalRuntime(workspace=workspace)
+        self.runtime_sessions = {ROOT_RUNTIME_ID: self.runtime}
+        self.register_tools(self.runtime)
+        return self
 
     def commit_graph(
         self,
@@ -464,27 +474,22 @@ class RLMFlow(LLMClient):
         *,
         fork: bool = False,
         new_location: str | Path | None = None,
-        branch_id: str | None = None,
     ) -> Graph:
         """Rewrite the bound session so ``graph`` is the durable state."""
 
-        engine = self.for_graph(graph)
         if fork:
-            if engine.workspace is None:
+            if self.workspace is None:
                 raise ValueError("commit_graph(..., fork=True) requires a workspace")
             if new_location is None:
                 raise TypeError("commit_graph(..., fork=True) requires new_location")
-            workspace = engine.workspace.fork(
-                new_location=new_location,
-                new_branch_id=branch_id,
-            )
-            engine = engine.with_workspace(workspace)
+            workspace = self.workspace.fork(new_location=new_location)
+            return workspace.sync_graph(graph)
 
-        if engine.workspace is not None:
-            return engine.workspace.sync_graph(graph)
+        if self.workspace is not None:
+            return self.workspace.sync_graph(graph)
 
-        engine.session.rewrite_graph(graph)
-        return engine.session.load_graph()
+        self.session.rewrite_graph(graph)
+        return self.session.load_graph()
 
     def _refill_eager_children(
         self,
@@ -822,6 +827,8 @@ class RLMFlow(LLMClient):
         session_id = ref.id if ref is not None else ROOT_RUNTIME_ID
         runtime = self.runtime_sessions.get(session_id)
         if runtime is None:
+            if self.runtime is None and self.runtime_factory is None:
+                raise ValueError("RLMFlow requires a runtime or attached workspace")
             runtime = (
                 self.runtime_factory() if self.runtime_factory else self.runtime.clone()
             )
@@ -878,7 +885,6 @@ class RLMFlow(LLMClient):
                 self.session,
                 agent_id=graph.agent_id,
                 node_id=node.id,
-                branch_id=graph.branch_id,
             ),
             "CONTEXT": ContextVariable(self.context, agent_id=graph.agent_id),
         }
@@ -958,11 +964,9 @@ class RLMFlow(LLMClient):
         context_info = self._context_info(child_aid)
         child_graph = Graph(
             agent_id=child_aid,
-            branch_id=parent.branch_id,
             depth=parent.depth + 1,
             query=query,
             config=cfg,
-            workspace=parent.workspace,
             runtime=runtime_ref,
             model=None,
             parent_agent_id=parent.agent_id,

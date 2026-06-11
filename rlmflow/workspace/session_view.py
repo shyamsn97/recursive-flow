@@ -19,12 +19,10 @@ class SessionVariable:
         *,
         agent_id: str,
         node_id: str = "",
-        branch_id: str = "main",
     ) -> None:
         self.store = session
         self.agent_id = agent_id
         self.node_id = node_id
-        self.branch_id = branch_id
 
     def _graph(self) -> Graph:
         return self.store.load_graph()

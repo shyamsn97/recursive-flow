@@ -85,7 +85,7 @@ def _scripted() -> _ScriptedLLM:
 
 
 def test_fork_resumes_supervising_with_terminal_children(tmp_path: Path):
-    source = Workspace.create(tmp_path / "main", branch_id="main")
+    source = Workspace.create(tmp_path / "main")
     src_engine = RLMFlow(
         llm_client=_scripted(),
         workspace=source,
@@ -102,7 +102,7 @@ def test_fork_resumes_supervising_with_terminal_children(tmp_path: Path):
 
     # Fork the workspace. New engine: brand-new runtime, no live generator,
     # no REPL namespace. The forked engine must rebuild via replay-of-one.
-    forked = source.fork(new_branch_id="b2", new_dir=tmp_path / "b2")
+    forked = source.fork(new_dir=tmp_path / "b2")
     new_engine = RLMFlow(
         llm_client=_scripted(),
         workspace=forked,
@@ -126,7 +126,7 @@ def test_fork_resumes_supervising_with_terminal_children(tmp_path: Path):
 
 def test_fork_lets_us_swap_a_child_result_and_re_resume(tmp_path: Path):
     """The headline use case: branch a run, replace a child's result, continue."""
-    source = Workspace.create(tmp_path / "main", branch_id="main")
+    source = Workspace.create(tmp_path / "main")
     src_engine = RLMFlow(
         llm_client=_scripted(),
         workspace=source,
@@ -136,7 +136,7 @@ def test_fork_lets_us_swap_a_child_result_and_re_resume(tmp_path: Path):
     graph = src_engine.start("parent task")
     graph = _step_until(src_engine, graph, _parent_supervising_with_terminal_children)
 
-    forked = source.fork(new_branch_id="alt", new_dir=tmp_path / "alt")
+    forked = source.fork(new_dir=tmp_path / "alt")
 
     # Manually rewrite the child's terminal DoneOutput in the forked
     # session so that resume sees a different result.
@@ -209,7 +209,7 @@ def _parent_at_second_supervise(graph: Graph) -> bool:
 
 
 def test_fork_resume_replays_through_multiple_yields(tmp_path: Path):
-    source = Workspace.create(tmp_path / "main", branch_id="main")
+    source = Workspace.create(tmp_path / "main")
     src_engine = RLMFlow(
         llm_client=_multi_scripted(),
         workspace=source,
@@ -219,7 +219,7 @@ def test_fork_resume_replays_through_multiple_yields(tmp_path: Path):
     graph = src_engine.start("multi yield")
     graph = _step_until(src_engine, graph, _parent_at_second_supervise)
 
-    forked = source.fork(new_branch_id="b2", new_dir=tmp_path / "b2")
+    forked = source.fork(new_dir=tmp_path / "b2")
     new_engine = RLMFlow(
         llm_client=_multi_scripted(),
         workspace=forked,
@@ -284,7 +284,7 @@ def _nested_mid_supervising_with_leaf_done(graph: Graph) -> bool:
 
 
 def _nested_source_at_leaf_done(tmp_path: Path) -> tuple[Workspace, Graph]:
-    source = Workspace.create(tmp_path / "nested-source", branch_id="source")
+    source = Workspace.create(tmp_path / "nested-source")
     engine = RLMFlow(
         llm_client=_nested_scripted(),
         workspace=source,
@@ -301,7 +301,7 @@ def test_fresh_engine_resumes_nested_child_supervisor_without_deleting_leaf(
     source, graph = _nested_source_at_leaf_done(tmp_path)
     assert _nested_mid_supervising_with_leaf_done(graph)
 
-    forked = source.fork(new_branch_id="fork", new_dir=tmp_path / "nested-fork")
+    forked = source.fork(new_dir=tmp_path / "nested-fork")
     forked_graph = forked.session.load_graph()
     original_agents = list(forked_graph.agents)
     original_leaf_state_count = len(forked_graph.agents["root.mid.leaf"].nodes)
@@ -328,7 +328,7 @@ def test_fresh_engine_resumes_nested_child_then_root_supervisor(tmp_path: Path):
     source, graph = _nested_source_at_leaf_done(tmp_path)
     assert _nested_mid_supervising_with_leaf_done(graph)
 
-    forked = source.fork(new_branch_id="fork", new_dir=tmp_path / "nested-fork")
+    forked = source.fork(new_dir=tmp_path / "nested-fork")
     fresh_engine = RLMFlow(
         llm_client=_nested_scripted(),
         workspace=forked,
@@ -407,7 +407,7 @@ def _nested_worker_error_reached(graph: Graph) -> bool:
 def test_injected_worker_fix_resumes_nested_supervisors_on_fresh_engine(
     tmp_path: Path,
 ):
-    source = Workspace.create(tmp_path / "repair-source", branch_id="source")
+    source = Workspace.create(tmp_path / "repair-source")
     source_engine = RLMFlow(
         llm_client=_repair_scripted(),
         workspace=source,
@@ -417,7 +417,7 @@ def test_injected_worker_fix_resumes_nested_supervisors_on_fresh_engine(
     graph = source_engine.start("nested repair")
     graph = _step_until(source_engine, graph, _nested_worker_error_reached)
 
-    forked = source.fork(new_branch_id="repair", new_dir=tmp_path / "repair-fork")
+    forked = source.fork(new_dir=tmp_path / "repair-fork")
     forked_graph = forked.session.load_graph()
     original_agents = list(forked_graph.agents)
     original_worker_state_count = len(

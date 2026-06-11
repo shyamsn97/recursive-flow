@@ -1,19 +1,19 @@
-"""Forking a Workspace: branch a run, diverge, compare outcomes.
+"""Forking a Workspace: copy a run, diverge, compare outcomes.
 
-``Workspace.fork(new_branch_id, new_dir)`` copies the working tree,
+``Workspace.fork(new_dir=...)`` copies the working tree,
 session log, and context store into a new directory and returns a fresh
-Workspace handle. Subsequent writes go into the new branch only — the
+Workspace handle. Subsequent writes go into the new workspace only — the
 source workspace stays untouched.
 
 Use it for:
 
-- repair branches (try fix A vs fix B from the same starting point)
+- repair variants (try fix A vs fix B from the same starting point)
 - best-of-N exploration (fan out a partial run multiple ways)
 - speculative edits without disturbing the canonical run
 
 This script:
   1. seeds a workspace with a deterministic mock LLM,
-  2. forks twice (one branch keeps going, the other is replayed with a
+  2. forks twice (one workspace keeps going, the other is replayed with a
      different LLM),
   3. shows that the two diverged graphs are independent.
 
@@ -66,8 +66,8 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
 
-        banner("seed: a fresh main branch")
-        main_ws = Workspace.create(root / "main", branch_id="main")
+        banner("seed: a fresh main workspace")
+        main_ws = Workspace.create(root / "main")
         # Pre-seed a side file in the working tree so we can show it copies on fork.
         main_ws.path("notes.md").write_text("# starting notes\n")
         seeded_result = run(
@@ -75,16 +75,16 @@ def main() -> None:
             ScriptedLLM(['```repl\ndone("seeded result")\n```']),
             "do the thing",
         )
-        print(f"main branch result: {seeded_result!r}")
-        print(f"main branch files : {sorted(p.name for p in main_ws.root.iterdir())}")
+        print(f"main workspace result: {seeded_result!r}")
+        print(f"main workspace files : {sorted(p.name for p in main_ws.root.iterdir())}")
 
-        banner("fork twice — each branch gets its own copy")
+        banner("fork twice — each workspace gets its own copy")
         # The fork helper deletes the destination if it exists, so make sure
         # we hand it a fresh path.
-        for branch in ("retry_a", "retry_b"):
-            shutil.rmtree(root / branch, ignore_errors=True)
-        a = main_ws.fork(new_branch_id="retry_a", new_dir=root / "retry_a")
-        b = main_ws.fork(new_branch_id="retry_b", new_dir=root / "retry_b")
+        for workspace_name in ("retry_a", "retry_b"):
+            shutil.rmtree(root / workspace_name, ignore_errors=True)
+        a = main_ws.fork(new_dir=root / "retry_a")
+        b = main_ws.fork(new_dir=root / "retry_b")
         print(f"main session.jsonl   : {(main_ws.root / 'session/root/session.jsonl').stat().st_size}b")
         print(f"retry_a session.jsonl: {(a.root / 'session/root/session.jsonl').stat().st_size}b "
               f"(copied from main)")
@@ -93,7 +93,7 @@ def main() -> None:
         print(f"working tree carried over: {(a.root / 'notes.md').read_text().strip()!r}")
 
         banner("diverge: each branch keeps running with its own LLM")
-        # Append a *new* run into each branch — the seeded states stay,
+        # Append a *new* run into each workspace — the seeded states stay,
         # and the new ones get appended after them.
         a_result = run(
             a,
@@ -114,10 +114,10 @@ def main() -> None:
         print(f"main result still : {main_loaded.result()!r}")
         print(f"main state count  : {len(main_loaded.all_nodes)}")
 
-        banner("compare branches by result")
+        banner("compare workspaces by result")
         for ws in (main_ws, a, b):
             g = Workspace.open_path(ws.root).load_graph()
-            print(f"  branch={ws.branch_id:<8} nodes={len(g.all_nodes):>2} "
+            print(f"  workspace={ws.root.name:<8} nodes={len(g.all_nodes):>2} "
                   f"result={g.result()!r}")
 
 

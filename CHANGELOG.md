@@ -158,8 +158,8 @@ each one is called out under **Breaking** below.
   state as a distinct, color-coded, type-labeled block.
 - **Data model is now one recursive class.** `AgentMeta` is gone — its
   fields are flat on `Graph` itself (`graph.query`, `graph.config`,
-  `graph.runtime`, `graph.workspace`, `graph.depth`, `graph.model`,
-  `graph.system_prompt`, `graph.branch_id`, `graph.parent_agent_id`,
+  `graph.runtime`, `graph.depth`, `graph.model`,
+  `graph.system_prompt`, `graph.parent_agent_id`,
   `graph.parent_node_id`). `Graph` is a frozen `dataclass` with
   `states: tuple[Node, ...]` and `children: dict[str, Graph]` for
   sub-agents. Cross-agent navigation is `graph[other_aid]`;

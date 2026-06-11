@@ -63,7 +63,6 @@ graph.depth            # int
 graph.query            # str
 graph.system_prompt    # str — snapshot from the first turn
 graph.config           # dict — engine knobs at spawn
-graph.workspace        # WorkspaceRef | None
 graph.runtime          # RuntimeRef | None
 graph.parent_agent_id  # str | None
 graph.parent_node_id   # str | None — the ActionNode id that delegated us

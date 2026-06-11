@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from rlmflow.workspace.base import Context, Session, build_graph
+from rlmflow.graph import Graph
+from rlmflow.workspace.artifacts import ArtifactStore
+from rlmflow.workspace.base import (
+    BaseWorkspace,
+    Context,
+    Session,
+    build_graph,
+    graph_fingerprint,
+)
 from rlmflow.workspace.context_helpers import (
     context_keys_for_agents,
     first_context_value,
 )
+from rlmflow.workspace.store import MemoryStore
 
 
 class InMemoryContext(Context):
@@ -106,4 +116,92 @@ class InMemorySession(Session):
         return out
 
 
-__all__ = ["InMemoryContext", "InMemorySession"]
+class InMemoryWorkspace(BaseWorkspace):
+    """Process-local workspace for graph/session tests and in-memory runs."""
+
+    def __init__(
+        self,
+        *,
+        session: Session | None = None,
+        context: Context | None = None,
+        store: MemoryStore | None = None,
+    ) -> None:
+        self.root = Path("<memory>")
+        self.store = store or MemoryStore()
+        self.session = session or InMemorySession()
+        self.context = context or InMemoryContext()
+        self.artifacts = ArtifactStore(self.store)
+        self.uri = "memory://workspace"
+
+    @classmethod
+    def create(cls) -> InMemoryWorkspace:
+        return cls()
+
+    @classmethod
+    def from_graph(
+        cls,
+        graph: Graph,
+        dir: str | Path | None = None,
+    ) -> InMemoryWorkspace:
+        workspace = cls.create()
+        workspace.sync_graph(graph)
+        return workspace
+
+    def materialize(self) -> Path:
+        raise TypeError("InMemoryWorkspace cannot be materialized as a filesystem path")
+
+    def commit(self) -> None:
+        """In-memory workspaces are already current."""
+
+    def fork(
+        self,
+        new_location: str | Path | None = None,
+    ) -> InMemoryWorkspace:
+        return type(self)(
+            session=self.session.fork(new_location),
+            context=self.context.fork(new_location),
+            store=self.store.fork(new_location),
+        )
+
+    def sync_graph(
+        self,
+        graph: Graph,
+        *,
+        prune: bool = True,
+        restamp: bool = True,
+    ) -> Graph:
+        synced = graph.copy(deep=True)
+        self.session.rewrite_graph(synced)
+        self._remember_graph_fingerprint(graph_fingerprint(synced))
+        return self.session.load_graph()
+
+    def sync_graph_if_changed(self, graph: Graph) -> Graph:
+        candidate = graph.copy(deep=True)
+        candidate_hash = graph_fingerprint(candidate)
+        if getattr(self, "_graph_fingerprint", None) == candidate_hash:
+            return self.session.load_graph()
+
+        persisted = self.session.load_graph()
+        persisted_hash = graph_fingerprint(persisted)
+        if persisted_hash == candidate_hash:
+            self._remember_graph_fingerprint(persisted_hash)
+            return persisted
+
+        return self.sync_graph(candidate, restamp=False)
+
+    def mark_graph_synced(self, graph: Graph) -> Graph:
+        synced = graph.copy(deep=True)
+        self._remember_graph_fingerprint(graph_fingerprint(synced))
+        return graph
+
+    def prune_graph_payloads(self, graph: Graph) -> None:
+        """In-memory payloads are cheap and scoped to this workspace."""
+
+    def _remember_graph_fingerprint(self, fingerprint: str) -> None:
+        self._graph_fingerprint = fingerprint
+
+    def load_graph(self) -> Graph:
+        return self.session.load_graph()
+
+
+__all__ = ["InMemoryContext", "InMemorySession", "InMemoryWorkspace"]

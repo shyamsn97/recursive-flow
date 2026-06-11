@@ -162,7 +162,7 @@ def test_e2b_runtime_injects_workspace_handles_remotely(monkeypatch, tmp_path):
         runtime.inject("CONTEXT", ContextVariable(workspace.context, agent_id="root"))
         runtime.inject(
             "SESSION",
-            SessionVariable(workspace.session, agent_id="root", branch_id="main"),
+            SessionVariable(workspace.session, agent_id="root"),
         )
         assert "CONTEXT.read" not in runtime.proxied
         assert "SESSION.tree" not in runtime.proxied

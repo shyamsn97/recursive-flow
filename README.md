@@ -33,8 +33,8 @@ whole run as one recursive type:
 
 - **`Graph`** — one agent snapshot. Carries the agent's run-invariants
   flat on itself (`agent_id`, `depth`, `query`, `system_prompt`,
-  `config`, `workspace`, `runtime`, `model`, `branch_id`,
-  `parent_agent_id`, `parent_node_id`), plus its `nodes` trajectory
+  `config`, `runtime`, `model`, `parent_agent_id`, `parent_node_id`),
+  plus its `nodes` trajectory
   and a `children: dict[str, Graph]` of sub-agents. Cross-agent
   navigation is `graph[other_aid]`; subtree views are `graph.agents`,
   `graph.all_nodes`, `graph.edges`.
@@ -357,7 +357,7 @@ To branch into an isolated workspace with its own session, context, and
 working tree:
 
 ```python
-alt = workspace.fork(new_branch_id="repair", new_dir="./runs/repair")
+alt = workspace.fork(new_dir="./runs/repair")
 alt_agent = RLMFlow(llm_client=..., workspace=alt, ...)
 ```
 

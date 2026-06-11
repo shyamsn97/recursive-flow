@@ -1,6 +1,6 @@
 """Generate the baseline word-search run used by the injection example.
 
-This is the original route: ask a real RLMFlow agent to find ``GRAPH`` by
+This is the original route: ask a real RLMFlow agent to find ``AGENT`` by
 delegating direction-specific search to three child agents:
 
 - ``rows`` searches rows east/west;
@@ -105,12 +105,11 @@ def run(model: str, workspace_path: Path, *, reset: bool) -> None:
     if reset and workspace_path.exists():
         shutil.rmtree(workspace_path)
 
-    workspace = Workspace.create(workspace_path, branch_id="word-search-baseline")
+    workspace = Workspace.create(workspace_path)
     agent = RLMFlow(
         client_for_model(model),
-        workspace=workspace,
         config=RLMConfig(max_depth=2, child_max_iterations=10),
-    )
+    ).attach_workspace(workspace)
 
     graph = agent.start(QUERY, output_schema=WordSearchResult, context=CONTEXT)
     with live_view() as view:
