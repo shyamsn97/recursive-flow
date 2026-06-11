@@ -79,9 +79,9 @@ clean-test: ## remove test and coverage artifacts
 	rm -fr .pytest_cache
 
 lint: ## check style with flake8
-	isort --profile black rlmflow
-	black rlmflow
-	flake8 rlmflow
+	isort --profile black rflow
+	black rflow
+	flake8 rflow
 	python -m ruff check .
 
 # ── Markdown ─────────────────────────────────────────────────────────
@@ -100,8 +100,8 @@ install: clean lint
 
 doc:
 	rm -r docs/reference/
-	pdocs as_markdown rlmflow -o docs/reference
-	rm docs/reference/rlmflow/index.md
+	pdocs as_markdown rflow -o docs/reference
+	rm docs/reference/rflow/index.md
 	cp examples/*.ipynb docs/examples/
 	cp README.md docs/index.md
 
@@ -116,7 +116,7 @@ test: ## Run the default test suite.
 	python -m pytest
 
 test-all: build-docker-image ## Run all tests, including Docker-gated integration tests.
-	RLMKIT_DOCKER_TEST=1 python -m pytest
+	RECURSIVE_FLOW_DOCKER_TEST=1 python -m pytest
 
 test-html: test
 	$(BROWSER) tests/cov-report/index.html
@@ -149,7 +149,7 @@ OOLONG_MAX_DEPTH ?= 1
 OOLONG_MAX_ITERATIONS ?= 20
 
 build-docker-image:
-	docker build -t rlmflow:local .
+	docker build -t recursive-flow:local .
 
 oolong-paper: ## Paper-style OOLONG RLM run: synth validation, depth 1, 20 iterations.
 	python benchmarks/oolong/run.py --mode rlm --subset synth \
@@ -186,12 +186,12 @@ oolong-aggregate: ## Aggregate everything under benchmarks/oolong/outputs/.
 
 # ── Animation (manim) ────────────────────────────────────────────────
 ANIMATION_SRC := docs/rlm_animation.py
-ANIMATION_SCENE := RLMFlowHero
+ANIMATION_SCENE := RecursiveFlowHero
 ANIMATION_OUT_DIR := media/videos/rlm_animation/1080p60
 
-animation: animation-mp4 animation-gif-small ## Render the rlmflow animation: MP4 + share-friendly GIF.
+animation: animation-mp4 animation-gif-small ## Render the recursive-flow animation: MP4 + share-friendly GIF.
 
-animation-preview: ## Quick low-res manim preview of the rlmflow animation.
+animation-preview: ## Quick low-res manim preview of the recursive-flow animation.
 	manim -pql $(ANIMATION_SRC) $(ANIMATION_SCENE)
 
 animation-mp4: ## Render docs/rlm_animation.mp4 (1080p60).

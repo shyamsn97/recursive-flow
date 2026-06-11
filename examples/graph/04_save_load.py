@@ -21,21 +21,12 @@ import json
 import tempfile
 from pathlib import Path
 
-from rlmflow import (
-    DoneOutput,
-    Graph,
-    LLMClient,
-    LLMUsage,
-    RLMConfig,
-    RLMFlow,
-    UserQuery,
-    Workspace,
-)
+import rflow
 
 
-class DummyLLM(LLMClient):
+class DummyLLM(rflow.LLMClient):
     def chat(self, messages, *args, **kwargs):
-        self.last_usage = LLMUsage(input_tokens=10, output_tokens=5)
+        self.last_usage = rflow.LLMUsage(input_tokens=10, output_tokens=5)
         return '```repl\ndone("ok")\n```'
 
 
@@ -50,17 +41,16 @@ def main() -> None:
         tmp_path = Path(tmp).resolve()
 
         banner("1. Graph.save / Graph.load — single-file JSON")
-        g = Graph.from_meta_dict(
+        g = rflow.Graph.from_meta_dict(
             {"agent_id": "root", "depth": 0, "query": "hi"},
             nodes=[
-                UserQuery(agent_id="root", seq=0, content="hi"),
-                DoneOutput(agent_id="root", seq=1, result="hello"),
+                rflow.UserQuery(agent_id="root", seq=0, content="hi"),
+                rflow.DoneOutput(agent_id="root", seq=1, result="hello"),
             ],
         )
         path = g.save(tmp_path / "graph.json")
-        print(f"wrote {path.relative_to(tmp_path)} "
-              f"({path.stat().st_size} bytes)")
-        loaded = Graph.load(path)
+        print(f"wrote {path.relative_to(tmp_path)} " f"({path.stat().st_size} bytes)")
+        loaded = rflow.Graph.load(path)
         print(f"reloaded: agents={list(loaded.agents)} result={loaded.result()!r}")
         print(f"identical roundtrip: {g.to_dict() == loaded.to_dict()}")
 
@@ -71,11 +61,11 @@ def main() -> None:
             print(f"  {k:<10} {v!r}")
 
         banner("2. Workspace round-trip — append-only run directory")
-        workspace = Workspace.create(tmp_path / "ws")
-        engine = RLMFlow(
+        workspace = rflow.Workspace.create(tmp_path / "ws")
+        engine = rflow.RecursiveFlow(
             llm_client=DummyLLM(),
             workspace=workspace,
-            config=RLMConfig(max_iterations=2),
+            config=rflow.FlowConfig(max_iterations=2),
         )
         graph = engine.start("hello workspace")
         while not graph.finished:
@@ -88,10 +78,14 @@ def main() -> None:
                 print(f"  {rel}  ({p.stat().st_size} bytes)")
 
         reloaded = workspace.load_graph()
-        print(f"\nload_graph(): agents={list(reloaded.agents)} "
-              f"result={reloaded.result()!r}")
-        print(f"nodes match in-memory: "
-              f"{[n.type for n in reloaded.all_nodes] == [n.type for n in graph.all_nodes]}")
+        print(
+            f"\nload_graph(): agents={list(reloaded.agents)} "
+            f"result={reloaded.result()!r}"
+        )
+        print(
+            f"nodes match in-memory: "
+            f"{[n.type for n in reloaded.all_nodes] == [n.type for n in graph.all_nodes]}"
+        )
 
 
 if __name__ == "__main__":

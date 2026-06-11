@@ -3,11 +3,11 @@ import sys
 import time
 from types import SimpleNamespace
 
-from rlmflow.graph import ChildHandle, ExecAction, Graph, WaitRequest
-from rlmflow.rlm import RLMConfig, RLMFlow
-from rlmflow.tools import FILE_TOOLS
-from rlmflow.tools.builtins import SHOW_VARS
-from rlmflow.workspace import ContextVariable, SessionVariable, Workspace
+from rflow.graph import ChildHandle, ExecAction, Graph, WaitRequest
+from rflow.flow import FlowConfig, RecursiveFlow
+from rflow.tools import FILE_TOOLS
+from rflow.tools.builtins import SHOW_VARS
+from rflow.workspace import ContextVariable, SessionVariable, Workspace
 from tests.fakes.sandbox import (
     FakeDaytonaClient,
     FakeE2BSandboxFactory,
@@ -17,7 +17,7 @@ from tests.fakes.sandbox import (
 
 def test_e2b_runtime_executes_repl_protocol_with_sdk_shape(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
-    from rlmflow.runtime.sandbox.e2b import E2BRuntime
+    from rflow.runtime.sandbox.e2b import E2BRuntime
 
     runtime = E2BRuntime(
         workspace=tmp_path / "host",
@@ -32,7 +32,7 @@ def test_e2b_runtime_executes_repl_protocol_with_sdk_shape(monkeypatch, tmp_path
 
 def test_e2b_runtime_exposes_public_exec(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
-    from rlmflow.runtime.sandbox.e2b import E2BRuntime
+    from rflow.runtime.sandbox.e2b import E2BRuntime
 
     runtime = E2BRuntime(
         workspace=tmp_path / "host",
@@ -47,7 +47,7 @@ def test_e2b_runtime_exposes_public_exec(monkeypatch, tmp_path):
 
 def test_e2b_runtime_syncs_workspace_on_start_and_close(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
-    from rlmflow.runtime.sandbox.e2b import E2BRuntime
+    from rflow.runtime.sandbox.e2b import E2BRuntime
 
     host = tmp_path / "host"
     remote = tmp_path / "remote"
@@ -72,7 +72,7 @@ def test_e2b_runtime_syncs_workspace_on_start_and_close(monkeypatch, tmp_path):
 
 
 def test_daytona_runtime_executes_repl_protocol_with_sdk_shape(tmp_path):
-    from rlmflow.runtime.sandbox.daytona import DaytonaRuntime
+    from rflow.runtime.sandbox.daytona import DaytonaRuntime
 
     client = FakeDaytonaClient()
     runtime = DaytonaRuntime(
@@ -88,8 +88,8 @@ def test_daytona_runtime_executes_repl_protocol_with_sdk_shape(tmp_path):
 
 
 def test_remote_file_runtime_is_publicly_exported():
-    from rlmflow.runtime import DaytonaRuntime, E2BRuntime, RemoteFileRuntime
-    from rlmflow.runtime.sandbox.remote import (
+    from rflow.runtime import DaytonaRuntime, E2BRuntime, RemoteFileRuntime
+    from rflow.runtime.sandbox.remote import (
         RemoteFileRuntime as DirectRemoteFileRuntime,
     )
 
@@ -100,7 +100,7 @@ def test_remote_file_runtime_is_publicly_exported():
 
 def test_remote_runtime_clone_does_not_copy_core_tools(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
-    from rlmflow.runtime.sandbox.e2b import E2BRuntime
+    from rflow.runtime.sandbox.e2b import E2BRuntime
 
     def custom_tool() -> str:
         return "ok"
@@ -122,11 +122,11 @@ def test_remote_runtime_clone_does_not_copy_core_tools(monkeypatch, tmp_path):
 def test_remote_child_spawn_does_not_start_child_runtime(tmp_path):
     root_runtime = NoStartRemoteRuntime(tmp_path / "root")
     child_runtime = NoStartRemoteRuntime(tmp_path / "child")
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         NoopLLM(),
         runtime=root_runtime,
         runtime_factory=lambda: child_runtime,
-        config=RLMConfig(max_depth=1),
+        config=FlowConfig(max_depth=1),
     )
     graph = agent.start("parent")
     parent_node = graph.agents["root"].current()
@@ -147,7 +147,7 @@ def test_remote_child_spawn_does_not_start_child_runtime(tmp_path):
 
 def test_e2b_runtime_injects_workspace_handles_remotely(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
-    from rlmflow.runtime.sandbox.e2b import E2BRuntime
+    from rflow.runtime.sandbox.e2b import E2BRuntime
 
     workspace = Workspace.create(tmp_path / "host")
     workspace.context.write("context", "remote context", agent_id="root")
@@ -174,7 +174,7 @@ def test_e2b_runtime_injects_workspace_handles_remotely(monkeypatch, tmp_path):
 
 def test_e2b_runtime_imports_file_tools_remotely(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
-    from rlmflow.runtime.sandbox.e2b import E2BRuntime
+    from rflow.runtime.sandbox.e2b import E2BRuntime
 
     runtime = E2BRuntime(
         workspace=tmp_path / "host",
@@ -191,9 +191,9 @@ def test_e2b_runtime_imports_file_tools_remotely(monkeypatch, tmp_path):
 
 def test_e2b_runtime_keeps_control_tools_as_proxies(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
-    from rlmflow.integrations.structured import StructuredOutputParser
-    from rlmflow.runtime.sandbox.e2b import E2BRuntime
-    from rlmflow.tools.builtins import make_delegate, make_done, make_wait
+    from rflow.integrations.structured import StructuredOutputParser
+    from rflow.runtime.sandbox.e2b import E2BRuntime
+    from rflow.tools.builtins import make_delegate, make_done, make_wait
 
     runtime = E2BRuntime(
         workspace=tmp_path / "host",
@@ -209,22 +209,22 @@ def test_e2b_runtime_keeps_control_tools_as_proxies(monkeypatch, tmp_path):
         assert runtime.proxied == {}
         runtime.install_registered_tools()
         assert "done" in runtime.proxied
-        assert "rlm_wait" in runtime.proxied
-        assert "rlm_delegate" in runtime.proxied
+        assert "flow_wait" in runtime.proxied
+        assert "flow_delegate" in runtime.proxied
     finally:
         runtime.close()
 
 
 def _launcher_repl():
     """A fresh REPL (the same class the sandbox runs) with stub
-    launchers plus ``rlm_delegate`` / ``rlm_wait`` bound by name.
+    launchers plus ``flow_delegate`` / ``flow_wait`` bound by name.
 
     Remotely the primitives are stdio proxies; here they are plain closures.
     Either way the registered launchers resolve them from the executing REPL
     frame at call time, which is the sandbox-side guarantee.
     """
-    from rlmflow.runtime.repl import REPL
-    from rlmflow.tools.builtins import make_delegate, make_wait
+    from rflow.runtime.repl import REPL
+    from rflow.tools.builtins import make_delegate, make_wait
 
     env = {"AGENT_ID": "root", "PARENT_NODE_ID": "n0"}
 
@@ -232,15 +232,15 @@ def _launcher_repl():
         return ChildHandle(f"root.{name}")
 
     repl = REPL()
-    repl.namespace["rlm_delegate"] = make_delegate(spawn_child, env)
-    repl.namespace["rlm_wait"] = make_wait()
+    repl.namespace["flow_delegate"] = make_delegate(spawn_child, env)
+    repl.namespace["flow_wait"] = make_wait()
     repl.handle({"cmd": "inject_launcher", "name": "launch_subagents"})
     return repl
 
 
 def test_repl_launch_subagents_suspends_and_resumes():
     """`await launch_subagents([...])` spawns
-    each child via ``rlm_delegate``, suspends on one ``WaitRequest`` with every
+    each child via ``flow_delegate``, suspends on one ``WaitRequest`` with every
     id, and on resume returns the children's answers in order."""
 
     repl = _launcher_repl()
@@ -284,28 +284,28 @@ def test_repl_launch_subagents_rejects_non_dict_specs():
 
 
 def test_internal_delegation_primitives_are_hidden_from_public_tools(tmp_path):
-    from rlmflow.runtime.local import LocalRuntime
+    from rflow.runtime.local import LocalRuntime
 
     runtime = LocalRuntime(workspace=tmp_path / "workspace")
-    RLMFlow(NoopLLM(), runtime=runtime, config=RLMConfig(max_depth=1))
+    RecursiveFlow(NoopLLM(), runtime=runtime, config=FlowConfig(max_depth=1))
 
     visible = {td.name for td in runtime.get_tool_defs()}
     assert "launch_subagents" in visible
-    assert "rlm_delegate" not in visible
-    assert "rlm_wait" not in visible
+    assert "flow_delegate" not in visible
+    assert "flow_wait" not in visible
 
     internal = {td.name for td in runtime.get_tool_defs(include_hidden=True)}
-    assert {"rlm_delegate", "rlm_wait"} <= internal
+    assert {"flow_delegate", "flow_wait"} <= internal
 
     show_vars = runtime.repl._show_vars()
     assert "launch_subagents" in show_vars
-    assert "rlm_delegate" not in show_vars
-    assert "rlm_wait" not in show_vars
+    assert "flow_delegate" not in show_vars
+    assert "flow_wait" not in show_vars
 
 
 def test_host_proxied_tool_can_call_visible_tool_via_context(tmp_path):
-    from rlmflow.tools import get_repl_tools, tool
-    from rlmflow.runtime.sandbox.remote import RemoteFileRuntime
+    from rflow.tools import get_repl_tools, tool
+    from rflow.runtime.sandbox.remote import RemoteFileRuntime
 
     class InMemoryRemote(RemoteFileRuntime):
         def __init__(self):
@@ -340,7 +340,7 @@ def test_host_proxied_tool_can_call_visible_tool_via_context(tmp_path):
 
 
 def test_remote_runtime_short_circuits_proxied_wait_and_consumes_ack(tmp_path):
-    from rlmflow.runtime.sandbox.remote import RemoteFileRuntime
+    from rflow.runtime.sandbox.remote import RemoteFileRuntime
 
     class InMemoryRemote(RemoteFileRuntime):
         def __init__(self):
@@ -365,16 +365,16 @@ def test_remote_runtime_short_circuits_proxied_wait_and_consumes_ack(tmp_path):
 
     runtime = InMemoryRemote()
     handle = ChildHandle("root.child")
-    runtime.proxied["rlm_wait"] = lambda *handles: WaitRequest(
+    runtime.proxied["flow_wait"] = lambda *handles: WaitRequest(
         [h.agent_id for h in handles]
     )
 
-    runtime.responses.put({"proxy": "rlm_wait", "args": [handle.to_dict()]})
-    response = runtime.call({"cmd": "run", "code": "await rlm_wait(h)"})
+    runtime.responses.put({"proxy": "flow_wait", "args": [handle.to_dict()]})
+    response = runtime.call({"cmd": "run", "code": "await flow_wait(h)"})
 
     assert response == {"suspended": True, "agent_ids": ["root.child"]}
     assert runtime.sent == [
-        {"cmd": "run", "code": "await rlm_wait(h)"},
+        {"cmd": "run", "code": "await flow_wait(h)"},
         {"value": {"wait_request": ["root.child"]}},
     ]
     assert runtime._pending_wait_ack
@@ -394,7 +394,7 @@ def test_remote_runtime_short_circuits_proxied_wait_and_consumes_ack(tmp_path):
 
 
 def test_remote_runtime_consumes_wait_ack_before_prepare_side_effects(tmp_path):
-    from rlmflow.runtime.sandbox.remote import RemoteFileRuntime
+    from rflow.runtime.sandbox.remote import RemoteFileRuntime
 
     class InMemoryRemote(RemoteFileRuntime):
         def __init__(self):
@@ -432,8 +432,8 @@ def test_remote_runtime_consumes_wait_ack_before_prepare_side_effects(tmp_path):
 
 
 def test_inject_env_preserves_suspended_remote_repl(tmp_path):
-    from rlmflow.graph import RuntimeRef
-    from rlmflow.runtime.sandbox.remote import RemoteFileRuntime
+    from rflow.graph import RuntimeRef
+    from rflow.runtime.sandbox.remote import RemoteFileRuntime
 
     class SuspendedRemote(RemoteFileRuntime):
         def __init__(self):
@@ -465,10 +465,10 @@ def test_inject_env_preserves_suspended_remote_repl(tmp_path):
     runtime.responses.put({"ok": True})
     runtime.responses.put({"ok": True})
     runtime.responses.put({"ok": True})
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         NoopLLM(),
         runtime=runtime,
-        config=RLMConfig(max_depth=1),
+        config=FlowConfig(max_depth=1),
     )
     graph = Graph(agent_id="root", runtime=RuntimeRef(id="root"))
     node = ExecAction(agent_id="root", seq=1, code="")
@@ -488,7 +488,7 @@ def test_inject_env_preserves_suspended_remote_repl(tmp_path):
 
 def test_e2b_runtime_proxies_llm_query_batched_to_engine(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
-    from rlmflow.runtime.sandbox.e2b import E2BRuntime
+    from rflow.runtime.sandbox.e2b import E2BRuntime
 
     runtime = E2BRuntime(
         workspace=tmp_path / "host",
@@ -496,7 +496,7 @@ def test_e2b_runtime_proxies_llm_query_batched_to_engine(monkeypatch, tmp_path):
         setup_commands=[],
     )
     try:
-        RLMFlow(NoopLLM(), runtime=runtime, config=RLMConfig(max_depth=1))
+        RecursiveFlow(NoopLLM(), runtime=runtime, config=FlowConfig(max_depth=1))
         assert runtime.execute("print(callable(llm_query_batched))") == "True"
         assert "llm_query_batched" in runtime.proxied
     finally:
@@ -504,7 +504,7 @@ def test_e2b_runtime_proxies_llm_query_batched_to_engine(monkeypatch, tmp_path):
 
 
 def test_remote_close_ignores_already_gone_sandbox(tmp_path):
-    from rlmflow.runtime.sandbox.remote import RemoteFileRuntime
+    from rflow.runtime.sandbox.remote import RemoteFileRuntime
 
     class GoneSandboxError(Exception):
         pass
@@ -534,7 +534,7 @@ def test_remote_close_ignores_already_gone_sandbox(tmp_path):
 
 
 def test_modal_runtime_reports_gone_sandbox_with_timeout_hint(monkeypatch, tmp_path):
-    from rlmflow.runtime.sandbox.modal import ModalRuntime
+    from rflow.runtime.sandbox.modal import ModalRuntime
 
     class NotFoundError(Exception):
         pass
@@ -570,7 +570,7 @@ def test_modal_runtime_reports_gone_sandbox_with_timeout_hint(monkeypatch, tmp_p
 
 
 def test_modal_runtime_exec_times_out_on_stuck_stream(monkeypatch, tmp_path):
-    from rlmflow.runtime.sandbox.modal import ModalRuntime
+    from rflow.runtime.sandbox.modal import ModalRuntime
 
     class HangingStream:
         def read(self):
@@ -611,7 +611,7 @@ def test_modal_runtime_exec_times_out_on_stuck_stream(monkeypatch, tmp_path):
 
 
 def test_modal_runtime_starts_repl_as_sandbox_entrypoint(monkeypatch, tmp_path):
-    from rlmflow.runtime.sandbox.modal import ModalRuntime
+    from rflow.runtime.sandbox.modal import ModalRuntime
 
     class FakeStdin:
         def __init__(self):
@@ -670,7 +670,7 @@ def test_modal_runtime_starts_repl_as_sandbox_entrypoint(monkeypatch, tmp_path):
     runtime.send({"cmd": "ping"})
 
     assert FakeSandbox.created_args[:2] == ("sh", "-lc")
-    assert "rlmflow.runtime.repl" in FakeSandbox.created_args[2]
+    assert "rflow.runtime.repl" in FakeSandbox.created_args[2]
     assert "--workdir /workspace" in FakeSandbox.created_args[2]
     assert FakeSandbox.created_kwargs["app"] == {"name": "test-app", "create": True}
     assert FakeSandbox.created_kwargs["image"] is image
@@ -680,7 +680,7 @@ def test_modal_runtime_starts_repl_as_sandbox_entrypoint(monkeypatch, tmp_path):
 
 
 def test_modal_runtime_clears_workspace_contents_not_root(tmp_path):
-    from rlmflow.runtime.sandbox.modal import ModalRuntime
+    from rflow.runtime.sandbox.modal import ModalRuntime
 
     class RecordingModalRuntime(ModalRuntime):
         def __init__(self):
@@ -700,7 +700,7 @@ def test_modal_runtime_clears_workspace_contents_not_root(tmp_path):
 
 
 def test_modal_runtime_exec_uses_stream_type_pipe(monkeypatch, tmp_path):
-    from rlmflow.runtime.sandbox.modal import ModalRuntime
+    from rflow.runtime.sandbox.modal import ModalRuntime
 
     class FakeStream:
         def read(self):
@@ -736,7 +736,7 @@ def test_modal_runtime_exec_uses_stream_type_pipe(monkeypatch, tmp_path):
 
 
 def test_modal_runtime_uses_direct_repl_streams(tmp_path):
-    from rlmflow.runtime.sandbox.modal import ModalRuntime
+    from rflow.runtime.sandbox.modal import ModalRuntime
 
     class FakeStdin:
         def __init__(self):
@@ -771,7 +771,7 @@ def test_modal_runtime_uses_direct_repl_streams(tmp_path):
 
 
 def test_modal_runtime_splits_stdout_chunks_into_json_lines(tmp_path):
-    from rlmflow.runtime.sandbox.modal import ModalRuntime
+    from rflow.runtime.sandbox.modal import ModalRuntime
 
     runtime = ModalRuntime(workspace=tmp_path / "host")
     runtime._stdout_queue = queue.Queue()

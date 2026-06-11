@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - optional dependency path
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
-mcp = FastMCP("rlmflow-weather", json_response=True) if FastMCP is not None else None
+mcp = FastMCP("recursive-flow-weather", json_response=True) if FastMCP is not None else None
 
 
 def mcp_tool(fn):

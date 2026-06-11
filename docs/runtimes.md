@@ -1,7 +1,7 @@
 # Runtimes
 
 A `Runtime` executes agent Python. The actual execution and generator
-suspension live in `rlmflow.runtime.repl.REPL`; a `Runtime` subclass
+suspension live in `rflow.runtime.repl.REPL`; a `Runtime` subclass
 only decides how to talk to one.
 
 ## Protocol
@@ -29,7 +29,7 @@ Responses: `output`, `suspended`, `proxy`, `value`, `error`.
 | Runtime | What it does |
 |---|---|
 | `LocalRuntime` | In-process. `send`/`recv` dispatch straight to an in-process `REPL`. |
-| `DockerRuntime(image, ...)` | Run `python -m rlmflow.runtime.repl` inside a fresh `docker run -i --rm` container; talk to it over stdio. |
+| `DockerRuntime(image, ...)` | Run `python -m rflow.runtime.repl` inside a fresh `docker run -i --rm` container; talk to it over stdio. |
 | `sandbox.ModalRuntime` | Run the REPL inside a Modal container. |
 | `sandbox.E2BRuntime` | Run the REPL inside an E2B Sandbox. |
 | `sandbox.DaytonaRuntime` | Run the REPL inside a Daytona Sandbox. |
@@ -41,22 +41,22 @@ pipes — `DockerRuntime` is the reference implementation.
 ## Docker
 
 ```bash
-docker build -t rlmflow:local .
+docker build -t recursive-flow:local .
 ```
 
 ```python
-from rlmflow import RLMFlow
-from rlmflow.runtime.docker import DockerRuntime
+import rflow
+from rflow.runtime.docker import DockerRuntime
 
 rt = DockerRuntime(
-    image="rlmflow:local",
+    image="recursive-flow:local",
     mounts={"./data": "/workspace"},
     env={"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]},
     network="none",
     cpus=1.0,
     memory="512m",
 )
-agent = RLMFlow(llm_client=llm, runtime=rt, runtime_factory=rt.clone)
+agent = rflow.RecursiveFlow(llm_client=llm, runtime=rt, runtime_factory=rt.clone)
 ```
 
 ## Remote sandboxes
@@ -64,13 +64,13 @@ agent = RLMFlow(llm_client=llm, runtime=rt, runtime_factory=rt.clone)
 Install provider extras as needed:
 
 ```bash
-pip install rlmflow[modal]
-pip install rlmflow[e2b]
-pip install rlmflow[daytona]
-pip install rlmflow[sandbox]   # all three
+pip install recursive-flow[modal]
+pip install recursive-flow[e2b]
+pip install recursive-flow[daytona]
+pip install recursive-flow[sandbox]   # all three
 ```
 
-Each provider runtime lives under `rlmflow.runtime.sandbox` and keeps the
+Each provider runtime lives under `rflow.runtime.sandbox` and keeps the
 same base `Runtime` protocol. Modal, E2B, and Daytona use
 `RemoteFileRuntime`, a public base class that keeps one remote REPL process
 alive and exchanges JSON messages through remote files. That keeps REPL
@@ -78,11 +78,11 @@ variables and suspended launcher state across turns even when
 the provider exposes command execution as one-shot calls.
 
 ```python
-from rlmflow import RLMFlow
-from rlmflow.runtime.sandbox.e2b import E2BRuntime
+import rflow
+from rflow.runtime.sandbox.e2b import E2BRuntime
 
 rt = E2BRuntime(workspace=workspace)
-agent = RLMFlow(llm_client=llm, runtime=rt, runtime_factory=rt.clone)
+agent = rflow.RecursiveFlow(llm_client=llm, runtime=rt, runtime_factory=rt.clone)
 ```
 
 See [`examples/sandboxes/`](../examples/sandboxes/) for real-agent examples

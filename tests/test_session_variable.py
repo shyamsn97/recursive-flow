@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rlmflow.graph import (
+from rflow.graph import (
     DoneOutput,
     ExecAction,
     ExecOutput,
@@ -13,7 +13,7 @@ from rlmflow.graph import (
     LLMOutput,
     UserQuery,
 )
-from rlmflow.workspace import FileSession, InMemorySession, SessionVariable
+from rflow.workspace import FileSession, InMemorySession, SessionVariable
 
 
 def _seed_agent(
@@ -63,7 +63,7 @@ def test_list_agents_excludes_self_and_lists_siblings(tmp_path: Path):
         agent_id="root",
         system="root prompt",
         query="build a thing",
-        code='rlm_delegate(name="html", query="...", context="")',
+        code='flow_delegate(name="html", query="...", context="")',
         observation="ok",
         result="all done",
     )
@@ -91,7 +91,7 @@ def test_summarize_agent_reports_latest_state(tmp_path: Path):
         agent_id="root",
         system="root prompt",
         query="build a thing",
-        code='rlm_delegate(name="html", query="...", context="")',
+        code='flow_delegate(name="html", query="...", context="")',
         observation="ok",
         result="all done",
     )
@@ -248,7 +248,7 @@ def test_grep_searches_across_agents_but_skips_self(tmp_path: Path):
         session,
         agent_id="root",
         query="self should be skipped",
-        code='rlm_delegate(name="html", query="...", context="")',
+        code='flow_delegate(name="html", query="...", context="")',
         observation="self_only_marker",
         result="self_only_marker",
     )
@@ -386,17 +386,17 @@ def test_tree_renders_full_recursive_hierarchy(tmp_path: Path):
 
 def test_session_variable_injected_via_inject_env(tmp_path: Path):
     """End-to-end: SessionVariable lands in the REPL namespace, not a dict."""
-    from rlmflow import RLMConfig, RLMFlow, Workspace
-    from rlmflow.llm import LLMClient
+    from rflow import FlowConfig, RecursiveFlow, Workspace
+    from rflow.llm import LLMClient
 
     class _StubLLM(LLMClient):
         def chat(self, messages, **kwargs):
             return '```repl\ndone("ok")\n```'
 
     workspace = Workspace.create(tmp_path / "ws")
-    flow = RLMFlow(
+    flow = RecursiveFlow(
         llm_client=_StubLLM(),
-        config=RLMConfig(max_depth=1),
+        config=FlowConfig(max_depth=1),
         workspace=workspace,
     )
     graph = flow.start("hi")
@@ -404,7 +404,6 @@ def test_session_variable_injected_via_inject_env(tmp_path: Path):
 
     ns = runtime.repl.namespace
     assert "SESSION" in ns
-    assert "RLM_SESSION" not in ns
     handle = ns["SESSION"]
     assert isinstance(handle, SessionVariable)
     assert handle.agent_id == "root"

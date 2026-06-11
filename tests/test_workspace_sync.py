@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from rlmflow.graph import Graph
-from rlmflow.llm import LLMClient
-from rlmflow.rlm import RLMFlow
-from rlmflow.workspace import ArtifactStore, InMemoryWorkspace, Workspace
+from rflow.graph import Graph
+from rflow.llm import LLMClient
+from rflow.flow import RecursiveFlow
+from rflow.workspace import ArtifactStore, InMemoryWorkspace, Workspace
 
 
 class FakeFileRuntime:
@@ -62,6 +62,7 @@ def test_workspace_materialize_and_commit_are_local_noops(tmp_path):
 
 def test_workspace_from_graph_creates_synced_workspace(tmp_path):
     graph = Graph(agent_id="root")
+    graph.set_context("portable context", metadata={"source": "test"})
 
     workspace = Workspace.from_graph(
         graph,
@@ -72,6 +73,26 @@ def test_workspace_from_graph_creates_synced_workspace(tmp_path):
     assert workspace.root == (tmp_path / "variant").resolve()
     assert synced.agent_id == "root"
     assert list(synced.agents) == ["root"]
+    assert synced.context() == "portable context"
+    assert synced.contexts["context"].metadata == {"source": "test"}
+    assert workspace.context.read("context", agent_id="root") == "portable context"
+    assert workspace.context.info("context", agent_id="root")["chars"] == len(
+        "portable context"
+    )
+
+
+def test_graph_context_round_trips_through_json(tmp_path):
+    graph = Graph(agent_id="root").set_context(
+        "portable context",
+        metadata={"source": "test"},
+    )
+    graph.set_context("extra payload", key="spec")
+
+    loaded = Graph.load(graph.save(tmp_path / "graph.json"))
+
+    assert loaded.context() == "portable context"
+    assert loaded.context("spec") == "extra payload"
+    assert loaded.contexts["context"].metadata == {"source": "test"}
 
 
 def test_workspace_from_graph_replaces_existing_engine_state(tmp_path):
@@ -91,6 +112,42 @@ def test_workspace_from_graph_replaces_existing_engine_state(tmp_path):
     assert not workspace.artifacts.exists("notes.txt")
 
 
+def test_fresh_workspace_gets_graph_context_when_syncing_edited_graph(tmp_path):
+    source = Workspace.create(tmp_path / "source")
+    agent = RecursiveFlow(DummyLLM()).attach_workspace(source)
+    graph = agent.start("read the context", context="root payload")
+    edited = graph.inject_output(target="root", output="controller note")
+
+    variant = Workspace.create(tmp_path / "variant")
+    synced = variant.sync_graph_if_changed(edited)
+
+    assert [node.type for node in synced.nodes] == [node.type for node in edited.nodes]
+    assert synced.context() == "root payload"
+    assert variant.context.read("context", agent_id="root") == "root payload"
+    assert variant.context.info("context", agent_id="root")["chars"] == len(
+        "root payload"
+    )
+
+
+def test_sync_graph_if_changed_creates_missing_empty_context(tmp_path):
+    workspace = Workspace.create(tmp_path / "variant")
+    graph = Graph(agent_id="root")
+
+    workspace.sync_graph_if_changed(graph)
+
+    assert workspace.context.read("context", agent_id="root") == ""
+    assert workspace.context.info("context", agent_id="root")["chars"] == 0
+
+
+def test_sync_graph_if_changed_repairs_missing_context_for_synced_graph(tmp_path):
+    workspace = Workspace.from_graph(Graph(agent_id="root"), tmp_path / "variant")
+    shutil.rmtree(workspace.root / "context")
+
+    workspace.sync_graph_if_changed(workspace.load_graph())
+
+    assert workspace.context.read("context", agent_id="root") == ""
+
+
 def test_workspace_from_graph_requires_path_for_filesystem_workspace():
     with pytest.raises(TypeError, match="requires a workspace path"):
         Workspace.from_graph(Graph(agent_id="root"))
@@ -102,11 +159,12 @@ def test_in_memory_workspace_from_graph_needs_no_path():
 
     assert workspace.load_graph().agent_id == "root"
     assert synced.agent_id == "root"
+    assert workspace.context.read("context", agent_id="root") == ""
 
 
-def test_rlmflow_attach_workspace_binds_in_place(tmp_path):
+def test_recursive_flow_attach_workspace_binds_in_place(tmp_path):
     workspace = Workspace.create(tmp_path / "workspace")
-    agent = RLMFlow(DummyLLM())
+    agent = RecursiveFlow(DummyLLM())
 
     result = agent.attach_workspace(workspace)
 
@@ -117,18 +175,18 @@ def test_rlmflow_attach_workspace_binds_in_place(tmp_path):
     assert agent.runtime is not None
 
 
-def test_rlmflow_defaults_to_local_runtime_without_workspace():
-    agent = RLMFlow(DummyLLM())
+def test_recursive_flow_defaults_to_local_runtime_without_workspace():
+    agent = RecursiveFlow(DummyLLM())
 
     assert agent.runtime is not None
     assert agent.workspace is None
 
 
-def test_rlmflow_clone_rejects_unknown_overrides(tmp_path):
+def test_recursive_flow_clone_rejects_unknown_overrides(tmp_path):
     workspace = Workspace.create(tmp_path / "workspace")
-    agent = RLMFlow(DummyLLM()).attach_workspace(workspace)
+    agent = RecursiveFlow(DummyLLM()).attach_workspace(workspace)
 
-    with pytest.raises(TypeError, match="unknown RLMFlow.clone"):
+    with pytest.raises(TypeError, match="unknown RecursiveFlow.clone"):
         agent.clone(workspaec=workspace)
 
 
@@ -202,7 +260,9 @@ def test_workspace_push_and_pull_use_runtime_file_primitives(tmp_path):
     assert (runtime.root / "workspace" / "graph.json").read_text() == '{"nodes": []}'
     assert (runtime.root / "workspace" / "session" / "root.jsonl").read_text() == "{}\n"
     assert (runtime.root / "workspace" / "context" / "payload.txt").read_text() == "ctx"
-    assert (runtime.root / "workspace" / "src" / "app.py").read_text() == "print('hi')\n"
+    assert (
+        runtime.root / "workspace" / "src" / "app.py"
+    ).read_text() == "print('hi')\n"
     assert not (runtime.root / "workspace" / ".ruff_cache").exists()
 
     (runtime.root / "workspace" / "remote.txt").write_text("from runtime")

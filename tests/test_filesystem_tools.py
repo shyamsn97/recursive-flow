@@ -1,4 +1,4 @@
-from rlmflow.tools.filesystem import ls
+from rflow.tools.filesystem import ls
 
 
 def test_ls_returns_workspace_relative_paths_for_relative_inputs(tmp_path, monkeypatch):

@@ -1,4 +1,4 @@
-"""OOLONG scorer — standalone, zero rlmflow dependency.
+"""OOLONG scorer — standalone, zero recursive-flow dependency.
 
 Implements the scoring methodology from the OOLONG paper
 (arXiv:2511.02817, §2.3 and §3.2).

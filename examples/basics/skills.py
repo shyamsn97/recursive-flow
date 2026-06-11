@@ -19,16 +19,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from rlmflow import OpenAIClient, RLMConfig, RLMFlow, Workspace
-from rlmflow.prompts.default import DEFAULT_BUILDER
-from rlmflow.runtime.local import LocalRuntime
-
+import rflow
+from rflow.prompts.default import DEFAULT_BUILDER
+from rflow.runtime.local import LocalRuntime
 
 DEFAULT_WORKSPACE = (
-    Path(__file__).resolve().parents[1]
-    / "_runs"
-    / "example-workspaces"
-    / "skills-demo"
+    Path(__file__).resolve().parents[1] / "_runs" / "example-workspaces" / "skills-demo"
 )
 
 
@@ -77,7 +73,7 @@ Then report `m`, `b`, `pred`, and `residual_norm`.
 """
 
 
-def install_example_skill(workspace: Workspace) -> str:
+def install_example_skill(workspace: rflow.Workspace) -> str:
     """Write a sample SKILL.md as a normal workspace artifact."""
 
     path = "skills/numpy-linear-algebra/SKILL.md"
@@ -110,7 +106,7 @@ def skills_section(skill_paths: list[str]):
     return render
 
 
-def build_agent(workspace: Workspace, *, model: str) -> RLMFlow:
+def build_agent(workspace: rflow.Workspace, *, model: str) -> rflow.RecursiveFlow:
     """Create an agent configured to include the installed skill."""
 
     skill_path = install_example_skill(workspace)
@@ -120,12 +116,12 @@ def build_agent(workspace: Workspace, *, model: str) -> RLMFlow:
         title="Skills",
         before="tools",
     )
-    return RLMFlow(
-        llm_client=OpenAIClient(model=model),
+    return rflow.RecursiveFlow(
+        llm_client=rflow.OpenAIClient(model=model),
         runtime=LocalRuntime(workspace=workspace),
         workspace=workspace,
         prompt_builder=prompt_builder,
-        config=RLMConfig(max_iterations=5),
+        config=rflow.FlowConfig(max_iterations=5),
     )
 
 
@@ -149,7 +145,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    workspace = Workspace.create(args.workspace)
+    workspace = rflow.Workspace.create(args.workspace)
     agent = build_agent(workspace, model=args.model)
 
     query = (

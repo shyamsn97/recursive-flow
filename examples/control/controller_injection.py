@@ -12,17 +12,17 @@ Run:
 
 from __future__ import annotations
 
-from rlmflow import ExecAction, ExecOutput, LLMClient, LLMUsage, RLMConfig, RLMFlow
-from rlmflow.runtime.local import LocalRuntime
+import rflow
+from rflow.runtime.local import LocalRuntime
 
 OBSERVATION = "Injected controller observation: finalize using this note."
 
 
-class DemoLLM(LLMClient):
+class DemoLLM(rflow.LLMClient):
     """Deterministic model so the example runs offline."""
 
     def chat(self, messages, *args, **kwargs) -> str:
-        self.last_usage = LLMUsage(input_tokens=80, output_tokens=20)
+        self.last_usage = rflow.LLMUsage(input_tokens=80, output_tokens=20)
         prompt = messages[-1]["content"]
         if "Injected controller observation" in prompt:
             return '```repl\ndone("used the injected controller observation")\n```'
@@ -54,17 +54,17 @@ def print_states(label: str, graph) -> None:
 def observation_injection() -> None:
     banner("1. Inject an observation and let the LLM react")
 
-    agent = RLMFlow(
+    agent = rflow.RecursiveFlow(
         DemoLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=0, max_iterations=4),
+        config=rflow.FlowConfig(max_depth=0, max_iterations=4),
     )
     graph = agent.start("Wait for a controller note, then finish.")
     assert_types(graph, ["user_query"])
 
     injected = graph.inject(
         target="root",
-        node=ExecOutput(
+        node=rflow.ExecOutput(
             output=OBSERVATION,
             content=OBSERVATION,
         ),
@@ -76,12 +76,14 @@ def observation_injection() -> None:
 
     extra = injected.nodes[-1]
     extra_keys = set(extra.to_dict())
-    assert isinstance(extra, ExecOutput)
+    assert isinstance(extra, rflow.ExecOutput)
     assert "injected" not in extra_keys
     assert "injected_reason" not in extra_keys
 
     print_states("start(): original graph", graph)
-    print_states("graph.inject(...): returned graph with one plain ExecOutput", injected)
+    print_states(
+        "graph.inject(...): returned graph with one plain ExecOutput", injected
+    )
     print("original graph is unchanged:", state_types(graph))
     print("extra node keys do not include injection metadata:", sorted(extra_keys))
 
@@ -114,24 +116,26 @@ def observation_injection() -> None:
 def action_injection() -> None:
     banner("2. Inject an ExecAction to finalize immediately")
 
-    agent = RLMFlow(
+    agent = rflow.RecursiveFlow(
         DemoLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=0, max_iterations=4),
+        config=rflow.FlowConfig(max_depth=0, max_iterations=4),
     )
     graph = agent.start("This run will be stopped by the controller.")
     assert_types(graph, ["user_query"])
 
     injected = graph.inject(
         target="root",
-        node=ExecAction(code='done("controller stopped the run")'),
+        node=rflow.ExecAction(code='done("controller stopped the run")'),
     )
     assert injected is not graph
     assert_types(graph, ["user_query"])
     assert_types(injected, ["user_query", "exec_action"])
 
     print_states("start(): original graph", graph)
-    print_states("graph.inject(...): returned graph with one plain ExecAction", injected)
+    print_states(
+        "graph.inject(...): returned graph with one plain ExecAction", injected
+    )
 
     graph = agent.step(injected)  # persists the ExecAction and executes it directly
     assert_types(graph, ["user_query", "exec_action", "done_output"])

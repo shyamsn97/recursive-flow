@@ -1,4 +1,4 @@
-"""Tests for :func:`rlmflow.graph.retrace_steps` and ``Workspace.load_steps``.
+"""Tests for :func:`rflow.graph.retrace_steps` and ``Workspace.load_steps``.
 
 Focus: each successive snapshot reflects one round of ``engine.step()``
 (i.e. each ready agent advances by one obs-to-obs ``apply_one`` —
@@ -9,17 +9,17 @@ respected, and concurrent siblings advance in lockstep.
 
 from __future__ import annotations
 
-from rlmflow import (
+from rflow import (
     Graph,
     LLMClient,
     LLMUsage,
-    RLMConfig,
-    RLMFlow,
+    FlowConfig,
+    RecursiveFlow,
     Workspace,
     retrace_steps,
 )
-from rlmflow.graph.timeline import _execution_ticks
-from rlmflow.runtime.local import LocalRuntime
+from rflow.graph.timeline import _execution_ticks
+from rflow.runtime.local import LocalRuntime
 
 
 # ── tiny scripted LLMs ───────────────────────────────────────────────
@@ -30,8 +30,8 @@ class _OneChild(LLMClient):
 
     ROOT = (
         "```repl\n"
-        "h = rlm_delegate(name='child', query='do thing', context='')\n"
-        "results = await rlm_wait(h)\n"
+        "h = flow_delegate(name='child', query='do thing', context='')\n"
+        "results = await flow_wait(h)\n"
         "done('root:' + results[0])\n"
         "```"
     )
@@ -55,10 +55,10 @@ class _ParallelChildren(LLMClient):
 
     ROOT = (
         "```repl\n"
-        "ha = rlm_delegate(name='a', query='task a', context='')\n"
-        "hb = rlm_delegate(name='b', query='task b', context='')\n"
-        "hc = rlm_delegate(name='c', query='task c', context='')\n"
-        "results = await rlm_wait(ha, hb, hc)\n"
+        "ha = flow_delegate(name='a', query='task a', context='')\n"
+        "hb = flow_delegate(name='b', query='task b', context='')\n"
+        "hc = flow_delegate(name='c', query='task c', context='')\n"
+        "results = await flow_wait(ha, hb, hc)\n"
         "done(' '.join(results))\n"
         "```"
     )
@@ -91,10 +91,10 @@ class _ParallelChildren(LLMClient):
 
 def _final_one_child(tmp_path):
     workspace = Workspace.create(tmp_path / "ws")
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=_OneChild(),
         workspace=workspace,
-        config=RLMConfig(max_depth=2),
+        config=FlowConfig(max_depth=2),
     )
     graph = agent.start("kick off")
     while not graph.finished:
@@ -104,11 +104,11 @@ def _final_one_child(tmp_path):
 
 def _final_parallel(tmp_path):
     workspace = Workspace.create(tmp_path / "ws")
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=_ParallelChildren(),
         runtime=LocalRuntime(workspace=workspace),
         workspace=workspace,
-        config=RLMConfig(max_depth=2, max_concurrency=8),
+        config=FlowConfig(max_depth=2, max_concurrency=8),
     )
     graph = agent.start("kick off")
     while not graph.finished:
@@ -337,7 +337,7 @@ def test_mismatched_sibling_lengths_run_in_parallel():
     Short = UserQuery + one full turn (5 states, 2 ticks).
     Long  = UserQuery + two full turns (9 states, 3 ticks).
     """
-    from rlmflow import (
+    from rflow import (
         DoneOutput,
         ExecAction,
         ExecOutput,

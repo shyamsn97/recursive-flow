@@ -1,6 +1,6 @@
-"""RLMFlow as a drop-in LLM.
+"""RecursiveFlow as a drop-in LLM.
 
-Because `RLMFlow` inherits from `LLMClient`, you can swap it in anywhere you'd
+Because `RecursiveFlow` inherits from `LLMClient`, you can swap it in anywhere you'd
 use a raw LLM. Calling `agent.chat(messages)` runs the full recursive agent
 loop under the hood and returns a plain string — same signature as any other
 LLM client.
@@ -11,7 +11,7 @@ This enables two patterns:
    (e.g. a summarization helper, a router, a retrieval pipeline) gets agentic
    behavior for free — no code changes.
 
-2. **Nest agents.** An outer `RLMFlow` can use an inner `RLMFlow` as its `llm_client`.
+2. **Nest agents.** An outer `RecursiveFlow` can use an inner `RecursiveFlow` as its `llm_client`.
    The outer agent's every "LLM call" is itself a full recursive sub-agent run.
 
 Run with:
@@ -21,11 +21,11 @@ Run with:
 
 from __future__ import annotations
 
-from rlmflow import LLMClient, OpenAIClient, RLMConfig, RLMFlow
-from rlmflow.runtime.local import LocalRuntime
+import rflow
+from rflow.runtime.local import LocalRuntime
 
 
-def ask(llm: LLMClient, question: str) -> str:
+def ask(llm: rflow.LLMClient, question: str) -> str:
     """A generic helper that takes any LLMClient. Doesn't know or care
     whether it got a plain OpenAI client or a full recursive agent."""
     reply = llm.chat([{"role": "user", "content": question}])
@@ -37,33 +37,33 @@ def ask(llm: LLMClient, question: str) -> str:
 
 def demo_plain_llm():
     print("=== plain OpenAI client ===")
-    llm = OpenAIClient(model="gpt-4o-mini")
+    llm = rflow.OpenAIClient(model="gpt-4o-mini")
     answer = ask(llm, "In one sentence: what is the capital of France?")
     print(answer, "\n")
 
 
-def demo_rlm_as_llm():
-    print("=== RLMFlow as LLMClient (drop-in) ===")
-    agent = RLMFlow(
-        llm_client=OpenAIClient(model="gpt-4o-mini"),
+def demo_flow_as_llm():
+    print("=== RecursiveFlow as LLMClient (drop-in) ===")
+    agent = rflow.RecursiveFlow(
+        llm_client=rflow.OpenAIClient(model="gpt-4o-mini"),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=5, max_budget=20_000),
+        config=rflow.FlowConfig(max_iterations=5, max_budget=20_000),
     )
     answer = ask(agent, "Compute 17 * 23 using a ```repl``` block, then call done().")
     print(answer, "\n")
 
 
-def demo_nested_rlm():
-    print("=== nested RLMFlow (outer agent uses inner agent as its LLM) ===")
-    inner = RLMFlow(
-        llm_client=OpenAIClient(model="gpt-4o-mini"),
+def demo_nested_flow():
+    print("=== nested RecursiveFlow (outer agent uses inner agent as its LLM) ===")
+    inner = rflow.RecursiveFlow(
+        llm_client=rflow.OpenAIClient(model="gpt-4o-mini"),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3),
+        config=rflow.FlowConfig(max_iterations=3),
     )
-    outer = RLMFlow(
+    outer = rflow.RecursiveFlow(
         llm_client=inner,
         runtime=LocalRuntime(),
-        config=RLMConfig(max_iterations=3, max_budget=50_000),
+        config=rflow.FlowConfig(max_iterations=3, max_budget=50_000),
     )
     answer = outer.run("What's the 7th Fibonacci number? Use ```repl``` to compute.")
     print(answer)
@@ -71,5 +71,5 @@ def demo_nested_rlm():
 
 if __name__ == "__main__":
     demo_plain_llm()
-    demo_rlm_as_llm()
-    demo_nested_rlm()
+    demo_flow_as_llm()
+    demo_nested_flow()

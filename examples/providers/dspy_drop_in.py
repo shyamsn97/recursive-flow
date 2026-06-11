@@ -1,4 +1,4 @@
-"""Use an RLMFlow agent as the LM behind a DSPy program.
+"""Use an RecursiveFlow agent as the LM behind a DSPy program.
 
 Run with:
     export OPENAI_API_KEY=...
@@ -12,23 +12,23 @@ from pathlib import Path
 
 import dspy
 
-from rlmflow import OpenAIClient, RLMConfig, RLMFlow, Workspace
-from rlmflow.integrations.dspy import RLMFlowLM
-from rlmflow.runtime.local import LocalRuntime
+import rflow
+from rflow.integrations.dspy import RecursiveFlowLM
+from rflow.runtime.local import LocalRuntime
 
 
 def main() -> None:
     examples_root = Path(__file__).resolve().parents[1]
-    workspace = Workspace.create(
+    workspace = rflow.Workspace.create(
         examples_root / "_runs" / "example-workspaces" / "dspy-workspace"
     )
-    agent = RLMFlow(
-        llm_client=OpenAIClient(model="gpt-4o-mini"),
+    agent = rflow.RecursiveFlow(
+        llm_client=rflow.OpenAIClient(model="gpt-4o-mini"),
         runtime=LocalRuntime(workspace=workspace),
-        config=RLMConfig(max_depth=1, max_iterations=5),
+        config=rflow.FlowConfig(max_depth=1, max_iterations=5),
     )
 
-    dspy.configure(lm=RLMFlowLM(agent, model="rlmflow/gpt-4o-mini"))
+    dspy.configure(lm=RecursiveFlowLM(agent, model="recursive-flow/gpt-4o-mini"))
 
     qa = dspy.ChainOfThought("question -> answer")
     result = qa(question="What is 17 * 23? Show a short calculation.")

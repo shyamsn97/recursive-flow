@@ -6,11 +6,11 @@ Covers the three smoke paths that regressed during the 0.1.0 cycle:
 2. ``from X import *`` works inside a code block that also awaits.
 3. Proxied tool writes resolve to the host workspace directory.
 
-Gated on ``RLMKIT_DOCKER_TEST=1`` plus a running docker daemon.  Build
+Gated on ``RECURSIVE_FLOW_DOCKER_TEST=1`` plus a running docker daemon.  Build
 the image once before running:
 
-    docker build -t rlmflow:local .
-    RLMKIT_DOCKER_TEST=1 pytest tests/integration/test_docker_runtime.py
+    docker build -t recursive-flow:local .
+    RECURSIVE_FLOW_DOCKER_TEST=1 pytest tests/integration/test_docker_runtime.py
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ from pathlib import Path
 
 import pytest
 
-from rlmflow.graph import ChildHandle, WaitRequest
-from rlmflow.runtime.docker import DockerRuntime
-from rlmflow.workspace import FileContext
+from rflow.graph import ChildHandle, WaitRequest
+from rflow.runtime.docker import DockerRuntime
+from rflow.workspace import FileContext
 
 
 def _docker_available() -> bool:
@@ -40,12 +40,12 @@ def _docker_available() -> bool:
 
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("RLMKIT_DOCKER_TEST") != "1" or not _docker_available(),
-    reason="set RLMKIT_DOCKER_TEST=1 with a working docker daemon",
+    os.environ.get("RECURSIVE_FLOW_DOCKER_TEST") != "1" or not _docker_available(),
+    reason="set RECURSIVE_FLOW_DOCKER_TEST=1 with a working docker daemon",
 )
 
 
-IMAGE = os.environ.get("RLMKIT_DOCKER_TEST_IMAGE", "rlmflow:local")
+IMAGE = os.environ.get("RECURSIVE_FLOW_DOCKER_TEST_IMAGE", "recursive-flow:local")
 
 
 @pytest.fixture
@@ -81,7 +81,7 @@ def test_object_proxy_round_trips_file_context_methods(runtime, tmp_path: Path):
 def test_star_import_with_await(runtime):
     rt, _ = runtime
 
-    def rlm_delegate(
+    def flow_delegate(
         *,
         name: str,
         query: str,
@@ -91,11 +91,11 @@ def test_star_import_with_await(runtime):
     ) -> ChildHandle:
         return ChildHandle(agent_id="c")
 
-    def rlm_wait(*handles):
+    def flow_wait(*handles):
         return WaitRequest(agent_ids=[h.agent_id for h in handles])
 
-    rt.inject("rlm_delegate", rlm_delegate)
-    rt.inject("rlm_wait", rlm_wait)
+    rt.inject("flow_delegate", flow_delegate)
+    rt.inject("flow_wait", flow_wait)
     rt.inject_launcher("launch_subagents")
 
     suspended, _, _ = rt.start_code(
@@ -129,7 +129,7 @@ def test_end_to_end_delegate_wait():
     try:
         assert rt.execute("print('hi from container')") == "hi from container"
 
-        def rlm_delegate(
+        def flow_delegate(
             *,
             name: str,
             query: str,
@@ -139,11 +139,11 @@ def test_end_to_end_delegate_wait():
         ) -> ChildHandle:
             return ChildHandle(agent_id=f"child-{name}")
 
-        def rlm_wait(*handles):
+        def flow_wait(*handles):
             return WaitRequest(agent_ids=[h.agent_id for h in handles])
 
-        rt.inject("rlm_delegate", rlm_delegate)
-        rt.inject("rlm_wait", rlm_wait)
+        rt.inject("flow_delegate", flow_delegate)
+        rt.inject("flow_wait", flow_wait)
         rt.inject_launcher("launch_subagents")
 
         suspended, payload, _ = rt.start_code(

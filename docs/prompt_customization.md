@@ -1,6 +1,6 @@
 # Prompt Customization
 
-`RLMFlow` builds a system prompt from named sections. Most customization should
+`RecursiveFlow` builds a system prompt from named sections. Most customization should
 derive from the default builder instead of replacing the whole prompt, because
 the default sections carry the REPL protocol, the
 `launch_subagents` delegation rules,
@@ -22,9 +22,9 @@ You can also render without starting a run by constructing the graph shape you
 want to inspect:
 
 ```python
-from rlmflow import Graph
+import rflow
 
-graph = Graph(
+graph = rflow.Graph(
     query="Summarize this document.",
     agent_id="root",
     depth=0,
@@ -70,8 +70,8 @@ mutated.
 Add a new section anywhere relative to the existing ones:
 
 ```python
-from rlmflow import RLMFlow
-from rlmflow.prompts.default import DEFAULT_BUILDER
+import rflow
+from rflow.prompts.default import DEFAULT_BUILDER
 
 project_rules = """
 - Preserve API compatibility unless the task explicitly asks for a breaking change.
@@ -86,7 +86,7 @@ prompt = DEFAULT_BUILDER.section(
     after="final",
 )
 
-agent = RLMFlow(
+agent = rflow.RecursiveFlow(
     llm_client=llm,
     workspace=workspace,
     prompt_builder=prompt,
@@ -98,7 +98,7 @@ agent = RLMFlow(
 Replace just the piece you want to customize. The rest of the prompt is unchanged:
 
 ```python
-from rlmflow.prompts.default import DEFAULT_BUILDER
+from rflow.prompts.default import DEFAULT_BUILDER
 
 domain_strategy = """
 **When to delegate:** spawn one child per independent file/module. Keep the root
@@ -139,7 +139,7 @@ If you want the standard runtime-generated tools and status blocks, include the
 built-in callable sections.
 
 ```python
-from rlmflow.prompts import PromptBuilder, status_section, tools_section
+from rflow.prompts import PromptBuilder, status_section, tools_section
 
 prompt = (
     PromptBuilder()
@@ -160,15 +160,15 @@ prompt = (
 
 ## Full System Prompt Replacement
 
-`RLMConfig.system_prompt` bypasses the builder entirely:
+`FlowConfig.system_prompt` bypasses the builder entirely:
 
 ```python
-from rlmflow import RLMConfig, RLMFlow
+import rflow
 
-agent = RLMFlow(
+agent = rflow.RecursiveFlow(
     llm_client=llm,
     workspace=workspace,
-    config=RLMConfig(
+    config=rflow.FlowConfig(
         system_prompt="""
 You are a Python REPL agent.
 
@@ -186,19 +186,18 @@ those features.
 
 ## Dynamic Prompts
 
-Subclass `RLMFlow` when the prompt should depend on the current agent,
+Subclass `RecursiveFlow` when the prompt should depend on the current agent,
 depth, query, available tools, or project state. The hook receives the
 agent's `Graph` — all run-invariants are flat fields on it
 (`agent_id`, `depth`, `query`, `config`, `model`, …).
 
 ```python
-from rlmflow import RLMFlow
-from rlmflow.graph import Graph
-from rlmflow.prompts.default import DEFAULT_BUILDER
+import rflow
+from rflow.prompts.default import DEFAULT_BUILDER
 
 
-class AuditFlow(RLMFlow):
-    def build_system_prompt(self, graph: Graph) -> str:
+class AuditFlow(rflow.RecursiveFlow):
+    def build_system_prompt(self, graph: rflow.Graph) -> str:
         extra = (
             "At root depth, produce an executive summary after verification."
             if graph.depth == 0
@@ -217,7 +216,7 @@ class AuditFlow(RLMFlow):
 You can also replace narrower callable sections directly:
 
 ```python
-from rlmflow.prompts import tools_section
+from rflow.prompts import tools_section
 
 
 def careful_tools(engine, graph):
@@ -234,7 +233,7 @@ small additions like skills, memory, or project rules. A prompt section can be
 either static text or a function:
 
 ```python
-def section(engine: RLMFlow, graph: Graph) -> str:
+def section(engine: RecursiveFlow, graph: Graph) -> str:
     ...
 ```
 
@@ -326,7 +325,7 @@ prompt = (
     .section("status", status_section, title="Status")
 )
 
-agent = RLMFlow(
+agent = RecursiveFlow(
     llm_client=llm,
     workspace=workspace,
     runtime=runtime,

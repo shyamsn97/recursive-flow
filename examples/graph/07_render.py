@@ -1,6 +1,6 @@
 """Rendering a Graph: text trees, transcripts, HTML viewer.
 
-Several read-only renderers ship with rlmflow:
+Several read-only renderers ship with recursive-flow:
 
 - ``graph.tree()``           — ASCII tree of agents + states
 - ``graph.session(...)``     — full chat-style transcript across the run
@@ -19,21 +19,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rlmflow.graph import (
-    DoneOutput,
-    ExecAction,
-    Graph,
-    LLMAction,
-    LLMOutput,
-    SupervisingOutput,
-    UserQuery,
-)
+import rflow
 
 
-def build_graph() -> Graph:
-    root_q = UserQuery(agent_id="root", seq=0, content="write hello world")
-    root_call = LLMAction(agent_id="root", seq=1, model="demo")
-    root_reply = LLMOutput(
+def build_graph() -> rflow.Graph:
+    root_q = rflow.UserQuery(agent_id="root", seq=0, content="write hello world")
+    root_call = rflow.LLMAction(agent_id="root", seq=1, model="demo")
+    root_reply = rflow.LLMOutput(
         agent_id="root",
         seq=2,
         reply="I'll delegate the file write.",
@@ -41,14 +33,16 @@ def build_graph() -> Graph:
         input_tokens=120,
         output_tokens=30,
     )
-    root_exec = ExecAction(agent_id="root", seq=3, code=root_reply.code)
-    root_sup = SupervisingOutput(
-        agent_id="root", seq=4, waiting_on=["root.hello"],
+    root_exec = rflow.ExecAction(agent_id="root", seq=3, code=root_reply.code)
+    root_sup = rflow.SupervisingOutput(
+        agent_id="root",
+        seq=4,
+        waiting_on=["root.hello"],
     )
-    root_done = DoneOutput(agent_id="root", seq=5, result="hello.py created")
+    root_done = rflow.DoneOutput(agent_id="root", seq=5, result="hello.py created")
 
-    hello_q = UserQuery(agent_id="root.hello", seq=0, content="write hello.py")
-    hello_reply = LLMOutput(
+    hello_q = rflow.UserQuery(agent_id="root.hello", seq=0, content="write hello.py")
+    hello_reply = rflow.LLMOutput(
         agent_id="root.hello",
         seq=1,
         reply="writing the file",
@@ -56,10 +50,10 @@ def build_graph() -> Graph:
         input_tokens=80,
         output_tokens=20,
     )
-    hello_exec = ExecAction(agent_id="root.hello", seq=2, code=hello_reply.code)
-    hello_done = DoneOutput(agent_id="root.hello", seq=3, result="wrote hello.py")
+    hello_exec = rflow.ExecAction(agent_id="root.hello", seq=2, code=hello_reply.code)
+    hello_done = rflow.DoneOutput(agent_id="root.hello", seq=3, result="wrote hello.py")
 
-    hello = Graph.from_meta_dict(
+    hello = rflow.Graph.from_meta_dict(
         {
             "agent_id": "root.hello",
             "depth": 1,
@@ -69,7 +63,7 @@ def build_graph() -> Graph:
         },
         nodes=[hello_q, hello_reply, hello_exec, hello_done],
     )
-    return Graph.from_meta_dict(
+    return rflow.Graph.from_meta_dict(
         {"agent_id": "root", "depth": 0, "query": "write hello world"},
         nodes=[root_q, root_call, root_reply, root_exec, root_sup, root_done],
         children={"root.hello": hello},

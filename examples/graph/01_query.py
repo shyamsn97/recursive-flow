@@ -16,24 +16,14 @@ Run:
 
 from __future__ import annotations
 
-from rlmflow.graph import (
-    DoneOutput,
-    ErrorOutput,
-    ExecAction,
-    Graph,
-    LLMAction,
-    LLMOutput,
-    ResumeAction,
-    SupervisingOutput,
-    UserQuery,
-)
+import rflow
 
 
-def build_graph() -> Graph:
+def build_graph() -> rflow.Graph:
     """A root with two children, one of which errors before succeeding."""
-    root_q = UserQuery(agent_id="root", seq=0, content="ship a tiny package")
-    root_call = LLMAction(agent_id="root", seq=1, model="demo")
-    root_reply = LLMOutput(
+    root_q = rflow.UserQuery(agent_id="root", seq=0, content="ship a tiny package")
+    root_call = rflow.LLMAction(agent_id="root", seq=1, model="demo")
+    root_reply = rflow.LLMOutput(
         agent_id="root",
         seq=2,
         reply="splitting into two children",
@@ -41,35 +31,37 @@ def build_graph() -> Graph:
         input_tokens=120,
         output_tokens=40,
     )
-    root_exec = ExecAction(agent_id="root", seq=3, code=root_reply.code)
-    root_sup = SupervisingOutput(
+    root_exec = rflow.ExecAction(agent_id="root", seq=3, code=root_reply.code)
+    root_sup = rflow.SupervisingOutput(
         agent_id="root",
         seq=4,
         waiting_on=["root.write", "root.test"],
     )
-    root_resume = ResumeAction(
+    root_resume = rflow.ResumeAction(
         agent_id="root",
         seq=5,
         resumed_from=["root.write", "root.test"],
     )
-    root_done = DoneOutput(
+    root_done = rflow.DoneOutput(
         agent_id="root",
         seq=6,
         result="package shipped",
     )
 
-    write_q = UserQuery(agent_id="root.write", seq=0, content="write the module")
-    write_done = DoneOutput(agent_id="root.write", seq=1, result="wrote pkg/__init__.py")
+    write_q = rflow.UserQuery(agent_id="root.write", seq=0, content="write the module")
+    write_done = rflow.DoneOutput(
+        agent_id="root.write", seq=1, result="wrote pkg/__init__.py"
+    )
 
-    test_q = UserQuery(agent_id="root.test", seq=0, content="run pytest")
-    test_err = ErrorOutput(
+    test_q = rflow.UserQuery(agent_id="root.test", seq=0, content="run pytest")
+    test_err = rflow.ErrorOutput(
         agent_id="root.test",
         seq=1,
         error="exec_error",
         content="ModuleNotFoundError: pkg",
     )
-    test_call = LLMAction(agent_id="root.test", seq=2, model="demo")
-    test_reply = LLMOutput(
+    test_call = rflow.LLMAction(agent_id="root.test", seq=2, model="demo")
+    test_reply = rflow.LLMOutput(
         agent_id="root.test",
         seq=3,
         reply="retrying after install",
@@ -77,10 +69,10 @@ def build_graph() -> Graph:
         input_tokens=80,
         output_tokens=20,
     )
-    test_exec = ExecAction(agent_id="root.test", seq=4, code=test_reply.code)
-    test_done = DoneOutput(agent_id="root.test", seq=5, result="3 passed")
+    test_exec = rflow.ExecAction(agent_id="root.test", seq=4, code=test_reply.code)
+    test_done = rflow.DoneOutput(agent_id="root.test", seq=5, result="3 passed")
 
-    write = Graph.from_meta_dict(
+    write = rflow.Graph.from_meta_dict(
         {
             "agent_id": "root.write",
             "depth": 1,
@@ -89,7 +81,7 @@ def build_graph() -> Graph:
         },
         nodes=[write_q, write_done],
     )
-    test = Graph.from_meta_dict(
+    test = rflow.Graph.from_meta_dict(
         {
             "agent_id": "root.test",
             "depth": 1,
@@ -98,9 +90,17 @@ def build_graph() -> Graph:
         },
         nodes=[test_q, test_err, test_call, test_reply, test_exec, test_done],
     )
-    return Graph.from_meta_dict(
+    return rflow.Graph.from_meta_dict(
         {"agent_id": "root", "depth": 0, "query": "ship a tiny package"},
-        nodes=[root_q, root_call, root_reply, root_exec, root_sup, root_resume, root_done],
+        nodes=[
+            root_q,
+            root_call,
+            root_reply,
+            root_exec,
+            root_sup,
+            root_resume,
+            root_done,
+        ],
         children={"root.write": write, "root.test": test},
     )
 
@@ -117,8 +117,10 @@ def main() -> None:
     banner("flat views over the whole subtree")
     print(f"agents : {list(g.agents)}")
     print(f"nodes  : {len(g.all_nodes)} states")
-    print(f"edges  : {len(g.edges)}  ({len(g.edges.flows_to())} flows_to, "
-          f"{len(g.edges.spawns())} spawns)")
+    print(
+        f"edges  : {len(g.edges)}  ({len(g.edges.flows_to())} flows_to, "
+        f"{len(g.edges.spawns())} spawns)"
+    )
 
     banner("filters on graph.all_nodes")
     print(f"queries     : {len(g.all_nodes.queries())}")
@@ -131,7 +133,9 @@ def main() -> None:
     print(f"errors      : {[n.error for n in g.all_nodes.errors()]}")
     print(f"results     : {[n.result for n in g.all_nodes.results()]}")
 
-    long_replies = g.all_nodes.where(lambda n: getattr(n, "reply", "") and len(n.reply) > 20)
+    long_replies = g.all_nodes.where(
+        lambda n: getattr(n, "reply", "") and len(n.reply) > 20
+    )
     print(f"long replies: {len(long_replies)}")
 
     banner("graph.find by id")

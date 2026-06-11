@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from rlmflow.llm import is_retryable
+from rflow.llm import is_retryable
 
 
 class APIConnectionError(Exception):

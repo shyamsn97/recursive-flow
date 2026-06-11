@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "rlmflow"
+name = "recursive-flow"
 version = "0.3.2"
 description = "Build Recursive Language Models as inspectable execution graphs."
 readme = "README.md"
@@ -40,7 +40,7 @@ e2b = ["e2b"]
 daytona = ["daytona-sdk"]
 sandbox = ["modal", "e2b", "daytona-sdk"]
 # Gradio viewer pulls plotly transitively (used by the interactive timeline).
-# `rich` powers the live terminal tree (`LiveView`) and `rlmflow view` output.
+# `rich` powers the live terminal tree (`LiveView`) and `recursive-flow view` output.
 viewer = ["gradio>=4.29", "plotly>=5.0", "rich>=13.0"]
 # Static image export of `node.plot()` (PNG/SVG/PDF). Used by
 # `save_image` / `save_steps` and `node.save_image()`. Kaleido is its
@@ -70,15 +70,15 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/shyamsn97/rlmflow"
-Repository = "https://github.com/shyamsn97/rlmflow"
-Issues = "https://github.com/shyamsn97/rlmflow/issues"
+Homepage = "https://github.com/shyamsn97/recursive-flow"
+Repository = "https://github.com/shyamsn97/recursive-flow"
+Issues = "https://github.com/shyamsn97/recursive-flow/issues"
 
 [project.scripts]
-rlmflow = "rlmflow.cli:main"
+recursive-flow = "rflow.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["rlmflow"]
+packages = ["rflow"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -90,7 +90,7 @@ timeout = 30
 timeout_method = "thread"
 
 [tool.coverage.run]
-source = ["rlmflow"]
+source = ["rflow"]
 omit = ["*/tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]

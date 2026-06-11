@@ -14,12 +14,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from rlmflow import LLMClient, LLMUsage, RLMConfig, RLMFlow, Workspace
-from rlmflow.tools import FILE_TOOLS
+import rflow
+from rflow.tools import FILE_TOOLS
 
 TASK = "Implement slugify(text) in slugify.py so tests/test_slugify.py passes."
 
-TESTS = '''from slugify import slugify
+TESTS = """from slugify import slugify
 
 
 def test_basic_words():
@@ -44,16 +44,16 @@ def test_strips_edges():
 
 def test_empty_after_cleanup():
     assert slugify("!!!") == ""
-'''
+"""
 
-BAD_IMPLEMENTATION = '''import re
+BAD_IMPLEMENTATION = """import re
 
 
 def slugify(text: str) -> str:
     return re.sub(r"[^a-z]+", "-", text.lower()).strip("-")
-'''
+"""
 
-GOOD_IMPLEMENTATION = '''import re
+GOOD_IMPLEMENTATION = """import re
 import unicodedata
 
 
@@ -63,16 +63,16 @@ def slugify(text: str) -> str:
     ascii_text = re.sub(r"[^a-z0-9]+", "-", ascii_text)
     ascii_text = re.sub(r"-+", "-", ascii_text)
     return ascii_text.strip("-")
-'''
+"""
 
 
-class RepairLLM(LLMClient):
+class RepairLLM(rflow.LLMClient):
     def __init__(self, implementation: str, label: str) -> None:
         self.implementation = implementation
         self.label = label
 
     def chat(self, messages, *args, **kwargs):
-        self.last_usage = LLMUsage(input_tokens=100, output_tokens=50)
+        self.last_usage = rflow.LLMUsage(input_tokens=100, output_tokens=50)
         return (
             "```repl\n"
             f"write_file('slugify.py', {self.implementation!r})\n"
@@ -81,7 +81,7 @@ class RepairLLM(LLMClient):
         )
 
 
-def setup_project(workspace: Workspace) -> None:
+def setup_project(workspace: rflow.Workspace) -> None:
     workspace.path("tests").mkdir(parents=True, exist_ok=True)
     workspace.path("slugify.py").write_text(
         "def slugify(text: str) -> str:\n    raise NotImplementedError\n"
@@ -103,12 +103,12 @@ def run_tests(files_dir: Path) -> tuple[bool, str]:
 
 
 def run_branch(root: Path, name: str, implementation: str, label: str):
-    workspace = Workspace.create(root / name)
+    workspace = rflow.Workspace.create(root / name)
     setup_project(workspace)
-    engine = RLMFlow(
+    engine = rflow.RecursiveFlow(
         llm_client=RepairLLM(implementation, label),
         workspace=workspace,
-        config=RLMConfig(max_depth=0, max_iterations=3),
+        config=rflow.FlowConfig(max_depth=0, max_iterations=3),
     )
     engine.runtime.register_tools(FILE_TOOLS)
     graph = engine.start(TASK)

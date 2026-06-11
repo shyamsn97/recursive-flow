@@ -1,6 +1,6 @@
 """Generate the baseline word-search run used by the injection example.
 
-This is the original route: ask a real RLMFlow agent to find ``AGENT`` by
+This is the original route: ask a real RecursiveFlow agent to find ``AGENT`` by
 delegating direction-specific search to three child agents:
 
 - ``rows`` searches rows east/west;
@@ -25,8 +25,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from rlmflow import AnthropicClient, OpenAIClient, RLMConfig, RLMFlow, Workspace
-from rlmflow.utils.viz import live_view
+import rflow
+from rflow.utils.viz import live_view
 
 TARGET_WORD = "AGENT"
 
@@ -86,8 +86,13 @@ You can aproach this problem with the following strategy:
 4. Each child agent should return a list of tuples, each containing the word found and its inclusive coordinates.
 """
 
+
 def client_for_model(model: str):
-    return AnthropicClient(model) if model.startswith("claude") else OpenAIClient(model)
+    return (
+        rflow.AnthropicClient(model)
+        if model.startswith("claude")
+        else rflow.OpenAIClient(model)
+    )
 
 
 def _hit_key(hit: WordHit) -> tuple[str, int, int, int, int, str]:
@@ -105,10 +110,10 @@ def run(model: str, workspace_path: Path, *, reset: bool) -> None:
     if reset and workspace_path.exists():
         shutil.rmtree(workspace_path)
 
-    workspace = Workspace.create(workspace_path)
-    agent = RLMFlow(
+    workspace = rflow.Workspace.create(workspace_path)
+    agent = rflow.RecursiveFlow(
         client_for_model(model),
-        config=RLMConfig(max_depth=2, child_max_iterations=10),
+        config=rflow.FlowConfig(max_depth=2, child_max_iterations=10),
     ).attach_workspace(workspace)
 
     graph = agent.start(QUERY, output_schema=WordSearchResult, context=CONTEXT)

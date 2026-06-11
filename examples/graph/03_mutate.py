@@ -21,19 +21,19 @@ Run:
 
 from __future__ import annotations
 
-from rlmflow.graph import DoneOutput, Graph, UserQuery
+import rflow
 
 
-def base_graph() -> Graph:
-    root_q = UserQuery(agent_id="root", seq=0, content="hello")
-    root_done = DoneOutput(agent_id="root", seq=1, result="ok")
-    child_q = UserQuery(agent_id="root.child", seq=0, content="sub")
-    child_done = DoneOutput(agent_id="root.child", seq=1, result="sub ok")
-    child = Graph.from_meta_dict(
+def base_graph() -> rflow.Graph:
+    root_q = rflow.UserQuery(agent_id="root", seq=0, content="hello")
+    root_done = rflow.DoneOutput(agent_id="root", seq=1, result="ok")
+    child_q = rflow.UserQuery(agent_id="root.child", seq=0, content="sub")
+    child_done = rflow.DoneOutput(agent_id="root.child", seq=1, result="sub ok")
+    child = rflow.Graph.from_meta_dict(
         {"agent_id": "root.child", "depth": 1, "parent_agent_id": "root"},
         nodes=[child_q, child_done],
     )
-    return Graph.from_meta_dict(
+    return rflow.Graph.from_meta_dict(
         {"agent_id": "root", "depth": 0, "query": "hello"},
         nodes=[root_q, root_done],
         children={"root.child": child},
@@ -46,7 +46,7 @@ def banner(title: str) -> None:
     print("─" * 60)
 
 
-def summary(g: Graph) -> str:
+def summary(g: rflow.Graph) -> str:
     return (
         f"agents={list(g.agents)} nodes={len(g.all_nodes)} "
         f"result={g.result()!r} model={g.model_label}"
@@ -70,9 +70,15 @@ def main() -> None:
     print(summary(g))
 
     banner("set_node — swap a node object")
-    g.set_node(result_id, DoneOutput(
-        agent_id="root", seq=1, result="ok (full swap)", id=result_id,
-    ))
+    g.set_node(
+        result_id,
+        rflow.DoneOutput(
+            agent_id="root",
+            seq=1,
+            result="ok (full swap)",
+            id=result_id,
+        ),
+    )
     print(summary(g))
 
     banner("nodes.update — same edit, but addressed via the flat view")
@@ -81,13 +87,15 @@ def main() -> None:
     print(f"root.child result -> {g['root.child'].result()!r}")
 
     banner("add_node — append onto a sub-Graph")
-    g["root.child"].add_node(UserQuery(agent_id="root.child", seq=2, content="follow-up"))
+    g["root.child"].add_node(
+        rflow.UserQuery(agent_id="root.child", seq=2, content="follow-up")
+    )
     print(f"root.child nodes: {[n.type for n in g['root.child'].nodes]}")
 
     banner("add_child / remove_child — attach + detach sub-agents")
-    sibling = Graph.from_meta_dict(
+    sibling = rflow.Graph.from_meta_dict(
         {"agent_id": "root.sibling", "depth": 1, "parent_agent_id": "root"},
-        nodes=[UserQuery(agent_id="root.sibling", seq=0, content="hi")],
+        nodes=[rflow.UserQuery(agent_id="root.sibling", seq=0, content="hi")],
     )
     g.add_child(sibling)
     print(f"after add_child : {list(g.agents)}")

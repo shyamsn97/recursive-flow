@@ -1,6 +1,6 @@
 # Workspace, Loading, And Viewer Model
 
-This note proposes a cleaner persistence and visualization model for rlmflow.
+This note proposes a cleaner persistence and visualization model for rflow.
 
 The core principle: **the workspace is the run.**
 
@@ -28,7 +28,7 @@ The answer should be simpler:
 
 ```python
 workspace = Workspace.create("runs/deep_research")
-agent = RLMFlow(..., workspace=workspace)
+agent = RecursiveFlow(..., workspace=workspace)
 graph = agent.run(...)
 
 open_viewer(workspace)
@@ -37,7 +37,7 @@ open_viewer(workspace)
 or from the CLI:
 
 ```bash
-rlmflow view runs/deep_research
+recursive-flow view runs/deep_research
 ```
 
 ## User-Facing Mental Model
@@ -84,7 +84,7 @@ The viewer should open from:
 Preferred:
 
 ```python
-from rlmflow.utils.viewer import open_viewer
+from rflow.utils.viewer import open_viewer
 
 open_viewer("runs/deep_research")
 ```
@@ -165,7 +165,7 @@ class Workspace:
         return self.session.load_graph()
 
     def open_viewer(self, **kwargs):
-        from rlmflow.utils.viewer import open_viewer
+        from rflow.utils.viewer import open_viewer
         return open_viewer(self, **kwargs)
 ```
 
@@ -211,9 +211,9 @@ workspace viewing falls back to a single latest graph, which is still useful.
 Make workspace paths first-class:
 
 ```bash
-rlmflow view runs/deep_research
-rlmflow export runs/deep_research --format html --out viewer.html
-rlmflow export runs/deep_research --format png --out graph.png
+recursive-flow view runs/deep_research
+recursive-flow export runs/deep_research --format html --out viewer.html
+recursive-flow export runs/deep_research --format png --out graph.png
 ```
 
 The CLI should teach workspace paths. Standalone graph JSON is an explicit
@@ -247,7 +247,7 @@ print(f"Workspace saved to {workspace.root}")
 Optional live viewer:
 
 ```python
-from rlmflow.utils.viz import live_view
+from rflow.utils.viz import live_view
 
 with live_view() as view:
     view(graph)
@@ -259,7 +259,7 @@ with live_view() as view:
 Optional saved viewer:
 
 ```python
-from rlmflow.utils.viewer import save_html
+from rflow.utils.viewer import save_html
 
 save_html(workspace, workspace.path("viewer.html"))
 ```
@@ -267,7 +267,7 @@ save_html(workspace, workspace.path("viewer.html"))
 Optional interactive viewer after the run:
 
 ```python
-from rlmflow.utils.viewer import open_viewer
+from rflow.utils.viewer import open_viewer
 
 open_viewer(workspace)
 ```
@@ -343,7 +343,7 @@ open_viewer(workspace)
 
 ```python
 workspace = Workspace.open_path("runs/deep_research")
-agent = RLMFlow(..., workspace=workspace)
+agent = RecursiveFlow(..., workspace=workspace)
 graph = workspace.load_graph()
 
 while not graph.finished:

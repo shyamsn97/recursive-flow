@@ -34,7 +34,7 @@ while not graph.finished:
     graph = flow.step(graph)       # advances one or more agents
 ```
 
-`max_iterations` in `RLMConfig` caps how many engine steps a single
+`max_iterations` in `FlowConfig` caps how many engine steps a single
 agent can take, not how many fan-out rounds the parent runs. The
 parent generator is one-shot:
 
@@ -140,7 +140,7 @@ print_summary()
 - Each child is option A (single-agent loop) on its own slug.
 - Children share a ledger via filesystem locking.
 - Parallel exploration without coordinator drift.
-- Loses: the "RLMFlow shows off delegation" demo angle.
+- Loses: the "RecursiveFlow shows off delegation" demo angle.
 - **Preserves parallelism; drops the parent-LLM fiction.**
 
 ### C. Keep architecture; default to gpt-5 (non-mini).
@@ -223,7 +223,7 @@ return {"score": None, "stderr_tail": "...", "ok": False, ...}
 ### G. Drop branching entirely; "agent" is just the autoresearch loop.
 
 The autoresearch.py script itself is the agent. It uses the LLM as
-a code-generation tool but doesn't expose it through RLMFlow's
+a code-generation tool but doesn't expose it through RecursiveFlow's
 agent abstraction at all:
 
 ```python
@@ -237,11 +237,11 @@ print_summary()
 ```
 
 - Lose: agentic tool use, multi-turn REPL, the whole point of
-  RLMFlow.
+  RecursiveFlow.
 - Gain: dead simple, predictable, hard to break.
-- Probably not what we want for an *RLMFlow example*. Mentioned
+- Probably not what we want for an *RecursiveFlow example*. Mentioned
   for completeness — if autoresearch isn't really an "agent" task
-  in any interesting way, maybe it shouldn't be an RLMFlow demo at
+  in any interesting way, maybe it shouldn't be an RecursiveFlow demo at
   all.
 
 ### H. Retire circle_packing, replace with something flashier.
@@ -267,7 +267,7 @@ compound effect. Best ROI in order:
    "0 valid trials" to "majority valid trials" overnight.
 2. **A or B** — pick whichever serves the demo story better. A is
    simpler; B keeps the parallelism + delegation story. For an
-   RLMFlow example I lean B because it's still "showing off"
+   RecursiveFlow example I lean B because it's still "showing off"
    parallel agents, just without the brittle LLM coordinator.
 3. **D or H** — swap the example task. circle_packing is a poor
    first impression; the validation cliff means even a strong

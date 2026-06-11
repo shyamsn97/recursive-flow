@@ -26,18 +26,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from rlmflow import (
-    AnthropicClient,
-    ExecOutput,
-    Graph,
-    OpenAIClient,
-    RLMConfig,
-    RLMFlow,
-    SupervisingOutput,
-    parallel_step,
-)
-from rlmflow.llm import LLMClient
-from rlmflow.workspace import Workspace as LocalWorkspace
+import rflow
 
 DIRECTION_CHILDREN = {"root.rows", "root.cols", "root.diagonals"}
 
@@ -60,9 +49,7 @@ class WordSearchResult(BaseModel):
     missing: list[str]
 
 
-EXPECTED_HITS = {
-    ("AGENT", 1, 8, 5, 8, "S")
-}
+EXPECTED_HITS = {("AGENT", 1, 8, 5, 8, "S")}
 EXPECTED_MISSING: set[str] = set()
 
 COLS_FUNCTION_PROMPT = """\
@@ -85,8 +72,12 @@ Instead of delegating to sub-agents, write a backtracking algorithm to find the 
 """
 
 
-def client_for_model(model: str) -> LLMClient:
-    return AnthropicClient(model) if model.startswith("claude") else OpenAIClient(model)
+def client_for_model(model: str) -> rflow.LLMClient:
+    return (
+        rflow.AnthropicClient(model)
+        if model.startswith("claude")
+        else rflow.OpenAIClient(model)
+    )
 
 
 def default_source() -> Path:
@@ -99,25 +90,25 @@ def default_source() -> Path:
 
 
 def find_supervising(
-    graph: Graph,
+    graph: rflow.Graph,
     agent_id: str,
     *,
     waiting_on: set[str] | None = None,
-) -> SupervisingOutput:
+) -> rflow.SupervisingOutput:
     for node in reversed(graph[agent_id].nodes):
-        if isinstance(node, SupervisingOutput) and (
+        if isinstance(node, rflow.SupervisingOutput) and (
             waiting_on is None or set(node.waiting_on) == waiting_on
         ):
             return node
     raise ValueError(f"could not find matching supervising node for {agent_id!r}")
 
 
-def summarize(label: str, graph: Graph) -> None:
+def summarize(label: str, graph: rflow.Graph) -> None:
     current = graph.current()
     print(f"\n{label}")
     print("-" * len(label))
     print(f"root current: {current.type if current else '<empty>'}")
-    if isinstance(current, SupervisingOutput):
+    if isinstance(current, rflow.SupervisingOutput):
         print(f"waiting_on: {', '.join(current.waiting_on)}")
     print(f"children: {', '.join(graph.children) or '<none>'}")
     if graph.finished:
@@ -136,7 +127,7 @@ def _hit_key(hit: WordHit) -> tuple[str, int, int, int, int, str]:
     )
 
 
-def validate_result(label: str, graph: Graph) -> None:
+def validate_result(label: str, graph: rflow.Graph) -> None:
     if not graph.finished:
         print(f"\n{label} validation: skipped (graph is not finished)")
         return
@@ -167,35 +158,37 @@ def main() -> None:
     parser.add_argument("--model", default="gpt-5-mini")
     args = parser.parse_args()
 
-    source_workspace = LocalWorkspace.open_path(args.source.resolve())
-    base_agent = RLMFlow(
+    source_workspace = rflow.Workspace.open_path(args.source.resolve())
+    base_agent = rflow.RecursiveFlow(
         client_for_model(args.model),
-        config=RLMConfig(max_depth=2, max_iterations=None, child_max_iterations=None),
+        config=rflow.FlowConfig(
+            max_depth=2, max_iterations=None, child_max_iterations=None
+        ),
     )
     graph = source_workspace.load_graph()
     summarize("Loaded real word-search run", graph)
 
     cols_graph = graph.replace_node(
         find_supervising(graph, "root.cols").id,
-        ExecOutput(
+        rflow.ExecOutput(
             output=COLS_FUNCTION_PROMPT,
             content=f"REPL output for previous block:\n{COLS_FUNCTION_PROMPT}",
         ),
         truncate="descendants",
     )
-    cols_workspace = LocalWorkspace(
+    cols_workspace = source_workspace.fork(
         source_workspace.root.parent / "word-search-cols-direct",
     )
 
     root_graph = graph.replace_node(
         find_supervising(graph, "root", waiting_on=DIRECTION_CHILDREN).id,
-        ExecOutput(
+        rflow.ExecOutput(
             output=ROOT_DIRECT_SCAN_PROMPT,
             content=f"REPL output for previous block:\n{ROOT_DIRECT_SCAN_PROMPT}",
         ),
         truncate="descendants",
     )
-    root_workspace = LocalWorkspace(
+    root_workspace = source_workspace.fork(
         source_workspace.root.parent / "word-search-direct-scan",
     )
 
@@ -209,7 +202,7 @@ def main() -> None:
         if not root_graph.finished:
             active.append((root_agent, root_graph))
 
-        next_graphs = parallel_step(active)
+        next_graphs = rflow.parallel_step(active)
         i = 0
         if not cols_graph.finished:
             cols_graph = next_graphs[i]

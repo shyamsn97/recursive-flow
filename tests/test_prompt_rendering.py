@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from rlmflow import RLMConfig, RLMFlow
-from rlmflow.prompts.builder import PromptBuilder
-from rlmflow.prompts.default import DEFAULT_BUILDER
-from rlmflow.runtime.local import LocalRuntime
+from rflow import FlowConfig, RecursiveFlow
+from rflow.prompts.builder import PromptBuilder
+from rflow.prompts.default import DEFAULT_BUILDER
+from rflow.runtime.local import LocalRuntime
 from tests.helpers import StaticLLM, make_agent
 
 
@@ -92,10 +92,10 @@ def test_default_prompt_documents_child_output_schema_specs():
 
 
 def test_structured_prompt_hints_can_be_disabled():
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone("ok")\n```'),
         runtime=LocalRuntime(),
-        config=RLMConfig(enable_structured_output=False),
+        config=FlowConfig(enable_structured_output=False),
     )
 
     graph = agent.start("say ok")
@@ -126,10 +126,10 @@ def test_structured_output_section_can_be_disabled_even_with_schema():
         "properties": {"answer": {"type": "string"}},
         "required": ["answer"],
     }
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone("ok")\n```'),
         runtime=LocalRuntime(),
-        config=RLMConfig(enable_structured_output=False),
+        config=FlowConfig(enable_structured_output=False),
     )
 
     graph = agent.start("say ok", output_schema=schema)

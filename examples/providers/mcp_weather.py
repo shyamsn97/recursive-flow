@@ -1,4 +1,4 @@
-"""Use RLMFlow with a real MCP weather server.
+"""Use RecursiveFlow with a real MCP weather server.
 
 Requires MCP and a live LLM client:
 
@@ -19,11 +19,10 @@ from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 
-from rlmflow import AnthropicClient, OpenAIClient, RLMConfig, RLMFlow, Workspace
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.tools import tool
-from rlmflow.utils.viz import live_view
-
+import rflow
+from rflow.runtime.local import LocalRuntime
+from rflow.tools import tool
+from rflow.utils.viz import live_view
 
 DEFAULT_QUERY = """I will be in Seattle today, Austin 3 days after that, and San Francisco 5 days after that. Check the weather and tell me what to pack for each city.
 """
@@ -37,7 +36,9 @@ class MCPStdioClient:
         self.args = args
         self._loop = asyncio.new_event_loop()
         self._ready = threading.Event()
-        self._thread = threading.Thread(target=self._run_loop, name="mcp-weather", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run_loop, name="mcp-weather", daemon=True
+        )
         self._queue: asyncio.Queue[tuple[str, Any, Future]] | None = None
         self._startup_error: BaseException | None = None
         self._session: Any = None
@@ -61,8 +62,13 @@ class MCPStdioClient:
         close_future: Future | None = None
         current_future: Future | None = None
         try:
-            from mcp import ClientSession, StdioServerParameters  # type: ignore[reportMissingImports]
-            from mcp.client.stdio import stdio_client  # type: ignore[reportMissingImports]
+            from mcp import (  # type: ignore[reportMissingImports]
+                ClientSession,
+                StdioServerParameters,
+            )
+            from mcp.client.stdio import (
+                stdio_client,
+            )  # type: ignore[reportMissingImports]
         except ImportError:  # pragma: no cover - exercised by example smoke skips
             self._startup_error = RuntimeError(
                 "The MCP weather example requires the `mcp` package. "
@@ -92,9 +98,13 @@ class MCPStdioClient:
                                 future.set_result(await session.list_tools())
                             elif op == "call_tool":
                                 name, arguments = payload
-                                future.set_result(await session.call_tool(name, arguments))
+                                future.set_result(
+                                    await session.call_tool(name, arguments)
+                                )
                             else:
-                                future.set_exception(RuntimeError(f"Unknown MCP client op: {op}"))
+                                future.set_exception(
+                                    RuntimeError(f"Unknown MCP client op: {op}")
+                                )
                         except BaseException as exc:  # noqa: BLE001
                             future.set_exception(exc)
                         finally:
@@ -197,7 +207,9 @@ def _signature_from_schema(schema: dict[str, Any]) -> inspect.Signature:
     required = set(schema.get("required") or [])
     params = []
     for name, prop in properties.items():
-        default = inspect.Parameter.empty if name in required else prop.get("default", None)
+        default = (
+            inspect.Parameter.empty if name in required else prop.get("default", None)
+        )
         params.append(
             inspect.Parameter(
                 name,
@@ -213,7 +225,9 @@ def _description_for(spec: Any) -> str:
     description = getattr(spec, "description", None) or f"Call MCP tool {spec.name}."
     schema = _schema_for(spec)
     if schema:
-        description += "\n\nMCP input schema:\n" + json.dumps(schema, indent=2, sort_keys=True)
+        description += "\n\nMCP input schema:\n" + json.dumps(
+            schema, indent=2, sort_keys=True
+        )
     return description
 
 
@@ -233,10 +247,14 @@ def register_mcp_tools(runtime: LocalRuntime, client: MCPStdioClient) -> None:
 
 
 def build_llm(model: str):
-    return AnthropicClient(model) if model.startswith("claude") else OpenAIClient(model)
+    return (
+        rflow.AnthropicClient(model)
+        if model.startswith("claude")
+        else rflow.OpenAIClient(model)
+    )
 
 
-def run_until_done(agent: RLMFlow, graph, *, show_live: bool):
+def run_until_done(agent: rflow.RecursiveFlow, graph, *, show_live: bool):
     if show_live:
         with live_view() as view:
             view(graph)
@@ -252,7 +270,7 @@ def run_until_done(agent: RLMFlow, graph, *, show_live: bool):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RLMFlow + MCP weather example")
+    parser = argparse.ArgumentParser(description="RecursiveFlow + MCP weather example")
     parser.add_argument("--model", default="gpt-5-mini")
     parser.add_argument("--max-depth", type=int, default=1)
     parser.add_argument("--max-iterations", type=int, default=8)
@@ -267,7 +285,7 @@ def main() -> None:
         if args.workspace
         else examples_root / "_runs" / "example-workspaces" / "mcp-weather"
     )
-    workspace = Workspace.create(workspace_path)
+    workspace = rflow.Workspace.create(workspace_path)
 
     server_script = Path(__file__).with_name("mcp_weather_server.py")
     mcp_client = MCPStdioClient(sys.executable, [str(server_script)]).start()
@@ -278,12 +296,14 @@ def main() -> None:
         return runtime
 
     try:
-        agent = RLMFlow(
+        agent = rflow.RecursiveFlow(
             llm_client=build_llm(args.model),
             runtime=make_runtime(),
             runtime_factory=make_runtime,
             workspace=workspace,
-            config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
+            config=rflow.FlowConfig(
+                max_depth=args.max_depth, max_iterations=args.max_iterations
+            ),
         )
         graph = agent.start(args.query)
         graph = run_until_done(agent, graph, show_live=not args.no_viz)

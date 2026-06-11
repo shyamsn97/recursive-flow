@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import threading
 
-from rlmflow import LLMClient, LLMUsage, RLMConfig, RLMFlow
-from rlmflow.runtime.local import LocalRuntime
-
+import rflow
+from rflow.runtime.local import LocalRuntime
 
 REVIEWS = [
     "The new search UI is fast and surprisingly easy to use.",
@@ -22,7 +21,7 @@ REVIEWS = [
 ]
 
 
-class GuidedLLM(LLMClient):
+class GuidedLLM(rflow.LLMClient):
     """Fake model that lets us verify root -> llm_query_batched -> done."""
 
     def __init__(self) -> None:
@@ -30,7 +29,7 @@ class GuidedLLM(LLMClient):
         self._lock = threading.Lock()
 
     def chat(self, messages, *args, **kwargs) -> str:
-        self.last_usage = LLMUsage(input_tokens=25, output_tokens=10)
+        self.last_usage = rflow.LLMUsage(input_tokens=25, output_tokens=10)
         text = messages[-1]["content"]
 
         if "Classify this review" in text:
@@ -67,10 +66,10 @@ def root_repl_block() -> str:
 
 def main() -> None:
     llm = GuidedLLM()
-    agent = RLMFlow(
+    agent = rflow.RecursiveFlow(
         llm,
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=0, max_iterations=3, max_concurrency=3),
+        config=rflow.FlowConfig(max_depth=0, max_iterations=3, max_concurrency=3),
     )
 
     graph = agent.start(

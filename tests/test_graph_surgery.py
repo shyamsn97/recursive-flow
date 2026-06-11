@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from rlmflow import (
+from rflow import (
     DoneOutput,
     ErrorOutput,
     ExecAction,
@@ -8,15 +8,15 @@ from rlmflow import (
     Graph,
     LLMAction,
     LLMOutput,
-    RLMConfig,
-    RLMFlow,
+    FlowConfig,
+    RecursiveFlow,
     ResumeAction,
     SupervisingOutput,
     UserQuery,
     Workspace,
 )
-from rlmflow import NodeScheduler
-from rlmflow.engine.replay import can_resume
+from rflow import NodeScheduler
+from rflow.engine.replay import can_resume
 from tests.helpers import StaticLLM
 
 
@@ -281,10 +281,10 @@ def test_prune_descendants_spawned_after_keeps_boundary_children():
 
 def test_step_commits_replaced_supervising_node_and_pruned_children(tmp_path):
     workspace = Workspace.create(tmp_path)
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone("ok")\n```'),
         workspace=workspace,
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     graph = _graph_waiting_on_children()
     workspace.session.rewrite_graph(graph)
@@ -348,10 +348,10 @@ def test_step_can_advance_unfinished_descendant_under_terminal_parent(tmp_path):
     )
     workspace = Workspace.create(tmp_path)
     workspace.session.rewrite_graph(graph)
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone("child done")\n```'),
         workspace=workspace,
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
 
     stepped = agent.step(graph)
@@ -617,10 +617,10 @@ def test_can_resume_uses_recursive_child_finished():
 
 def test_step_commits_structural_graph_edits_before_planning(tmp_path):
     workspace = Workspace.create(tmp_path)
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone("ok")\n```'),
         workspace=workspace,
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     graph = agent.start("old query")
 
@@ -718,10 +718,10 @@ def test_inject_can_clear_active_output_schema():
 
 def test_commit_graph_can_fork_workspace(tmp_path):
     workspace = Workspace.create(tmp_path / "base")
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         StaticLLM('```repl\ndone("ok")\n```'),
         workspace=workspace,
-        config=RLMConfig(max_iterations=3),
+        config=FlowConfig(max_iterations=3),
     )
     graph = agent.start("old query")
     edited = graph.replace_last_observation(

@@ -1,8 +1,8 @@
-"""Recursive autoresearch on top of RLMFlow.
+"""Recursive autoresearch on top of RecursiveFlow.
 
 Inspired by https://github.com/karpathy/autoresearch . The agent
 searches over one solution file (default ``solution.py``), while
-RLMFlow supplies recursion: a parent agent plans hypotheses and
+RecursiveFlow supplies recursion: a parent agent plans hypotheses and
 delegates child agents to run independent trials. Each child passes
 a complete source string to ``run_experiment(source, description)``.
 A separate ``evaluate.py`` imports each archived candidate, runs it,
@@ -30,12 +30,11 @@ import threading
 import time
 from pathlib import Path
 
-from rlmflow import RLMConfig, RLMFlow, Workspace
-from rlmflow.llm import AnthropicClient, OpenAIClient
-from rlmflow.prompts import DEFAULT_BUILDER
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.tools import FILE_TOOLS, tool
-from rlmflow.utils.viz import LiveView
+import rflow
+from rflow.prompts import DEFAULT_BUILDER
+from rflow.runtime.local import LocalRuntime
+from rflow.tools import FILE_TOOLS, tool
+from rflow.utils.viz import LiveView
 
 AUTORESEARCH_RECURSION_TEXT = """
 You are running recursive autoresearch.
@@ -257,8 +256,10 @@ class SubmissionError(RuntimeError):
 
 
 def _run_evaluator(
-    workspace_root: Path, evaluator: str,
-    solution_path_rel: str, budget_s: int,
+    workspace_root: Path,
+    evaluator: str,
+    solution_path_rel: str,
+    budget_s: int,
 ) -> tuple[str, str, int, float]:
     """``python -u <evaluator> <solution>`` from the workspace root."""
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
@@ -267,12 +268,23 @@ def _run_evaluator(
         proc = subprocess.run(
             [sys.executable, "-u", evaluator, solution_path_rel],
             cwd=str(workspace_root),
-            capture_output=True, text=True, timeout=budget_s, env=env,
+            capture_output=True,
+            text=True,
+            timeout=budget_s,
+            env=env,
         )
         stdout, stderr, rc = proc.stdout, proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace")
-        stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", "replace")
+        stdout = (
+            exc.stdout
+            if isinstance(exc.stdout, str)
+            else (exc.stdout or b"").decode("utf-8", "replace")
+        )
+        stderr = (
+            exc.stderr
+            if isinstance(exc.stderr, str)
+            else (exc.stderr or b"").decode("utf-8", "replace")
+        )
         stderr += f"\n[timed out after {budget_s}s]"
         rc = -1
     return stdout, stderr, rc, round(time.time() - t0, 2)
@@ -296,8 +308,10 @@ def _check_syntax(source: str) -> str | None:
 
 
 def make_run_experiment(
-    workspace_root: Path, solution: str,
-    evaluator: str, lower_is_better: bool,
+    workspace_root: Path,
+    solution: str,
+    evaluator: str,
+    lower_is_better: bool,
     max_submissions: int | None = None,
 ):
     """Build the agent-facing experiment tools."""
@@ -338,11 +352,7 @@ def make_run_experiment(
             return len(_read_ledger()) + pending_submissions
 
     def _submission_count() -> int:
-        return sum(
-            1
-            for row in _read_ledger()
-            if row.get("description") != "baseline"
-        )
+        return sum(1 for row in _read_ledger() if row.get("description") != "baseline")
 
     def _remaining_submissions() -> int | None:
         if max_submissions is None:
@@ -397,7 +407,9 @@ def make_run_experiment(
         )
     )
     def run_experiment(
-        source: str, description: str, budget_s: int = 300,
+        source: str,
+        description: str,
+        budget_s: int = 300,
     ) -> dict:
         if not isinstance(source, str) or not source.strip():
             raise ValueError(
@@ -437,9 +449,12 @@ def make_run_experiment(
             syntax = _check_syntax(source)
             if syntax is not None:
                 row = {
-                    "n": n, "ts": time.time(),
-                    "score": None, "returncode": 1,
-                    "elapsed_s": 0.0, path_key: archive_rel,
+                    "n": n,
+                    "ts": time.time(),
+                    "score": None,
+                    "returncode": 1,
+                    "elapsed_s": 0.0,
+                    path_key: archive_rel,
                     "description": description,
                     "stdout_tail": "",
                     "stderr_tail": f"INVALID: {syntax}\n",
@@ -449,12 +464,18 @@ def make_run_experiment(
                 raise ExperimentCrashed(row)
 
             stdout, stderr, rc, elapsed = _run_evaluator(
-                root, evaluator, archive_rel, budget_s,
+                root,
+                evaluator,
+                archive_rel,
+                budget_s,
             )
             row = {
-                "n": n, "ts": time.time(),
-                "score": _parse_score(stdout), "returncode": rc,
-                "elapsed_s": elapsed, path_key: archive_rel,
+                "n": n,
+                "ts": time.time(),
+                "score": _parse_score(stdout),
+                "returncode": rc,
+                "elapsed_s": elapsed,
+                path_key: archive_rel,
                 "description": description,
                 "stdout_tail": (stdout or "")[-2000:],
                 "stderr_tail": (stderr or "")[-1000:],
@@ -483,12 +504,18 @@ def make_run_experiment(
                     return row
         budget_s = max(10, min(int(budget_s), 3600))
         stdout, stderr, rc, elapsed = _run_evaluator(
-            root, evaluator, solution, budget_s,
+            root,
+            evaluator,
+            solution,
+            budget_s,
         )
         row = {
-            "n": _next_n(), "ts": time.time(),
-            "score": _parse_score(stdout), "returncode": rc,
-            "elapsed_s": elapsed, path_key: solution,
+            "n": _next_n(),
+            "ts": time.time(),
+            "score": _parse_score(stdout),
+            "returncode": rc,
+            "elapsed_s": elapsed,
+            path_key: solution,
             "description": "baseline",
             "stdout_tail": (stdout or "")[-2000:],
             "stderr_tail": (stderr or "")[-1000:],
@@ -503,9 +530,11 @@ def make_run_experiment(
 
     def _rank_key(r):
         ok = r.get("returncode") == 0 and r.get("score") is not None
-        return (0 if ok else 1,
-                sign * r["score"] if ok else sign * miss,
-                r.get("ts", 0))
+        return (
+            0 if ok else 1,
+            sign * r["score"] if ok else sign * miss,
+            r.get("ts", 0),
+        )
 
     @tool(
         f"Every recorded trial, best-first by score "
@@ -514,11 +543,12 @@ def make_run_experiment(
     )
     def list_runs() -> list:
         rows = sorted(_read_ledger(), key=_rank_key)
-        keys = ("n", "score", "returncode", "elapsed_s", "ts",
-                path_key, "description")
+        keys = ("n", "score", "returncode", "elapsed_s", "ts", path_key, "description")
         return [{k: r.get(k) for k in keys} for r in rows]
 
-    @tool("Full ledger row for trial #n, including stdout/stderr_tail. None if missing.")
+    @tool(
+        "Full ledger row for trial #n, including stdout/stderr_tail. None if missing."
+    )
     def get_run(n: int) -> dict | None:
         for row in _read_ledger():
             if row.get("n") == n:
@@ -559,13 +589,22 @@ def make_run_experiment(
             }
 
     return [
-        run_experiment, run_baseline, list_runs, get_run, latest_run, get_runs,
+        run_experiment,
+        run_baseline,
+        list_runs,
+        get_run,
+        latest_run,
+        get_runs,
         submission_status,
     ]
 
 
 def make_llm(model: str):
-    return AnthropicClient(model) if model.startswith("claude") else OpenAIClient(model)
+    return (
+        rflow.AnthropicClient(model)
+        if model.startswith("claude")
+        else rflow.OpenAIClient(model)
+    )
 
 
 def _node_one_liner(node) -> str:
@@ -573,8 +612,11 @@ def _node_one_liner(node) -> str:
         waiting = ", ".join(getattr(node, "waiting_on", []) or [])
         return f"supervising  waiting on [{waiting}]"
     text = (
-        getattr(node, "content", None) or getattr(node, "code", None)
-        or getattr(node, "output", None) or getattr(node, "result", None) or ""
+        getattr(node, "content", None)
+        or getattr(node, "code", None)
+        or getattr(node, "output", None)
+        or getattr(node, "result", None)
+        or ""
     ).strip()
     first = next((ln for ln in text.splitlines() if ln.strip()), "")
     return f"{node.type:11s} {first[:140]}"
@@ -587,24 +629,48 @@ def _print_event(node, t0: float) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--target", type=Path, required=True,
-                   help="Source dir with <solution>, <evaluator>, program.md.")
-    p.add_argument("--solution", default="solution.py",
-                   help="Baseline solution filename in --target.")
-    p.add_argument("--evaluator", default="evaluate.py",
-                   help="Filename of the harness; the agent never sees it.")
+    p.add_argument(
+        "--target",
+        type=Path,
+        required=True,
+        help="Source dir with <solution>, <evaluator>, program.md.",
+    )
+    p.add_argument(
+        "--solution",
+        default="solution.py",
+        help="Baseline solution filename in --target.",
+    )
+    p.add_argument(
+        "--evaluator",
+        default="evaluate.py",
+        help="Filename of the harness; the agent never sees it.",
+    )
     p.add_argument("--lower-is-better", action="store_true")
-    p.add_argument("--budget-s", type=int, default=600,
-                   help="Default per-trial wall-clock cap.")
-    p.add_argument("--max-submissions", type=int, default=None,
-                   help="Hard cap on run_experiment submissions; baseline excluded.")
-    p.add_argument("--max-iterations", type=int, default=40,
-                   help="Engine max_iterations cap.")
-    p.add_argument("--branches-per-turn", type=int, default=4,
-                   help="How many children the parent should spawn at a time.")
-    p.add_argument("--child-iterations", type=int, default=6,
-                   help="Max turns per child agent. Keeps slow/broken trial "
-                        "agents from retrying forever.")
+    p.add_argument(
+        "--budget-s", type=int, default=600, help="Default per-trial wall-clock cap."
+    )
+    p.add_argument(
+        "--max-submissions",
+        type=int,
+        default=None,
+        help="Hard cap on run_experiment submissions; baseline excluded.",
+    )
+    p.add_argument(
+        "--max-iterations", type=int, default=40, help="Engine max_iterations cap."
+    )
+    p.add_argument(
+        "--branches-per-turn",
+        type=int,
+        default=4,
+        help="How many children the parent should spawn at a time.",
+    )
+    p.add_argument(
+        "--child-iterations",
+        type=int,
+        default=6,
+        help="Max turns per child agent. Keeps slow/broken trial "
+        "agents from retrying forever.",
+    )
     p.add_argument("--model", default="gpt-5")
     p.add_argument("--workspace", type=Path, default=Path("./runs/autoresearch"))
     p.add_argument("--max-concurrency", type=int, default=8)
@@ -615,12 +681,15 @@ def main() -> None:
         raise SystemExit("--max-submissions must be >= 0")
 
     target = args.target.resolve()
-    missing = [n for n in (args.solution, args.evaluator, "program.md")
-               if not (target / n).exists()]
+    missing = [
+        n
+        for n in (args.solution, args.evaluator, "program.md")
+        if not (target / n).exists()
+    ]
     if missing:
         raise SystemExit(f"autoresearch: {target} is missing {missing}.")
 
-    workspace = Workspace.create(args.workspace)
+    workspace = rflow.Workspace.create(args.workspace)
     # Bootstrap target files into the workspace. CRITICAL: the
     # immutable inputs (solution.py = the baseline, evaluate.py = the
     # harness, program.md = the brief) are *always* overwritten on
@@ -635,7 +704,9 @@ def main() -> None:
         if entry.is_dir():
             if not dst.exists():
                 shutil.copytree(
-                    entry, dst, symlinks=True,
+                    entry,
+                    dst,
+                    symlinks=True,
                     ignore=lambda _, n: {x for x in n if x in SKIP_NAMES},
                 )
             continue
@@ -643,18 +714,24 @@ def main() -> None:
             shutil.copy2(entry, dst)
 
     runtime = LocalRuntime(workspace=workspace)
-    runtime.register_tools([
-        *FILE_TOOLS,
-        *make_run_experiment(
-            workspace.root, args.solution, args.evaluator,
-            args.lower_is_better, args.max_submissions,
-        ),
-    ])
+    runtime.register_tools(
+        [
+            *FILE_TOOLS,
+            *make_run_experiment(
+                workspace.root,
+                args.solution,
+                args.evaluator,
+                args.lower_is_better,
+                args.max_submissions,
+            ),
+        ]
+    )
 
-    flow = RLMFlow(
+    flow = rflow.RecursiveFlow(
         llm_client=make_llm(args.model),
-        runtime=runtime, workspace=workspace,
-        config=RLMConfig(
+        runtime=runtime,
+        workspace=workspace,
+        config=rflow.FlowConfig(
             max_iterations=args.max_iterations,
             child_max_iterations=args.child_iterations,
             max_depth=args.max_depth,
@@ -739,7 +816,8 @@ def main() -> None:
     print(f"\nWorkspace: {workspace.root}", flush=True)
 
     try:
-        from rlmflow.utils.viewer import save_html
+        from rflow.utils.viewer import save_html
+
         viewer = args.workspace / "viewer.html"
         save_html(workspace, viewer)
         print(f"Viewer:    {viewer}", flush=True)

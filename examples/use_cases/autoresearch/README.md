@@ -1,12 +1,12 @@
 # Autoresearch
 
 A [Karpathy-style autoresearch](https://github.com/karpathy/autoresearch)
-hill-climb on top of RLMFlow. **The agent is the researcher**: it
+hill-climb on top of RecursiveFlow. **The agent is the researcher**: it
 rewrites a single function (e.g. `solve()` in `solution.py`),
 passes the new source to `run_experiment(source)`, and decides
 what to try next. A separate `evaluate.py` — which the agent does
 not see — imports that function and prints `score: <float>`. To
-run trials in parallel, the agent uses RLMFlow's normal
+run trials in parallel, the agent uses RecursiveFlow's normal
 `launch_subagents`.
 
 ```

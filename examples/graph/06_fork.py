@@ -27,10 +27,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from rlmflow import LLMClient, LLMUsage, RLMConfig, RLMFlow, Workspace
+import rflow
 
 
-class ScriptedLLM(LLMClient):
+class ScriptedLLM(rflow.LLMClient):
     """Returns scripted REPL blocks one per call so the engine terminates."""
 
     def __init__(self, replies: list[str]) -> None:
@@ -38,17 +38,17 @@ class ScriptedLLM(LLMClient):
         self.idx = 0
 
     def chat(self, messages, *args, **kwargs):
-        self.last_usage = LLMUsage(input_tokens=10, output_tokens=5)
+        self.last_usage = rflow.LLMUsage(input_tokens=10, output_tokens=5)
         reply = self.replies[min(self.idx, len(self.replies) - 1)]
         self.idx += 1
         return reply
 
 
-def run(workspace: Workspace, llm: LLMClient, query: str) -> str:
-    engine = RLMFlow(
+def run(workspace: rflow.Workspace, llm: rflow.LLMClient, query: str) -> str:
+    engine = rflow.RecursiveFlow(
         llm_client=llm,
         workspace=workspace,
-        config=RLMConfig(max_iterations=3),
+        config=rflow.FlowConfig(max_iterations=3),
     )
     graph = engine.start(query)
     while not graph.finished:
@@ -67,7 +67,7 @@ def main() -> None:
         root = Path(tmp).resolve()
 
         banner("seed: a fresh main workspace")
-        main_ws = Workspace.create(root / "main")
+        main_ws = rflow.Workspace.create(root / "main")
         # Pre-seed a side file in the working tree so we can show it copies on fork.
         main_ws.path("notes.md").write_text("# starting notes\n")
         seeded_result = run(
@@ -76,7 +76,9 @@ def main() -> None:
             "do the thing",
         )
         print(f"main workspace result: {seeded_result!r}")
-        print(f"main workspace files : {sorted(p.name for p in main_ws.root.iterdir())}")
+        print(
+            f"main workspace files : {sorted(p.name for p in main_ws.root.iterdir())}"
+        )
 
         banner("fork twice — each workspace gets its own copy")
         # The fork helper deletes the destination if it exists, so make sure
@@ -85,12 +87,20 @@ def main() -> None:
             shutil.rmtree(root / workspace_name, ignore_errors=True)
         a = main_ws.fork(new_dir=root / "retry_a")
         b = main_ws.fork(new_dir=root / "retry_b")
-        print(f"main session.jsonl   : {(main_ws.root / 'session/root/session.jsonl').stat().st_size}b")
-        print(f"retry_a session.jsonl: {(a.root / 'session/root/session.jsonl').stat().st_size}b "
-              f"(copied from main)")
-        print(f"retry_b session.jsonl: {(b.root / 'session/root/session.jsonl').stat().st_size}b "
-              f"(copied from main)")
-        print(f"working tree carried over: {(a.root / 'notes.md').read_text().strip()!r}")
+        print(
+            f"main session.jsonl   : {(main_ws.root / 'session/root/session.jsonl').stat().st_size}b"
+        )
+        print(
+            f"retry_a session.jsonl: {(a.root / 'session/root/session.jsonl').stat().st_size}b "
+            f"(copied from main)"
+        )
+        print(
+            f"retry_b session.jsonl: {(b.root / 'session/root/session.jsonl').stat().st_size}b "
+            f"(copied from main)"
+        )
+        print(
+            f"working tree carried over: {(a.root / 'notes.md').read_text().strip()!r}"
+        )
 
         banner("diverge: each branch keeps running with its own LLM")
         # Append a *new* run into each workspace — the seeded states stay,
@@ -110,15 +120,17 @@ def main() -> None:
         print(f"retry_b: {b_result!r}")
 
         banner("the source workspace is unchanged")
-        main_loaded = Workspace.open_path(main_ws.root).load_graph()
+        main_loaded = rflow.Workspace.open_path(main_ws.root).load_graph()
         print(f"main result still : {main_loaded.result()!r}")
         print(f"main state count  : {len(main_loaded.all_nodes)}")
 
         banner("compare workspaces by result")
         for ws in (main_ws, a, b):
-            g = Workspace.open_path(ws.root).load_graph()
-            print(f"  workspace={ws.root.name:<8} nodes={len(g.all_nodes):>2} "
-                  f"result={g.result()!r}")
+            g = rflow.Workspace.open_path(ws.root).load_graph()
+            print(
+                f"  workspace={ws.root.name:<8} nodes={len(g.all_nodes):>2} "
+                f"result={g.result()!r}"
+            )
 
 
 if __name__ == "__main__":

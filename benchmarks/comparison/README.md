@@ -1,7 +1,7 @@
-# rlmflow vs alexzhang13/rlm
+# recursive-flow vs alexzhang13/rlm
 
 This folder contains a small head-to-head harness for comparing this repo's
-`RLMFlow` engine with upstream [`alexzhang13/rlm`](https://github.com/alexzhang13/rlm/tree/main)
+`RecursiveFlow` engine with upstream [`alexzhang13/rlm`](https://github.com/alexzhang13/rlm/tree/main)
 as installed from the `rlms` package.
 
 The default task is a deterministic synthetic needle-in-haystack benchmark. Each
@@ -27,7 +27,7 @@ conda run -n py312 python benchmarks/comparison/run.py \
 To run only one implementation:
 
 ```bash
-conda run -n py312 python benchmarks/comparison/run.py --framework rlmflow
+conda run -n py312 python benchmarks/comparison/run.py --framework recursive-flow
 conda run -n py312 python benchmarks/comparison/run.py --framework alexzhang13/rlm
 ```
 
@@ -48,7 +48,7 @@ Each run writes to `benchmarks/comparison/runs/<timestamp>/` by default:
 - `results.jsonl`: one row per framework per task.
 - `summary.json`: aggregate exact-match, latency, token, agent/subcall, and method-call stats.
 - `summary.md`: short human-readable summary.
-- `workspaces/rlmflow/...`: per-task `rlmflow` workspaces and sessions.
+- `workspaces/recursive-flow/...`: per-task `recursive-flow` workspaces and sessions.
 - `transcripts/alexzhang13_rlm/...`: per-task upstream `rlm` trajectories, including nested RLM calls when exposed by `rlms`.
 - `upstream_raw/...`: raw upstream `rlm` response and usage payloads.
 
@@ -61,7 +61,7 @@ task, model, depth, and iteration budget aligned, then measures:
 - latency;
 - token usage when exposed by the implementation;
 - number of agents/subcalls used;
-- RLM method-call frequency (`rlmflow`: `launch_subagents`,
+- RLM method-call frequency (`recursive-flow`: `launch_subagents`,
   `llm_query_batched`; upstream `rlm`: `rlm_query`, `llm_query_batched`,
   `llm_query`).
 

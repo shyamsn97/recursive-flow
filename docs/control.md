@@ -35,10 +35,10 @@ Set `eager_children=True` when you want a work-conserving drain after a parent
 awaits a launcher (`await launch_subagents([...])`):
 
 ```python
-agent = RLMFlow(
+agent = RecursiveFlow(
     llm_client=...,
     runtime=...,
-    config=RLMConfig(
+    config=FlowConfig(
         max_depth=2,
         child_max_iterations=20,
         max_concurrency=8,
@@ -66,9 +66,9 @@ deterministic offline demo that prints both modes side by side.
 ## Workspace Resume
 
 ```python
-from rlmflow import Workspace
+import rflow
 
-workspace = Workspace.open_path("runs/deep_research")
+workspace = rflow.Workspace.open_path("runs/deep_research")
 graph = workspace.load_graph()
 while not graph.finished:
     graph = agent.step(graph)
@@ -97,11 +97,11 @@ step loop. This is useful for budget nudges, human feedback, and forced
 finalization:
 
 ```python
-from rlmflow import ExecAction, ExecOutput
+import rflow
 
 graph = graph.inject(
     target="root.worker",
-    node=ExecOutput(
+    node=rflow.ExecOutput(
         output="Injected controller observation: answer now.",
         content="Injected controller observation: answer now.",
     ),
@@ -172,21 +172,21 @@ Or pass a list to `runtime.register_tools([...])`.
 For a fuller guide, see [`prompt_customization.md`](prompt_customization.md).
 
 ```python
-from rlmflow.prompts.default import DEFAULT_BUILDER
+from rflow.prompts.default import DEFAULT_BUILDER
 
 GUARDRAILS = """
 - Verify before `done()`. Empty/zero/surprising results → one sanity check first.
 - Ask children for structured output (JSON / list / count), parsed mechanically.
 """
 
-agent = RLMFlow(..., prompt_builder=(
+agent = RecursiveFlow(..., prompt_builder=(
     DEFAULT_BUILDER
     .section("role", "You are a security auditor.", title="Role")
     .section("guardrails", GUARDRAILS, title="Guardrails", after="builtins")
 ))
 ```
 
-Or subclass `RLMFlow` and override `build_system_prompt`,
+Or subclass `RecursiveFlow` and override `build_system_prompt`,
 `build_messages`, `extract_code`, or `step` (which is the public
 `act + apply_one` entry point).
 

@@ -3,7 +3,7 @@
 Status: Superseded by the current split engine modules, host-bound core tool
 closures, and `get_repl_tools()` contextvars model. Keep for historical context.
 
-`rlmflow/rlm.py` is one class doing too many jobs: lifecycle, scheduling, state
+`recursive-flow/flow.py` is one class doing too many jobs: lifecycle, scheduling, state
 transitions, persistence, runtime tool wiring, prompt assembly, and child
 spawning. This document locks in a small redesign that keeps the observable
 runtime semantics but makes the state machine obvious.
@@ -114,7 +114,7 @@ When a `Runtime` is created, the engine execs this preamble in the REPL
 namespace once:
 
 ```python
-from rlmflow.graph import ChildHandle, WaitRequest
+from rflow.graph import ChildHandle, WaitRequest
 
 # state. reset to defaults before every action/resume run.
 AGENT_ID = ""
@@ -321,10 +321,10 @@ class NodeStepper:
 Action runs always end with one of: `Result | Supervising | Observation | Error`.
 Resume always writes `ResumeNode` first, then optionally `Result | Supervising`.
 
-### `RLMFlow` becomes a small facade
+### `RecursiveFlow` becomes a small facade
 
 ```python
-class RLMFlow(LLMClient):
+class RecursiveFlow(LLMClient):
     def start(self, query, **kw): ...
     def run(self, query, **kw): ...
     def chat(self, messages, **kw): ...
@@ -360,9 +360,9 @@ patch. Steps must land in order: tests first, then `append_node`, then
 `ExecutionResult`, then the REPL preamble, then `NodeStepper`, then the file
 split.
 
-### `rlmflow/runtime/repl.py` — add `read` command
+### `recursive-flow/runtime/repl.py` — add `read` command
 
-Existing handler is at `rlmflow/runtime/repl.py` lines 279–298.
+Existing handler is at `recursive-flow/runtime/repl.py` lines 279–298.
 
 Add one branch in `REPL.handle` (between `cmd == "resume"` and the `inject*`
 branches):
@@ -378,7 +378,7 @@ Also extend the docstring at lines 9–17 with:
 - ``{"cmd": "read", "name": N}``                                 returns ``{"value": namespace.get(N)}``
 ```
 
-### `rlmflow/runtime/runtime.py` — add `Runtime.read(...)`
+### `recursive-flow/runtime/runtime.py` — add `Runtime.read(...)`
 
 Insert directly after `resume_code` (currently lines 156–158). Same pattern
 as `start_code`/`resume_code`:
@@ -389,7 +389,7 @@ def read(self, name: str) -> Any:
     return self.call({"cmd": "read", "name": name}).get("value")
 ```
 
-### `rlmflow/runtime/local.py` — override `read` for in-process
+### `recursive-flow/runtime/local.py` — override `read` for in-process
 
 `LocalRuntime` already overrides `inject` at lines 41–43. Add the symmetric
 override:
@@ -399,14 +399,14 @@ def read(self, name: str) -> Any:
     return self.repl.namespace.get(name)
 ```
 
-### `rlmflow/runtime/runtime.py` — REPL preamble + `_spawn_child` proxy hook
+### `recursive-flow/runtime/runtime.py` — REPL preamble + `_spawn_child` proxy hook
 
 Add a new method on `Runtime` (next to `register_tool` at line 263). This is
 called once on every runtime (the engine's, every clone, every fork):
 
 ```python
 PREAMBLE_SOURCE = """\
-from rlmflow.graph import ChildHandle, WaitRequest
+from rflow.graph import ChildHandle, WaitRequest
 
 AGENT_ID = ""
 DEPTH = 0
@@ -457,11 +457,11 @@ def install_preamble(self) -> None:
         )
 ```
 
-Add a matching command in `REPL.handle` (`rlmflow/runtime/repl.py`):
+Add a matching command in `REPL.handle` (`recursive-flow/runtime/repl.py`):
 
 ```python
 if cmd == "exec_preamble":
-    from rlmflow.engine.preamble import PREAMBLE_SOURCE
+    from rflow.engine.preamble import PREAMBLE_SOURCE
     exec(PREAMBLE_SOURCE, self.namespace)
     return {"ok": True}
 ```
@@ -470,7 +470,7 @@ For `LocalRuntime`, override `install_preamble` to avoid the JSON round-trip:
 
 ```python
 def install_preamble(self) -> None:
-    from rlmflow.engine.preamble import PREAMBLE_SOURCE
+    from rflow.engine.preamble import PREAMBLE_SOURCE
     exec(PREAMBLE_SOURCE, self.repl.namespace)
     Runtime.install_preamble(self)  # tool metadata only
 ```
@@ -478,9 +478,9 @@ def install_preamble(self) -> None:
 `_spawn_child` is a host-side proxy registered per runtime (see Step 4
 below).
 
-### `rlmflow/rlm.py` — exact deletions, edits, additions
+### `recursive-flow/flow.py` — exact deletions, edits, additions
 
-Targets: `/Users/shyam/Code/rlmkit/rlmflow/rlm.py` (901 lines).
+Targets: `/Users/shyam/Code/rlmkit/recursive-flow/flow.py` (901 lines).
 
 #### Delete
 
@@ -509,7 +509,7 @@ def register_tools(self, runtime: Runtime | None = None) -> None:
 #### Replace `_record_state` (485–495) → `append_node`
 
 Move it out of the class. New module-level function at the top of the file
-(after the `RLMConfig` block):
+(after the `FlowConfig` block):
 
 ```python
 def append_node(session: Session, graph: Graph, node: Node) -> Node:
@@ -560,7 +560,7 @@ def inject_env(self, graph: Graph, node: Node) -> Runtime:
 
 #### Add `_spawn_child` (replaces `delegate_for_step` body)
 
-Add as a `@tool` method on `RLMFlow`. It is the actual host-side child
+Add as a `@tool` method on `RecursiveFlow`. It is the actual host-side child
 spawner. Takes everything as args — no `ActiveStep`:
 
 ```python
@@ -681,7 +681,7 @@ Lines 599–604 already filter `ResultNode` and `SupervisingNode` and treat
 inherits from `ObservationNode`). No change needed beyond confirming this in
 a test (Step 1 below).
 
-### `rlmflow/graph.py` (no changes expected)
+### `recursive-flow/graph.py` (no changes expected)
 
 `ChildHandle`, `WaitRequest`, all node types stay as-is. Confirmed by the
 preamble import of `ChildHandle, WaitRequest` working unchanged.
@@ -704,7 +704,7 @@ Add or update under `/Users/shyam/Code/rlmkit/tests/`.
 - `start_code("yield wait()")` returns suspended with empty `agent_ids`.
 - `_DELEGATED` defaults to `[]` after `install_preamble`.
 
-#### `tests/test_rlmflow_core.py` (extend)
+#### `tests/test_recursive-flow_core.py` (extend)
 
 Add:
 
@@ -736,28 +736,28 @@ query action supervising resume action supervising resume action result
 After all the above lands and tests pass:
 
 ```text
-rlmflow/engine/__init__.py        re-export everything below
-rlmflow/engine/preamble.py        PREAMBLE_SOURCE constant
-rlmflow/engine/scheduler.py       NodeScheduler                     (rlm.py 105–142)
-rlmflow/engine/nodes.py           append_node                       (rlm.py new fn)
-rlmflow/engine/executor.py        ExecutionResult, _run_code,
+recursive-flow/engine/__init__.py        re-export everything below
+recursive-flow/engine/preamble.py        PREAMBLE_SOURCE constant
+recursive-flow/engine/scheduler.py       NodeScheduler                     (flow.py 105–142)
+recursive-flow/engine/nodes.py           append_node                       (flow.py new fn)
+recursive-flow/engine/executor.py        ExecutionResult, _run_code,
                                   _resume_code, _execute_code,
-                                  inject_env                        (rlm.py 535–574)
-rlmflow/engine/stepper.py         _step_agent, _step_observation,
+                                  inject_env                        (flow.py 535–574)
+recursive-flow/engine/stepper.py         _step_agent, _step_observation,
                                   _step_action, _step_supervising,
-                                  _can_resume, _iteration_count     (rlm.py 296–516)
-rlmflow/engine/messages.py        build_messages,
+                                  _can_resume, _iteration_count     (flow.py 296–516)
+recursive-flow/engine/messages.py        build_messages,
                                   build_system_prompt*,
                                   build_tools_section,
-                                  build_status_section              (rlm.py 578–715)
-rlmflow/rlm.py                    RLMFlow facade only
+                                  build_status_section              (flow.py 578–715)
+recursive-flow/flow.py                    RecursiveFlow facade only
                                   (start, run, chat, step, terminate,
                                    _spawn_child, runtime_for,
                                    create_runtime_session,
                                    register_tools)
 ```
 
-Top-level `rlmflow/__init__.py` re-exports stay identical — public surface
+Top-level `recursive-flow/__init__.py` re-exports stay identical — public surface
 unchanged.
 
 ## Migration Plan
@@ -838,13 +838,13 @@ explicit node filtering (skip `SupervisingNode`, skip `ResultNode`).
 Only after tests still pass:
 
 ```text
-rlmflow/engine/scheduler.py   NodeScheduler
-rlmflow/engine/nodes.py       append_node
-rlmflow/engine/preamble.py    REPL preamble source + _spawn_child host proxy
-rlmflow/engine/executor.py    execute, ExecutionResult, inject_env
-rlmflow/engine/stepper.py     NodeStepper
-rlmflow/engine/messages.py    MessageBuilder
-rlmflow/rlm.py                RLMFlow facade
+recursive-flow/engine/scheduler.py   NodeScheduler
+recursive-flow/engine/nodes.py       append_node
+recursive-flow/engine/preamble.py    REPL preamble source + _spawn_child host proxy
+recursive-flow/engine/executor.py    execute, ExecutionResult, inject_env
+recursive-flow/engine/stepper.py     NodeStepper
+recursive-flow/engine/messages.py    MessageBuilder
+recursive-flow/flow.py                RecursiveFlow facade
 ```
 
 Mechanical move only. No semantic change.
@@ -879,7 +879,7 @@ tests against each backend.
 `docs/control.md` suggests overriding `step_observation`, `step_action`,
 `build_messages`, `delegate_for_step`, etc. After this refactor:
 
-- `build_messages` stays public on `RLMFlow`.
+- `build_messages` stays public on `RecursiveFlow`.
 - transition hooks move to `NodeStepper` methods.
 - `delegate_for_step` is removed; subclassers should override the host-side
   `_spawn_child` instead.
@@ -889,7 +889,7 @@ Update docs in the same PR that ships the refactor.
 ## Desired End State
 
 ```python
-class RLMFlow(LLMClient):
+class RecursiveFlow(LLMClient):
     def start(...): ...
     def run(...): ...
     def chat(...): ...

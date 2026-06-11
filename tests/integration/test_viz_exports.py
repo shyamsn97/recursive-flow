@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-from rlmflow import (
+from rflow import (
     ErrorOutput,
     Graph,
     LLMClient,
     LLMUsage,
     UserQuery,
-    RLMConfig,
-    RLMFlow,
+    FlowConfig,
+    RecursiveFlow,
 )
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.utils.export import (
+from rflow.runtime.local import LocalRuntime
+from rflow.utils.export import (
     to_d2,
     to_dot,
     to_mermaid,
     to_mermaid_flowchart,
     to_mermaid_sequence,
 )
-from rlmflow.utils.tracing import json_logs
-from rlmflow.utils.viz import (
+from rflow.utils.tracing import json_logs
+from rflow.utils.viz import (
     bench_table,
     budget_burndown,
     code_log,
@@ -35,8 +35,8 @@ from rlmflow.utils.viz import (
 class DelegatingLLM(LLMClient):
     ROOT = (
         "```repl\n"
-        "h = rlm_delegate(name='child', query='do the thing', context='')\n"
-        "results = await rlm_wait(h)\n"
+        "h = flow_delegate(name='child', query='do the thing', context='')\n"
+        "results = await flow_wait(h)\n"
         "done('root:' + results[0])\n"
         "```"
     )
@@ -50,7 +50,7 @@ class DelegatingLLM(LLMClient):
         return self.ROOT
 
 
-def _run(agent: RLMFlow, query: str) -> list[Graph]:
+def _run(agent: RecursiveFlow, query: str) -> list[Graph]:
     graph = agent.start(query)
     graphs = [graph]
     while not graph.finished:
@@ -60,11 +60,11 @@ def _run(agent: RLMFlow, query: str) -> list[Graph]:
     return graphs
 
 
-def _agent() -> RLMFlow:
-    return RLMFlow(
+def _agent() -> RecursiveFlow:
+    return RecursiveFlow(
         llm_client=DelegatingLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=2),
+        config=FlowConfig(max_depth=2),
     )
 
 
@@ -140,7 +140,7 @@ def test_dot_export_has_edges_and_type_labels():
     final = _run(_agent(), "dot-test")[-1]
     dot = to_dot(final)
 
-    assert dot.startswith("digraph rlmflow {")
+    assert dot.startswith('digraph "recursive-flow" {')
     assert dot.rstrip().endswith("}")
     assert "->" in dot
     assert "done" in dot
@@ -188,7 +188,7 @@ def test_error_summary_no_errors():
 def test_code_log_contains_action_and_observation():
     graphs = _run(_agent(), "code-test")
     log = code_log(graphs)
-    assert "rlm_delegate(name='child', query='do the thing', context='')" in log
+    assert "flow_delegate(name='child', query='do the thing', context='')" in log
     assert "[root]" in log
 
 

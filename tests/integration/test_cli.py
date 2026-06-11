@@ -7,9 +7,9 @@ import importlib.util
 
 import pytest
 
-from rlmflow import Graph, LLMClient, LLMUsage, RLMConfig, RLMFlow
-from rlmflow.cli import _load, main
-from rlmflow.runtime.local import LocalRuntime
+from rflow import Graph, LLMClient, LLMUsage, FlowConfig, RecursiveFlow
+from rflow.cli import _load, main
+from rflow.runtime.local import LocalRuntime
 
 
 PLOTLY_INSTALLED = importlib.util.find_spec("plotly") is not None
@@ -18,8 +18,8 @@ PLOTLY_INSTALLED = importlib.util.find_spec("plotly") is not None
 class DelegatingLLM(LLMClient):
     ROOT = (
         "```repl\n"
-        "h = rlm_delegate(name='child', query='do the thing', context='')\n"
-        "results = await rlm_wait(h)\n"
+        "h = flow_delegate(name='child', query='do the thing', context='')\n"
+        "results = await flow_wait(h)\n"
         "done(results[0])\n"
         "```"
     )
@@ -35,10 +35,10 @@ class DelegatingLLM(LLMClient):
 
 @pytest.fixture
 def run_graphs() -> list[Graph]:
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=DelegatingLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=2),
+        config=FlowConfig(max_depth=2),
     )
     graph = agent.start("cli-test")
     graphs = [graph]
@@ -181,7 +181,7 @@ def test_version(capsys: pytest.CaptureFixture):
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert "rlmflow" in out
+    assert "recursive-flow" in out
     assert "python" in out
 
 
@@ -200,7 +200,7 @@ def test_view_dispatches_to_open_viewer(
         captured["n"] = len(graphs)
         captured["kwargs"] = kwargs
 
-    monkeypatch.setattr("rlmflow.utils.viewer.open_viewer", fake_open_viewer)
+    monkeypatch.setattr("rflow.utils.viewer.open_viewer", fake_open_viewer)
 
     rc = main(["view", str(workspace), "--port", "7861"])
 

@@ -1,6 +1,6 @@
 """Test find_code_blocks and replace_code_block edge cases."""
 
-from rlmflow.utils.code import check_wait_syntax, find_code_blocks, replace_code_block
+from rflow.utils.code import check_wait_syntax, find_code_blocks, replace_code_block
 
 
 def test_standard_fence():
@@ -89,33 +89,33 @@ def test_replace_no_block():
 
 
 def test_wait_check_accepts_direct_await():
-    assert check_wait_syntax("x = await rlm_wait(h)") is None
-    assert check_wait_syntax("await rlm_wait(*handles)") is None
+    assert check_wait_syntax("x = await flow_wait(h)") is None
+    assert check_wait_syntax("await flow_wait(*handles)") is None
     print("  await direct call: OK")
 
 
 def test_wait_check_accepts_conditional():
-    code = "results = await rlm_wait(*handles) if handles else []"
+    code = "results = await flow_wait(*handles) if handles else []"
     assert check_wait_syntax(code) is None
     print("  await ternary: OK")
 
 
 def test_wait_check_rejects_yield():
-    err = check_wait_syntax("x = yield rlm_wait(h)")
+    err = check_wait_syntax("x = yield flow_wait(h)")
     assert err is not None and "top-level `yield` is not supported" in err
     print("  yield rejected: OK")
 
 
 def test_wait_check_rejects_naked_wait():
-    err = check_wait_syntax("results = rlm_wait(h)")
+    err = check_wait_syntax("results = flow_wait(h)")
     assert err is not None and "must be awaited" in err
-    err = check_wait_syntax("results = rlm_wait(*handles) if handles else []")
+    err = check_wait_syntax("results = flow_wait(*handles) if handles else []")
     assert err is not None
     print("  naked wait rejected: OK")
 
 
 def test_wait_check_rejects_wait_in_comprehension():
-    err = check_wait_syntax("[await rlm_wait(h) for h in handles]")
+    err = check_wait_syntax("[await flow_wait(h) for h in handles]")
     assert err is not None
     print("  comprehension wait rejected: OK")
 

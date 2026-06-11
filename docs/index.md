@@ -1,4 +1,4 @@
-# rlmflow docs
+# recursive-flow docs
 
 Pick the doc that matches what you're trying to do.
 
@@ -7,10 +7,10 @@ Pick the doc that matches what you're trying to do.
 - [Blog post](blog.md) — long-form pitch. Why recursive language
   models, why graphs over flat traces, full needle-in-a-haystack
   walkthrough with the same exports the CLI ships.
-- [Positioning](positioning.md) — when to use rlmflow vs
+- [Positioning](positioning.md) — when to use recursive-flow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 
-## Use rlmflow
+## Use recursive-flow
 
 - [Control](control.md) — step loop, workspace resume, rewind,
   forks, `CONTEXT.read()` / slices, delegation via
@@ -32,10 +32,10 @@ Pick the doc that matches what you're trying to do.
 - [Example smoke runner](../examples/run_examples.py) — run the offline
   examples and opt into optional, live, sandbox, or manual checks.
 
-## Extend rlmflow
+## Extend recursive-flow
 
 - [**Internals**](internals.md) — engine architecture, step
   lifecycle (`act` → `apply_one`), the REPL `yield` protocol,
   resume semantics, cold-start replay, persistence, and the full
-  `RLMFlow` override surface. **Start here if you want to subclass
+  `RecursiveFlow` override surface. **Start here if you want to subclass
   the engine.**

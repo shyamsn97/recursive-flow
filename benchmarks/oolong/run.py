@@ -1,11 +1,11 @@
-"""OOLONG runner — rlmflow port of Prime Intellect's ``oolong-rlm`` env.
+"""OOLONG runner — recursive-flow port of Prime Intellect's ``oolong-rlm`` env.
 
 Mirrors the layout in
 [`PrimeIntellect-ai/verifiers`](https://github.com/PrimeIntellect-ai/verifiers/tree/sebastian/experiment/rlm/environments/oolong)
 so results can be compared head-to-head:
 
 - Three **modes**: ``standard`` (single-call baseline, ``\\boxed{}``
-  extraction), ``rlm`` (rlmflow recursive scaffold, file-backed context),
+  extraction), ``rlm`` (recursive-flow recursive scaffold, file-backed context),
   ``rlm_tips`` (same scaffold + the verbatim ``<env_tips>`` strategy
   block PI uses for SFT data generation).
 - Three **subsets**: ``synth`` and ``synth_with_labels`` (from
@@ -71,14 +71,14 @@ from scoring import (  # noqa: E402
     template_from_question,
 )
 
-from rlmflow.llm import AnthropicClient, LLMClient, LLMUsage, OpenAIClient  # noqa: E402
-from rlmflow.graph import Node  # noqa: E402
-from rlmflow.rlm import RLMConfig, RLMFlow  # noqa: E402
-from rlmflow.runtime.docker import DockerRuntime  # noqa: E402
-from rlmflow.runtime.local import LocalRuntime  # noqa: E402
-from rlmflow.tools import FILE_TOOLS  # noqa: E402
-from rlmflow.utils.trace import save_trace  # noqa: E402
-from rlmflow.workspace import Workspace  # noqa: E402
+from rflow.llm import AnthropicClient, LLMClient, LLMUsage, OpenAIClient  # noqa: E402
+from rflow.graph import Node  # noqa: E402
+from rflow.flow import FlowConfig, RecursiveFlow  # noqa: E402
+from rflow.runtime.docker import DockerRuntime  # noqa: E402
+from rflow.runtime.local import LocalRuntime  # noqa: E402
+from rflow.tools import FILE_TOOLS  # noqa: E402
+from rflow.utils.trace import save_trace  # noqa: E402
+from rflow.workspace import Workspace  # noqa: E402
 
 
 # ── Prompts (PI-aligned) ──────────────────────────────────────────────
@@ -91,7 +91,7 @@ Strategy for long-context information retrieval:
 
 1. Split the context into chunks (e.g., by paragraphs or fixed character windows with some overlap)
 2. Write a prompt describing what to look for, then append it to each chunk to create a list of prompts
-3. Call rlm_delegate(name=..., query=..., context=chunk) once per chunk, then `yield rlm_wait(*handles)` to scan chunks in parallel
+3. Call flow_delegate(name=..., query=..., context=chunk) once per chunk, then `yield flow_wait(*handles)` to scan chunks in parallel
 4. Aggregate the relevant findings from the responses
 </env_tips>"""
 
@@ -111,7 +111,7 @@ Task metadata:
 
 Tools:
 - read_file, read_lines, line_count, list_files, grep, ls
-- rlm_delegate(name=..., query=..., context=...) and yield rlm_wait(*handles)
+- flow_delegate(name=..., query=..., context=...) and yield flow_wait(*handles)
 
 Question:
 {question}
@@ -318,14 +318,14 @@ def run_rlm_task(
     def runtime_factory():
         return make_runtime(workspace, docker_image=args.docker_image)
 
-    config = RLMConfig(
+    config = FlowConfig(
         max_depth=args.max_depth,
         max_iterations=args.max_iterations,
         max_output_length=args.max_output_length,
         max_concurrency=args.max_concurrency,
     )
 
-    agent = RLMFlow(
+    agent = RecursiveFlow(
         llm_client=llm,
         runtime=runtime,
         config=config,
@@ -480,13 +480,13 @@ def git_sha() -> str | None:
         return None
 
 
-def rlmflow_version() -> str | None:
+def recursive_flow_version() -> str | None:
     try:
-        import rlmflow  # noqa: F401
+        import rflow  # noqa: F401
 
         from importlib.metadata import version
 
-        return version("rlmflow")
+        return version("recursive-flow")
     except Exception:
         return None
 
@@ -514,7 +514,7 @@ def build_metadata(args, rows: list[dict[str, Any]]) -> dict[str, Any]:
         "host": socket.gethostname(),
         "platform": platform.platform(),
         "python": platform.python_version(),
-        "rlmflow_version": rlmflow_version(),
+        "recursive_flow_version": recursive_flow_version(),
         "git_sha": git_sha(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "dataset_fingerprint": dataset_fingerprint(rows),
@@ -602,7 +602,7 @@ def render_summary_md(summary: dict[str, Any]) -> str:
         f"- Subset / split: `{env['subset']}` / `{env['split']}`",
         f"- N: {summary['n_total']}  (ok={summary['n_ok']}, error={summary['n_error']})",
         f"- Incomplete: {summary['incomplete']}",
-        f"- Git: `{m.get('git_sha') or 'n/a'}`  ·  rlmflow `{m.get('rlmflow_version') or 'n/a'}`",
+        f"- Git: `{m.get('git_sha') or 'n/a'}`  ·  recursive-flow `{m.get('recursive_flow_version') or 'n/a'}`",
         f"- Dataset fingerprint: `{m['dataset_fingerprint']}`",
         "",
         "## Scores",
@@ -909,7 +909,7 @@ def run_one(
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "OOLONG benchmark runner — rlmflow port of Prime Intellect's "
+            "OOLONG benchmark runner — recursive-flow port of Prime Intellect's "
             "oolong-rlm environment. Three modes (standard / rlm / rlm_tips) "
             "× three subsets (synth / synth_with_labels / real)."
         )
@@ -919,7 +919,7 @@ def main():
         "--mode",
         choices=("standard", "rlm", "rlm_tips"),
         default="rlm",
-        help="standard=single-call \\boxed{} baseline; rlm=rlmflow recursive scaffold; rlm_tips=rlm + verbatim PI <env_tips> block.",
+        help="standard=single-call \\boxed{} baseline; rlm=recursive-flow recursive scaffold; rlm_tips=rlm + verbatim PI <env_tips> block.",
     )
     parser.add_argument(
         "--subset",

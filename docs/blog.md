@@ -1,19 +1,19 @@
 # Recursive Language Models: A graph approach
 
-> [GitHub](https://github.com/shyamsn97/rlmflow) ·
-> [PyPI](https://pypi.org/project/rlmflow/) ·
-> [Examples](https://github.com/shyamsn97/rlmflow/tree/main/examples) ·
-> [Changelog](https://github.com/shyamsn97/rlmflow/blob/main/CHANGELOG.md)
+> [GitHub](https://github.com/shyamsn97/recursive-flow) ·
+> [PyPI](https://pypi.org/project/recursive-flow/) ·
+> [Examples](https://github.com/shyamsn97/recursive-flow/tree/main/examples) ·
+> [Changelog](https://github.com/shyamsn97/recursive-flow/blob/main/CHANGELOG.md)
 
-![Hero animation: an rlmflow run unfolding from a single root agent into a graph of typed states](rlm_animation.gif)
+![Hero animation: an recursive-flow run unfolding from a single root agent into a graph of typed states](rlm_animation.gif)
 
 ```bash
-pip install rlmflow
+pip install recursive-flow
 ```
 
 ## tldr
 
-**rlmflow** turns [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) into inspectable execution graphs. It's a Python library for writing RLM agents where every query, action, observation, delegation, wait, resume, and result is a typed Pydantic state, and a run is the recursive `Graph` of those states plus the agents and edges that connect them.
+**recursive-flow** turns [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) into inspectable execution graphs. It's a Python library for writing RLM agents where every query, action, observation, delegation, wait, resume, and result is a typed Pydantic state, and a run is the recursive `Graph` of those states plus the agents and edges that connect them.
 
 The whole engine is one transition: `step(graph) → graph'`. The graph and the execution are the same data structure — there is no separate "tracing mode" to enable — so the same run renders as a Rich live tree, a Mermaid diagram, a Gantt swimlane, or a Gradio viewer, all from one-line projections of the workspace graph.
 
@@ -85,7 +85,7 @@ harder to observe and control: parents spawn children, children
 spawn more children, results bubble back up, and a flat transcript
 hides almost everything you'd want to ask of the run. But what if there was a better way?
 
-That's where <b>rlmflow</b> comes in -- Representing sprawling trees of recursive agents as inspectable and controllable graphs.
+That's where <b>recursive-flow</b> comes in -- Representing sprawling trees of recursive agents as inspectable and controllable graphs.
 
 ## RLMs are graphs
 
@@ -111,7 +111,7 @@ calls. Each child is an agent with its own little loop: inspect the
 context, run a search, read a passage, maybe launch another sub-agent, then
 return.
 
-In rlmflow, every
+In recursive-flow, every
 <span class="rlm-hl-del">await launch_subagents([{"query": query, "context": ctx, "name": name}])</span>
 call spins up fresh sub-agents with their own REPLs — each bound to its spec's
 `context` as `CONTEXT` — runs those sub-agent loops until they call
@@ -376,7 +376,7 @@ right, you can't tell whether it was right for the right reason. The
 abstraction is too clean: the act of delegating throws away exactly
 the structure you'd want to debug, evaluate, or steer.
 
-rlmflow keeps that structure — every recursive call is an agent in an
+recursive-flow keeps that structure — every recursive call is an agent in an
 execution graph that you can step through, inspect, and replay:
 
 <div class="rlm-slides rlm-slides-graph">
@@ -589,7 +589,7 @@ resume from saved workspace state with a different model or prompt. The
 flat recursive-call view tells you what returned. The graph tells you
 how the answer moved through the run.
 
-rlmflow stores the run in that shape from the beginning. The graph is
+recursive-flow stores the run in that shape from the beginning. The graph is
 not a visualization recovered from a log after the fact. It is the
 data model. Every meaningful moment in the run is stored as a typed
 state — the initial query, a model step, a tool result, a paused
@@ -609,7 +609,7 @@ That loop works because a workspace session is a durable saved run.
 It contains enough information to continue the run from the latest state,
 inspect what led there, or compare it with another branch.
 
-That gives rlmflow its main operations:
+That gives recursive-flow its main operations:
 
 - **Inspect** one agent without rereading every sibling's messages.
 - **Resume** from a saved workspace instead of starting the run over.
@@ -629,7 +629,7 @@ against the wrong slice of context. A parent combines two sibling
 answers that were never compatible. These are not just bad messages
 in a chat log; they are bad edges in a computation.
 
-That is the bet behind rlmflow: once a model can create recursive
+That is the bet behind recursive-flow: once a model can create recursive
 work, the run should be stored as recursive state. The graph is not
 decoration around the agent. It is the object the agent is building.
 
@@ -637,7 +637,7 @@ decoration around the agent. It is the object the agent is building.
 ## Acknowledgements
 
 Alex Zhang and Omar Khattab for the RLM paper and post — without
-which there is no rlmflow. The
+which there is no rflow. The
 [`rlm-minimal`](https://github.com/alexzhang13/rlm-minimal) and
 [`ypi`](https://github.com/rawwerks/ypi) codebases for being
 readable, hackable, and right; most of the prompt structure was
@@ -653,11 +653,11 @@ are what produced the failure-shapes section.
 ## Citation
 
 ```bibtex
-@misc{sudhakaran2026rlmflow,
+@misc{sudhakaran2026recursive-flow,
   author       = {Sudhakaran, Shyam},
   title        = {Recursive Language Models are Graphs},
   year         = {2026},
-  howpublished = {\url{https://github.com/shyamsn97/rlmflow}}
+  howpublished = {\url{https://github.com/shyamsn97/recursive-flow}}
 }
 ```
 

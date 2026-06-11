@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from rlmflow import (
+from rflow import (
     FileSession,
     Graph,
     InMemorySession,

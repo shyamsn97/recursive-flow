@@ -5,7 +5,7 @@ import sys
 from types import SimpleNamespace
 from typing import Any
 
-from rlmflow import LLMClient, LLMUsage
+from rflow import LLMClient, LLMUsage
 
 
 class _FakeBaseLM:
@@ -34,29 +34,29 @@ class _EchoClient(LLMClient):
 def _import_with_fake_dspy(monkeypatch):
     fake_dspy = SimpleNamespace(BaseLM=_FakeBaseLM)
     monkeypatch.setitem(sys.modules, "dspy", fake_dspy)
-    sys.modules.pop("rlmflow.integrations.dspy", None)
-    return importlib.import_module("rlmflow.integrations.dspy")
+    sys.modules.pop("rflow.integrations.dspy", None)
+    return importlib.import_module("rflow.integrations.dspy")
 
 
-def test_rlmflow_lm_adapts_prompt_to_dspy_lm(monkeypatch):
+def test_recursive_flow_lm_adapts_prompt_to_dspy_lm(monkeypatch):
     integration = _import_with_fake_dspy(monkeypatch)
     client = _EchoClient()
 
-    lm = integration.RLMFlowLM(client, model="rlmflow/test", max_tokens=100)
+    lm = integration.RecursiveFlowLM(client, model="recursive-flow/test", max_tokens=100)
 
     assert lm("hello", temperature=0.2) == ["answer: hello"]
     assert client.messages == [{"role": "user", "content": "hello"}]
     assert client.kwargs == {"max_tokens": 100, "temperature": 0.2}
 
 
-def test_rlmflow_lm_returns_openai_style_response(monkeypatch):
+def test_recursive_flow_lm_returns_openai_style_response(monkeypatch):
     integration = _import_with_fake_dspy(monkeypatch)
     client = _EchoClient()
 
-    lm = integration.RLMFlowLM(client, model="rlmflow/test")
+    lm = integration.RecursiveFlowLM(client, model="recursive-flow/test")
     response = lm.forward(messages=[{"role": "user", "content": "hi"}])
 
-    assert response.model == "rlmflow/test"
+    assert response.model == "recursive-flow/test"
     assert response.choices[0].message.content == "answer: hi"
     assert response.usage == {
         "prompt_tokens": 3,

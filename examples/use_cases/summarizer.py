@@ -10,7 +10,7 @@ Usage:
     python examples/use_cases/summarizer.py
     python examples/use_cases/summarizer.py --sections 40 --no-viz
     python examples/use_cases/summarizer.py --input-file path/to/doc.txt
-    python examples/use_cases/summarizer.py --docker-image rlmflow:local --viewer
+    python examples/use_cases/summarizer.py --docker-image recursive-flow:local --viewer
 """
 
 from __future__ import annotations
@@ -19,10 +19,9 @@ import argparse
 import random
 from pathlib import Path
 
-from rlmflow.llm import AnthropicClient, OpenAIClient
-from rlmflow.rlm import RLMConfig, RLMFlow
-from rlmflow.runtime.docker import DockerRuntime
-from rlmflow.runtime.local import LocalRuntime
+import rflow
+from rflow.runtime.docker import DockerRuntime
+from rflow.runtime.local import LocalRuntime
 
 _TOPICS = [
     "the migration to the new billing system",
@@ -68,13 +67,19 @@ def generate_long_document(sections: int, *, seed: int = 7) -> str:
             )
         parts.append("\n".join(body))
 
-    print(f"Generated {sections}-section document "
-          f"(key fact planted in section {planted_section}).")
+    print(
+        f"Generated {sections}-section document "
+        f"(key fact planted in section {planted_section})."
+    )
     return "\n\n".join(parts)
 
 
 def build_llm(model: str):
-    return AnthropicClient(model) if model.startswith("claude") else OpenAIClient(model)
+    return (
+        rflow.AnthropicClient(model)
+        if model.startswith("claude")
+        else rflow.OpenAIClient(model)
+    )
 
 
 SUMMARIZE_QUERY = """\
@@ -103,18 +108,24 @@ map-reduce strategy instead of reading it all at once:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Recursive map-reduce summarizer")
     parser.add_argument("--sections", type=int, default=30)
-    parser.add_argument("--input-file", default=None, help="Summarize this file instead of a synthetic doc.")
+    parser.add_argument(
+        "--input-file",
+        default=None,
+        help="Summarize this file instead of a synthetic doc.",
+    )
     parser.add_argument("--model", default="gpt-5-mini")
     parser.add_argument("--fast-model", default="gpt-5-nano")
     parser.add_argument(
         "--docker-image",
         default=None,
-        help="If set, run agent code inside this Docker image (e.g. rlmflow:local).",
+        help="If set, run agent code inside this Docker image (e.g. recursive-flow:local).",
     )
     parser.add_argument("--max-depth", type=int, default=1)
     parser.add_argument("--max-iterations", type=int, default=15)
     parser.add_argument("--no-viz", action="store_true")
-    parser.add_argument("--viewer", action="store_true", help="Open the viewer after finishing.")
+    parser.add_argument(
+        "--viewer", action="store_true", help="Open the viewer after finishing."
+    )
     args = parser.parse_args()
 
     print(f">>> {'DOCKER' if args.docker_image else 'LOCAL'} RUNTIME")
@@ -152,10 +163,12 @@ def main() -> None:
             },
         }
 
-    agent = RLMFlow(
+    agent = rflow.RecursiveFlow(
         llm_client=build_llm(args.model),
         runtime=make_runtime(),
-        config=RLMConfig(max_depth=args.max_depth, max_iterations=args.max_iterations),
+        config=rflow.FlowConfig(
+            max_depth=args.max_depth, max_iterations=args.max_iterations
+        ),
         llm_clients=llm_clients,
         runtime_factory=make_runtime,
     )
@@ -167,7 +180,7 @@ def main() -> None:
             graph = agent.step(graph)
             print(graph.tree())
     else:
-        from rlmflow.utils.viz import live
+        from rflow.utils.viz import live
 
         graph = live(agent, graph)[-1]
 
@@ -176,7 +189,7 @@ def main() -> None:
     print(f"\nWorkspace saved to {workspace}")
 
     if args.viewer:
-        from rlmflow.utils.viewer import open_viewer
+        from rflow.utils.viewer import open_viewer
 
         open_viewer(workspace)
 

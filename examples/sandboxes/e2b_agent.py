@@ -1,4 +1,4 @@
-"""Run a platformer-building RLMFlow task inside an E2B Sandbox.
+"""Run a platformer-building RecursiveFlow task inside an E2B Sandbox.
 
 Setup:
     pip install -e ".[openai,e2b]"
@@ -19,9 +19,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from rlmflow import OpenAIClient, RLMConfig, RLMFlow, Workspace  # noqa: E402
-from rlmflow.runtime.sandbox.e2b import E2BRuntime  # noqa: E402
-from rlmflow.tools import FILE_TOOLS  # noqa: E402
+import rflow  # noqa: E402
+from rflow.runtime.sandbox.e2b import E2BRuntime  # noqa: E402
+from rflow.tools import FILE_TOOLS  # noqa: E402
 
 PLATFORMER_QUERY = """\
 Build a simple 2D side-scrolling platformer in plain HTML/CSS/JS under output/.
@@ -39,7 +39,7 @@ gravity, platform collision, scrolling camera, and restart.
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run RLMFlow inside E2B.")
+    parser = argparse.ArgumentParser(description="Run RecursiveFlow inside E2B.")
     parser.add_argument("--model", default="gpt-5")
     parser.add_argument(
         "--fast-model",
@@ -62,13 +62,13 @@ def parse_args() -> argparse.Namespace:
         action="append",
         help=(
             "Command to run before starting the REPL. Repeat for multiple commands. "
-            "Defaults to installing rlmflow from PyPI."
+            "Defaults to installing recursive-flow from PyPI."
         ),
     )
     parser.add_argument(
         "--skip-setup",
         action="store_true",
-        help="Skip setup commands, useful for templates with rlmflow preinstalled.",
+        help="Skip setup commands, useful for templates with recursive-flow preinstalled.",
     )
     return parser.parse_args()
 
@@ -81,14 +81,14 @@ def run_platformer_task(
     max_iterations: int,
     max_depth: int,
 ) -> None:
-    agent = RLMFlow(
-        llm_client=OpenAIClient(model=model),
+    agent = rflow.RecursiveFlow(
+        llm_client=rflow.OpenAIClient(model=model),
         runtime=runtime,
         runtime_factory=runtime.clone,
-        config=RLMConfig(max_iterations=max_iterations, max_depth=max_depth),
+        config=rflow.FlowConfig(max_iterations=max_iterations, max_depth=max_depth),
         llm_clients={
             "fast": {
-                "model": OpenAIClient(model=fast_model),
+                "model": rflow.OpenAIClient(model=fast_model),
                 "description": f"cheaper/faster model ({fast_model}); prefer for delegated subtasks.",
             },
         },
@@ -98,7 +98,7 @@ def run_platformer_task(
 
 def main() -> None:
     args = parse_args()
-    workspace = Workspace.create(
+    workspace = rflow.Workspace.create(
         REPO_ROOT / "examples" / "_runs" / "example-workspaces" / "sandbox-e2b"
     )
     setup_commands = [] if args.skip_setup else args.setup_command

@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rlmflow import Graph, LLMClient, LLMUsage, RLMConfig, RLMFlow, is_done
-from rlmflow.runtime.local import LocalRuntime
-from rlmflow.utils.trace import Trace, load_trace, save_trace
+from rflow import Graph, LLMClient, LLMUsage, FlowConfig, RecursiveFlow, is_done
+from rflow.runtime.local import LocalRuntime
+from rflow.utils.trace import Trace, load_trace, save_trace
 
 
 class DelegatingLLM(LLMClient):
     ROOT = (
         "```repl\n"
-        "h = rlm_delegate(name='child', query='do the thing', context='')\n"
-        "results = await rlm_wait(h)\n"
+        "h = flow_delegate(name='child', query='do the thing', context='')\n"
+        "results = await flow_wait(h)\n"
         "done(results[0])\n"
         "```"
     )
@@ -31,7 +31,7 @@ class DelegatingLLM(LLMClient):
         return self.ROOT
 
 
-def _run_to_completion(agent: RLMFlow, query: str) -> list[Graph]:
+def _run_to_completion(agent: RecursiveFlow, query: str) -> list[Graph]:
     graph = agent.start(query)
     graphs = [graph]
     while not graph.finished:
@@ -41,11 +41,11 @@ def _run_to_completion(agent: RLMFlow, query: str) -> list[Graph]:
     return graphs
 
 
-def _agent() -> RLMFlow:
-    return RLMFlow(
+def _agent() -> RecursiveFlow:
+    return RecursiveFlow(
         llm_client=DelegatingLLM(),
         runtime=LocalRuntime(),
-        config=RLMConfig(max_depth=2),
+        config=FlowConfig(max_depth=2),
     )
 
 
@@ -76,7 +76,7 @@ def test_step_snapshots_are_graph_instances():
     assert all(isinstance(g, Graph) for g in graphs)
     # The trajectory passes through a seed (start), at least one
     # yielded supervise (mid-run), and a terminal done (end).
-    from rlmflow import is_done, is_user_query, is_supervising
+    from rflow import is_done, is_user_query, is_supervising
 
     currents = [g.current() for g in graphs]
     assert any(is_user_query(c) for c in currents)
