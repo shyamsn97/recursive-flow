@@ -283,8 +283,6 @@ class RecursiveFlow(LLMClient):
             primary_context,
             metadata=context_metadata,
         )
-        for key, value in (contexts or {}).items():
-            root.set_context(value, key=key)
         initial_query = prepare_node_for_append(
             root,
             UserQuery(
@@ -357,7 +355,6 @@ class RecursiveFlow(LLMClient):
             )
         for key, value in (contexts or {}).items():
             self.context.write(key, value, agent_id=agent_id)
-            committed.set_context(value, key=key)
 
         context_hint = self.context.list_contexts(agent_id=agent_id)
         context_info = self._context_info(agent_id)

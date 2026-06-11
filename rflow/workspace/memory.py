@@ -156,11 +156,13 @@ class InMemoryWorkspace(BaseWorkspace):
     def fork(
         self,
         new_location: str | Path | None = None,
+        *,
+        include_artifacts: bool = False,
     ) -> InMemoryWorkspace:
         return type(self)(
             session=self.session.fork(new_location),
             context=self.context.fork(new_location),
-            store=self.store.fork(new_location),
+            store=self.store.fork(new_location) if include_artifacts else MemoryStore(),
         )
 
     def sync_graph(

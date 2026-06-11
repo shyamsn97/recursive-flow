@@ -47,6 +47,17 @@ class ContextPayload(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+def _context_payload_from_meta(data: dict[str, Any]) -> ContextPayload:
+    if data.get("context") is not None:
+        return ContextPayload.model_validate(data["context"])
+    # Transitional reader for graph JSON written during the short-lived
+    # named-context experiment. The runtime-facing context has always been singular.
+    contexts = data.get("contexts") or {}
+    if isinstance(contexts, dict) and contexts.get("context") is not None:
+        return ContextPayload.model_validate(contexts["context"])
+    return ContextPayload()
+
+
 # ── Graph ────────────────────────────────────────────────────────────
 
 
@@ -74,7 +85,7 @@ class Graph:
     parent_agent_id: str | None = None
     parent_node_id: str | None = None
     output_schema: dict[str, Any] | None = None
-    contexts: dict[str, ContextPayload] = field(default_factory=dict)
+    context: ContextPayload = field(default_factory=ContextPayload)
 
     nodes: list[Node] = field(default_factory=list)
     children: dict[str, Graph] = field(default_factory=dict)
@@ -85,16 +96,10 @@ class Graph:
             self.nodes = list(self.nodes)
         if not isinstance(self.children, dict):
             self.children = dict(self.children)
-        if self.contexts is None:
-            self.contexts = {}
-        self.contexts = {
-            key: (
-                payload
-                if isinstance(payload, ContextPayload)
-                else ContextPayload.model_validate(payload)
-            )
-            for key, payload in self.contexts.items()
-        }
+        if self.context is None:
+            self.context = ContextPayload()
+        elif not isinstance(self.context, ContextPayload):
+            self.context = ContextPayload.model_validate(self.context)
 
     # ── identity / aliases ───────────────────────────────────────────
 
@@ -293,31 +298,29 @@ class Graph:
         self,
         text: str,
         *,
-        key: str = "context",
         metadata: dict[str, Any] | None = None,
     ) -> Graph:
         """Set a graph-owned context payload for this agent."""
 
-        self.contexts[key] = ContextPayload(text=text, metadata=metadata or {})
+        self.context = ContextPayload(text=text, metadata=metadata or {})
         return self
 
-    def context(self, key: str = "context") -> str:
+    def context_text(self) -> str:
         """Return this agent's graph-owned context payload text."""
 
-        return self.contexts.get(key, ContextPayload()).text
+        return self.context.text
 
-    def context_info(self, key: str = "context") -> dict[str, Any]:
+    def context_info(self) -> dict[str, Any]:
         """Return size metadata for this agent's graph-owned context payload."""
 
-        payload = self.contexts.get(key, ContextPayload())
-        text = payload.text
+        text = self.context.text
         return {
-            "key": key,
+            "key": "context",
             "agent_id": self.agent_id,
             "chars": len(text),
             "approx_tokens": len(text) // 4,
             "lines": len(text.splitlines()),
-            "metadata": dict(payload.metadata),
+            "metadata": dict(self.context.metadata),
         }
 
     # ── editing helpers (mutate in place) ────────────────────────────
@@ -633,10 +636,7 @@ class Graph:
             "parent_agent_id": self.parent_agent_id,
             "parent_node_id": self.parent_node_id,
             "output_schema": self.output_schema,
-            "contexts": {
-                key: payload.model_dump(mode="json")
-                for key, payload in self.contexts.items()
-            },
+            "context": self.context.model_dump(mode="json"),
         }
 
     @classmethod
@@ -663,10 +663,7 @@ class Graph:
             parent_agent_id=data.get("parent_agent_id"),
             parent_node_id=data.get("parent_node_id"),
             output_schema=data.get("output_schema"),
-            contexts={
-                key: ContextPayload.model_validate(payload)
-                for key, payload in (data.get("contexts") or {}).items()
-            },
+            context=_context_payload_from_meta(data),
             nodes=list(nodes),
             children=dict(children or {}),
         )

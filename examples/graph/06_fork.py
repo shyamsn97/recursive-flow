@@ -1,9 +1,10 @@
 """Forking a Workspace: copy a run, diverge, compare outcomes.
 
-``Workspace.fork(new_dir=...)`` copies the working tree,
-session log, and context store into a new directory and returns a fresh
-Workspace handle. Subsequent writes go into the new workspace only — the
-source workspace stays untouched.
+``Workspace.fork(new_dir=...)`` copies the session log and context store into a
+new directory and returns a fresh Workspace handle. User artifacts are opt-in:
+pass ``include_artifacts=True`` when a branch should carry files such as skills,
+reports, fixtures, or notes. Subsequent writes go into the new workspace only —
+the source workspace stays untouched.
 
 Use it for:
 
@@ -68,8 +69,8 @@ def main() -> None:
 
         banner("seed: a fresh main workspace")
         main_ws = rflow.Workspace.create(root / "main")
-        # Pre-seed a side file in the working tree so we can show it copies on fork.
-        main_ws.path("notes.md").write_text("# starting notes\n")
+        # Pre-seed a user artifact so we can show artifact copying is opt-in.
+        main_ws.artifacts.write_text("notes.md", "# starting notes\n")
         seeded_result = run(
             main_ws,
             ScriptedLLM(['```repl\ndone("seeded result")\n```']),
@@ -80,13 +81,13 @@ def main() -> None:
             f"main workspace files : {sorted(p.name for p in main_ws.root.iterdir())}"
         )
 
-        banner("fork twice — each workspace gets its own copy")
+        banner("fork twice — core state copies by default, artifacts are opt-in")
         # The fork helper deletes the destination if it exists, so make sure
         # we hand it a fresh path.
         for workspace_name in ("retry_a", "retry_b"):
             shutil.rmtree(root / workspace_name, ignore_errors=True)
         a = main_ws.fork(new_dir=root / "retry_a")
-        b = main_ws.fork(new_dir=root / "retry_b")
+        b = main_ws.fork(new_dir=root / "retry_b", include_artifacts=True)
         print(
             f"main session.jsonl   : {(main_ws.root / 'session/root/session.jsonl').stat().st_size}b"
         )
@@ -98,9 +99,8 @@ def main() -> None:
             f"retry_b session.jsonl: {(b.root / 'session/root/session.jsonl').stat().st_size}b "
             f"(copied from main)"
         )
-        print(
-            f"working tree carried over: {(a.root / 'notes.md').read_text().strip()!r}"
-        )
+        print(f"retry_a has notes.md : {a.artifacts.exists('notes.md')}")
+        print(f"retry_b notes.md     : {b.artifacts.read_text('notes.md').strip()!r}")
 
         banner("diverge: each branch keeps running with its own LLM")
         # Append a *new* run into each workspace — the seeded states stay,

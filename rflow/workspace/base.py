@@ -118,32 +118,25 @@ class Session(ABC):
     """Persist per-agent invariants + per-turn state logs."""
 
     @abstractmethod
-    def write_agent(self, graph: Graph) -> None:
-        ...
+    def write_agent(self, graph: Graph) -> None: ...
 
     @abstractmethod
-    def write_state(self, state: Node) -> None:
-        ...
+    def write_state(self, state: Node) -> None: ...
 
     @abstractmethod
-    def rewrite_graph(self, graph: Graph) -> None:
-        ...
+    def rewrite_graph(self, graph: Graph) -> None: ...
 
     @abstractmethod
-    def read_transcript(self, agent_id: str) -> dict[str, Any] | None:
-        ...
+    def read_transcript(self, agent_id: str) -> dict[str, Any] | None: ...
 
     @abstractmethod
-    def write_transcript(self, agent_id: str, transcript: dict[str, Any]) -> None:
-        ...
+    def write_transcript(self, agent_id: str, transcript: dict[str, Any]) -> None: ...
 
     @abstractmethod
-    def load_graph(self) -> Graph:
-        ...
+    def load_graph(self) -> Graph: ...
 
     @abstractmethod
-    def fork(self, new_location: object) -> Session:
-        ...
+    def fork(self, new_location: object) -> Session: ...
 
 
 class BaseWorkspace(ABC):
@@ -167,8 +160,15 @@ class BaseWorkspace(ABC):
     def fork(
         self,
         new_location: str | Path | None = None,
+        *,
+        include_artifacts: bool = False,
     ) -> BaseWorkspace:
-        """Create a durable workspace copy."""
+        """Create a durable workspace copy.
+
+        By default, forks carry only graph-owned engine state: session, context,
+        and graph metadata. Pass ``include_artifacts=True`` to also copy
+        user-controlled workspace files.
+        """
 
     @classmethod
     @abstractmethod
@@ -308,20 +308,19 @@ class BaseWorkspace(ABC):
         """Ensure every agent graph owns at least its default context payload."""
 
         for agent in graph.walk():
-            if "context" not in agent.contexts:
+            if agent.context is None:
                 agent.set_context("")
 
     def _sync_graph_contexts(self, graph: Graph) -> None:
         """Materialize graph-owned contexts into this workspace."""
 
         for agent in graph.walk():
-            for key, payload in agent.contexts.items():
-                self.context.write(
-                    key,
-                    payload.text,
-                    agent_id=agent.agent_id,
-                    metadata=payload.metadata,
-                )
+            self.context.write(
+                "context",
+                agent.context.text,
+                agent_id=agent.agent_id,
+                metadata=agent.context.metadata,
+            )
 
     def _remember_graph_fingerprint(self, fingerprint: str) -> None:
         self._graph_fingerprint = fingerprint

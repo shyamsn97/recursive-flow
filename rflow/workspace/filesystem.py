@@ -145,9 +145,9 @@ class FileSession(Session):
             if not self.store.exists(meta_path):
                 continue
             agent_dicts[aid] = self.store.read_json(meta_path)
-            contexts = self._read_contexts(aid)
-            if contexts:
-                agent_dicts[aid]["contexts"] = contexts
+            context = self._read_context(aid)
+            if context is not None:
+                agent_dicts[aid]["context"] = context
             session_path = f"session/{safe}/session.jsonl"
             agent_states[aid] = tuple(
                 parse_node_obj(line) for line in self.store.read_jsonl(session_path)
@@ -158,30 +158,21 @@ class FileSession(Session):
             agent_nodes=agent_states,
         )
 
-    def _read_contexts(self, agent_id: str) -> dict[str, dict[str, Any]]:
+    def _read_context(self, agent_id: str) -> dict[str, Any] | None:
         safe = _safe_name(agent_id, default="root")
         base = f"context/{safe}"
-        contexts: dict[str, dict[str, Any]] = {}
-        for path in self.store.list(base):
-            if not path.endswith(".txt"):
-                continue
-            stem = Path(path).stem
-            meta_path = (
-                f"{base}/context_metadata.json"
-                if stem == "context"
-                else f"{base}/{stem}_metadata.json"
-            )
-            metadata: dict[str, Any] = {}
-            key = stem
-            if self.store.exists(meta_path):
-                raw_meta = self.store.read_json(meta_path)
-                key = raw_meta.get("key") or key
-                metadata = dict(raw_meta.get("metadata") or {})
-            contexts[key] = ContextPayload(
-                text=self.store.read_text(path),
-                metadata=metadata,
-            ).model_dump(mode="json")
-        return contexts
+        path = f"{base}/context.txt"
+        if not self.store.exists(path):
+            return None
+        metadata: dict[str, Any] = {}
+        meta_path = f"{base}/context_metadata.json"
+        if self.store.exists(meta_path):
+            raw_meta = self.store.read_json(meta_path)
+            metadata = dict(raw_meta.get("metadata") or {})
+        return ContextPayload(
+            text=self.store.read_text(path),
+            metadata=metadata,
+        ).model_dump(mode="json")
 
     def _load_manifest(self) -> dict[str, Any]:
         if self.store.exists("graph.json"):
@@ -306,6 +297,7 @@ class Workspace(BaseWorkspace):
         new_location: str | Path | None = None,
         *,
         new_dir: str | Path | None = None,
+        include_artifacts: bool = False,
     ) -> Workspace:
         location = new_location if new_location is not None else new_dir
         if location is None:
@@ -316,21 +308,22 @@ class Workspace(BaseWorkspace):
             shutil.rmtree(new_root)
         new_root.mkdir(parents=True, exist_ok=True)
 
-        reserved = {
-            "session",
-            "context",
-            "graph.json",
-            "trace",
-            "checkpoint.json",
-        }
-        for item in self.root.iterdir():
-            if item.name in reserved:
-                continue
-            dst = new_root / item.name
-            if item.is_dir():
-                shutil.copytree(item, dst)
-            else:
-                shutil.copy2(item, dst)
+        if include_artifacts:
+            reserved = {
+                "session",
+                "context",
+                "graph.json",
+                "trace",
+                "checkpoint.json",
+            }
+            for item in self.root.iterdir():
+                if item.name in reserved:
+                    continue
+                dst = new_root / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dst)
+                else:
+                    shutil.copy2(item, dst)
 
         forked = type(self)(
             new_root,

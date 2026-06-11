@@ -353,13 +353,16 @@ while not graph.finished:
     graph = agent.step(graph)
 ```
 
-To branch into an isolated workspace with its own session, context, and
-working tree:
+To branch into an isolated workspace with its own session and context:
 
 ```python
 alt = workspace.fork(new_dir="./runs/repair")
 alt_agent = RecursiveFlow(llm_client=..., workspace=alt, ...)
 ```
+
+Forks copy only core engine state by default. Pass
+`include_artifacts=True` when the branch should also carry user files such as
+skills, reports, fixtures, or project memory.
 
 See [`examples/basics/showcase.py`](examples/basics/showcase.py) for workspace persistence,
 session reads, time travel through `list[Graph]`, and gym-style stepping in one

@@ -73,8 +73,8 @@ def test_workspace_from_graph_creates_synced_workspace(tmp_path):
     assert workspace.root == (tmp_path / "variant").resolve()
     assert synced.agent_id == "root"
     assert list(synced.agents) == ["root"]
-    assert synced.context() == "portable context"
-    assert synced.contexts["context"].metadata == {"source": "test"}
+    assert synced.context.text == "portable context"
+    assert synced.context.metadata == {"source": "test"}
     assert workspace.context.read("context", agent_id="root") == "portable context"
     assert workspace.context.info("context", agent_id="root")["chars"] == len(
         "portable context"
@@ -86,13 +86,11 @@ def test_graph_context_round_trips_through_json(tmp_path):
         "portable context",
         metadata={"source": "test"},
     )
-    graph.set_context("extra payload", key="spec")
 
     loaded = Graph.load(graph.save(tmp_path / "graph.json"))
 
-    assert loaded.context() == "portable context"
-    assert loaded.context("spec") == "extra payload"
-    assert loaded.contexts["context"].metadata == {"source": "test"}
+    assert loaded.context.text == "portable context"
+    assert loaded.context.metadata == {"source": "test"}
 
 
 def test_workspace_from_graph_replaces_existing_engine_state(tmp_path):
@@ -122,7 +120,7 @@ def test_fresh_workspace_gets_graph_context_when_syncing_edited_graph(tmp_path):
     synced = variant.sync_graph_if_changed(edited)
 
     assert [node.type for node in synced.nodes] == [node.type for node in edited.nodes]
-    assert synced.context() == "root payload"
+    assert synced.context.text == "root payload"
     assert variant.context.read("context", agent_id="root") == "root payload"
     assert variant.context.info("context", agent_id="root")["chars"] == len(
         "root payload"
@@ -160,6 +158,21 @@ def test_in_memory_workspace_from_graph_needs_no_path():
     assert workspace.load_graph().agent_id == "root"
     assert synced.agent_id == "root"
     assert workspace.context.read("context", agent_id="root") == ""
+
+
+def test_in_memory_workspace_fork_artifacts_are_opt_in():
+    workspace = InMemoryWorkspace.create()
+    workspace.artifacts.write_text("skills/review/SKILL.md", "review carefully")
+    workspace.context.write("context", "ctx")
+
+    core_only = workspace.fork()
+    with_artifacts = workspace.fork(include_artifacts=True)
+
+    assert not core_only.artifacts.exists("skills/review/SKILL.md")
+    assert core_only.context.read("context") == "ctx"
+    assert with_artifacts.artifacts.read_text("skills/review/SKILL.md") == (
+        "review carefully"
+    )
 
 
 def test_recursive_flow_attach_workspace_binds_in_place(tmp_path):
@@ -228,12 +241,23 @@ def test_workspace_artifacts_hide_and_protect_engine_state(tmp_path):
             workspace.artifacts.write_text(path, "nope")
 
 
-def test_workspace_fork_copies_artifacts_without_engine_state_collision(tmp_path):
+def test_workspace_fork_defaults_to_core_state_only(tmp_path):
     workspace = Workspace.create(tmp_path / "workspace")
     workspace.artifacts.write_text("openclaw/soul.md", "original")
     workspace.context.write("context", "ctx")
 
     forked = workspace.fork(tmp_path / "forked")
+
+    assert not forked.artifacts.exists("openclaw/soul.md")
+    assert forked.context.read("context") == "ctx"
+
+
+def test_workspace_fork_can_include_artifacts(tmp_path):
+    workspace = Workspace.create(tmp_path / "workspace")
+    workspace.artifacts.write_text("openclaw/soul.md", "original")
+    workspace.context.write("context", "ctx")
+
+    forked = workspace.fork(tmp_path / "forked", include_artifacts=True)
     forked.artifacts.write_text("openclaw/soul.md", "fork")
 
     assert workspace.artifacts.read_text("openclaw/soul.md") == "original"

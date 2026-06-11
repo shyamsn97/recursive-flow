@@ -1968,8 +1968,8 @@ def test_delegate_passes_child_context_payload(tmp_path):
     )
     g = _run(agent, agent.start("parent", context="root payload"))
     assert g.result() == "child payload"
-    assert g.context() == "root payload"
-    assert g["root.child"].context() == "child payload"
+    assert g.context.text == "root payload"
+    assert g["root.child"].context.text == "child payload"
     assert workspace.context.read("context", agent_id="root.child") == "child payload"
 
 
@@ -2001,8 +2001,8 @@ def test_redelegating_finished_child_creates_new_attempt(tmp_path):
     assert "root.child" in g.agents
     assert "root.child_1" in g.agents
     assert list(g.children) == ["root.child", "root.child_1"]
-    assert g["root.child"].context() == "first"
-    assert g["root.child_1"].context() == "second"
+    assert g["root.child"].context.text == "first"
+    assert g["root.child_1"].context.text == "second"
     assert workspace.context.read("context", agent_id="root.child") == "first"
     assert workspace.context.read("context", agent_id="root.child_1") == "second"
 
@@ -2045,10 +2045,10 @@ def test_workspace_round_trips_states_and_context(tmp_path):
     g = _run(agent, agent.start("p", context="hello"))
 
     assert g.result() == "ok"
-    assert g.context() == "hello"
+    assert g.context.text == "hello"
     assert ws.context.read("context") == "hello"
     reloaded = ws.session.load_graph()
-    assert reloaded.context() == "hello"
+    assert reloaded.context.text == "hello"
     assert _types(reloaded) == [
         "user_query",
         "llm_action",
