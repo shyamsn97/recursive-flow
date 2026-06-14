@@ -17,7 +17,7 @@ User-facing topic guides ([control](control.md), [observability](observability.m
 ```
                 ┌────────────────────────────────────────────────┐
                 │                    RecursiveFlow                     │  ← state + every overridable method
-                │  (recursive-flow/flow.py — ~1k lines, one class)       │
+                │  (rflow/flow.py — ~1k lines, one class)                │
                 └──┬───────────────┬───────────────────┬────────┘
    pure helpers ───┼───────────────┼───────────────────┼─────────────────┐
                    ▼               ▼                   ▼                 ▼
@@ -390,10 +390,10 @@ single `ExecAction → ExecOutput`.
 
 ### Implementation
 
-- `recursive-flow/runtime/repl.py::_has_top_level_await(tree)` — AST walk that
+- `rflow/runtime/repl.py::_has_top_level_await(tree)` — AST walk that
   skips `FunctionDef` / `AsyncFunctionDef` / `Lambda` / `ClassDef` /
   comprehension bodies.
-- `recursive-flow/runtime/repl.py::REPL.start()` / `REPL.advance()` — compile
+- `rflow/runtime/repl.py::REPL.start()` / `REPL.advance()` — compile
   with top-level-await, then `coro.send(...)` until the coroutine
   suspends on a `WaitRequest` (return suspended) or raises
   `StopIteration` (done).
@@ -721,7 +721,7 @@ workspace/
   `agent.json`. Called on agent creation only.
 - `session.write_transcript(agent_id, transcript)` — update the agent's
   flat LLM chat history. Called from `RecursiveFlow.transcript_recorder.record_turn()`
-  (a `TranscriptRecorder` living in `recursive-flow/engine/transcript.py`)
+  (a `TranscriptRecorder` living in `rflow/engine/transcript.py`)
   inside `reply_to()`, and from `record_terminal()` when an agent
   finishes via `done(...)`. **Append-only**: each call adds just the
   new messages since the last call, never rewrites the prefix.
@@ -885,7 +885,7 @@ class Pool(ABC):
     def execute(self, tasks: list[tuple[str, Callable[[], Any]]]) -> dict[str, Any]: ...
 ```
 
-Three shipped pools (`recursive-flow/utils/pool.py`):
+Three shipped pools (`rflow/utils/pool.py`):
 
 - `ThreadPool(max_workers)` — `concurrent.futures.ThreadPoolExecutor`.
   Used by default when `FlowConfig.max_concurrency >= 2`.

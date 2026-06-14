@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from rflow.graph import Graph, Node, is_llm_action
-from rflow.graph.node_state import inherit_node_state
+from rflow.graph.node_state import inherit_node_state, next_global_step_for_position
 from rflow.prompts.messages import EXECUTION_OUTPUT
 from rflow.utils.pool import CallablePool, Pool, SequentialPool, ThreadPool
 from rflow.workspace import Session
@@ -26,6 +26,7 @@ def prepare_node_for_append(
     graph: Graph,
     node: Node,
     *,
+    global_step: int | None = None,
     inherit_output_schema: bool = True,
 ) -> Node:
     """Stamp ``node`` for the next position in ``graph`` without persisting it.
@@ -37,8 +38,25 @@ def prepare_node_for_append(
 
     previous = graph.nodes[-1] if graph.nodes else None
     next_seq = (previous.seq + 1) if previous else 0
-    payload = node.model_dump(exclude={"id", "agent_id", "seq"}, mode="python")
-    prepared = node.__class__(agent_id=graph.agent_id, seq=next_seq, **payload)
+    next_step = (
+        global_step
+        if global_step is not None
+        else next_global_step_for_position(
+            source=previous,
+            replacement=node,
+            next_global_step=graph.next_global_step(),
+        )
+    )
+    payload = node.model_dump(
+        exclude={"id", "agent_id", "seq", "global_step"},
+        mode="python",
+    )
+    prepared = node.__class__(
+        agent_id=graph.agent_id,
+        seq=next_seq,
+        global_step=next_step,
+        **payload,
+    )
     prepared = inherit_node_state(
         source=previous,
         replacement=prepared,
@@ -49,7 +67,13 @@ def prepare_node_for_append(
     return prepared
 
 
-def append_node(session: Session, graph: Graph, node: Node) -> Node:
+def append_node(
+    session: Session,
+    graph: Graph,
+    node: Node,
+    *,
+    global_step: int | None = None,
+) -> Node:
     """Prepare, persist, and mirror ``node`` onto ``graph.nodes``.
 
     This is the normal transition helper after an agent has already been written
@@ -65,7 +89,22 @@ def append_node(session: Session, graph: Graph, node: Node) -> Node:
     needing to reload from the session between calls.
     """
 
-    prepared = prepare_node_for_append(graph, node)
+    previous = graph.nodes[-1] if graph.nodes else None
+    planned_global_step = (
+        global_step
+        if global_step is not None
+        else next_global_step_for_position(
+            source=previous,
+            replacement=node,
+            next_global_step=session.load_graph().next_global_step(),
+        )
+    )
+    paired_global_step = next_global_step_for_position(
+        source=previous,
+        replacement=node,
+        next_global_step=planned_global_step,
+    )
+    prepared = prepare_node_for_append(graph, node, global_step=paired_global_step)
     session.write_state(prepared)
     graph.nodes.append(prepared)
     return prepared

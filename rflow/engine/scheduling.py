@@ -8,6 +8,7 @@ state, public override methods, sessions, runtimes, and pools.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import Any
 
 from rflow.engine.actions import act
@@ -67,6 +68,10 @@ def _sync_and_plan_step(
     )
     if not plan:
         return engine, graph, []
+    global_step = graph.next_global_step()
+    plan = {
+        aid: replace(action, global_step=global_step) for aid, action in plan.items()
+    }
     prefix = f"{task_prefix}:" if task_prefix else ""
     tasks = [
         (f"{prefix}{aid}", lambda action=action: engine.apply_one(action))
@@ -175,10 +180,12 @@ def refill_eager_children(
             runnable=runnable,
             terminate_requested=engine.terminate_requested,
         )
+        global_step = graph.next_global_step()
         for aid, action in plan.items():
             if aid in scheduled:
                 continue
             scheduled.add(aid)
+            action = replace(action, global_step=global_step)
             tasks.append((aid, lambda action=action: engine.apply_one(action)))
 
     return tasks

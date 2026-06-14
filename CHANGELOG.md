@@ -8,6 +8,8 @@ each one is called out under **Breaking** below.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-12
+
 ### Added
 
 - **Single delegation surface: `launch_subagents`.** Agents now delegate
@@ -133,7 +135,7 @@ each one is called out under **Breaking** below.
 - **LLM clients retry transient failures via `tenacity`.** The
   `chat` and `stream` methods on `OpenAIClient` and
   `AnthropicClient` retry on transient HTTP / protocol errors. The
-  module-level `_`-prefixed helpers and constants in `recursive-flow/llm.py`
+  module-level `_`-prefixed helpers and constants in `rflow/llm.py`
   are now public.
 - **Workspace step retracing.** `Workspace.load_steps()` returns the
   full history as a list of progressive `Graph` snapshots. The
@@ -339,7 +341,8 @@ Initial release.
 - Optional extras: `[openai]`, `[anthropic]`, `[viewer]`, `[all]`,
   `[dev]`.
 
-[Unreleased]: https://github.com/shyamsn97/recursive-flow/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/shyamsn97/recursive-flow/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/shyamsn97/recursive-flow/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/shyamsn97/recursive-flow/compare/v0.2.1...v0.3.2
 [0.2.1]: https://github.com/shyamsn97/recursive-flow/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shyamsn97/recursive-flow/compare/v0.1.3...v0.2.0

@@ -276,9 +276,7 @@ def test_render_html_no_normalize_labels_keeps_top_positions(
 
 
 @pytest.mark.skipif(not PLOTLY_INSTALLED, reason="plotly not installed")
-def test_render_html_marker_mult_propagates(
-    tmp_path: Path, run_graphs: list[Graph]
-):
+def test_render_html_marker_mult_propagates(tmp_path: Path, run_graphs: list[Graph]):
     workspace = _write_workspace(tmp_path / "workspace", run_graphs[-1])
     out_default = tmp_path / "default.html"
     out_big = tmp_path / "big.html"
@@ -321,6 +319,15 @@ def test_render_steps_requires_out(tmp_path: Path, run_graphs: list[Graph]):
         main(["render", str(workspace), "-f", "steps"])
 
 
+def test_render_branch_id_requires_matching_branch(
+    tmp_path: Path, run_graphs: list[Graph]
+):
+    workspace = _write_workspace(tmp_path / "workspace", run_graphs[-1])
+
+    with pytest.raises(SystemExit, match="branch id 'missing'"):
+        main(["render", str(workspace), "-f", "tree", "--branch-id", "missing"])
+
+
 def test_render_image_writes_png(tmp_path: Path, run_graphs: list[Graph]):
     pytest.importorskip("kaleido")
     workspace = _write_workspace(tmp_path / "workspace", run_graphs[-1])
@@ -351,9 +358,7 @@ def test_render_image_writes_png(tmp_path: Path, run_graphs: list[Graph]):
         assert fh.read(4) == b"\x89PNG"
 
 
-def test_render_steps_writes_one_per_state(
-    tmp_path: Path, run_graphs: list[Graph]
-):
+def test_render_steps_writes_one_per_state(tmp_path: Path, run_graphs: list[Graph]):
     pytest.importorskip("kaleido")
     workspace = _write_workspace(tmp_path / "workspace", run_graphs[-1])
     out_dir = tmp_path / "frames"

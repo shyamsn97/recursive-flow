@@ -10,11 +10,16 @@ respected, and concurrent siblings advance in lockstep.
 from __future__ import annotations
 
 from rflow import (
+    DoneOutput,
+    ExecAction,
     Graph,
     LLMClient,
+    LLMAction,
+    LLMOutput,
     LLMUsage,
     FlowConfig,
     RecursiveFlow,
+    UserQuery,
     Workspace,
     retrace_steps,
 )
@@ -70,11 +75,7 @@ class _ParallelChildren(LLMClient):
     def chat(self, messages, *args, **kwargs):
         self.last_usage = LLMUsage(input_tokens=1, output_tokens=1)
         first_user = next(
-            (
-                m.get("content") or ""
-                for m in messages
-                if m.get("role") == "user"
-            ),
+            (m.get("content") or "" for m in messages if m.get("role") == "user"),
             "",
         )
         for tag in ("task a", "task b", "task c"):
@@ -157,9 +158,7 @@ def test_retrace_steps_respects_spawn_dependency(tmp_path):
     for snap in steps:
         child = snap.children.get(child_id)
         if child and child.nodes:
-            sup_present = any(
-                s.type == "supervising_output" for s in snap.nodes
-            )
+            sup_present = any(s.type == "supervising_output" for s in snap.nodes)
             assert sup_present, "child appeared before parent supervised"
             return
     raise AssertionError("no snapshot contained a child state")
@@ -182,9 +181,9 @@ def test_retrace_steps_resume_waits_for_all_children(tmp_path):
                 child = snap.children.get(child_aid)
                 assert child is not None
                 last = child.nodes[-1] if child.nodes else None
-                assert last is not None and last.terminal, (
-                    f"resume emitted before child {child_aid!r} finished"
-                )
+                assert (
+                    last is not None and last.terminal
+                ), f"resume emitted before child {child_aid!r} finished"
 
 
 def test_retrace_steps_advances_concurrent_siblings_in_lockstep(tmp_path):
@@ -210,18 +209,14 @@ def test_retrace_steps_advances_concurrent_siblings_in_lockstep(tmp_path):
         # child states — skip those. We only enforce the lockstep
         # invariant on ticks where children actually advanced.
         if any(delta.values()):
-            alive = [
-                aid for aid in child_ids if prev[aid] < final_counts[aid]
-            ]
+            alive = [aid for aid in child_ids if prev[aid] < final_counts[aid]]
             alive_deltas = {aid: delta[aid] for aid in alive}
             # Every alive sibling advanced the same amount (1 / 4 / 2).
             assert len(set(alive_deltas.values())) == 1, (
-                f"siblings advanced by uneven amounts in one tick: "
-                f"{alive_deltas!r}"
+                f"siblings advanced by uneven amounts in one tick: " f"{alive_deltas!r}"
             )
             assert all(d > 0 for d in alive_deltas.values()), (
-                f"alive sibling stalled while another advanced: "
-                f"{alive_deltas!r}"
+                f"alive sibling stalled while another advanced: " f"{alive_deltas!r}"
             )
             parallel_ticks += 1
         prev = cur
@@ -233,6 +228,98 @@ def test_retrace_steps_singleton_graph_returns_self():
     g = Graph(agent_id="root")
     steps = retrace_steps(g)
     assert steps == [g]
+
+
+def test_engine_stamps_action_observation_pairs_with_same_global_step(tmp_path):
+    _, graph = _final_one_child(tmp_path)
+
+    assert all(node.global_step is not None for node in graph.all_nodes)
+    for agent in graph.walk():
+        for action, observation in zip(agent.nodes, agent.nodes[1:]):
+            if action.type.endswith("_action"):
+                assert observation.global_step == action.global_step
+
+
+def test_spawned_siblings_share_one_global_step(tmp_path):
+    _, graph = _final_parallel(tmp_path)
+
+    child_steps = {child.nodes[0].global_step for child in graph.children.values()}
+
+    assert len(child_steps) == 1
+
+
+def test_retrace_steps_keeps_legacy_dependency_fallback_without_global_steps():
+    graph = Graph(agent_id="root")
+    graph.nodes = [
+        UserQuery(agent_id="root", seq=0, content="kick"),
+        LLMAction(agent_id="root", seq=1, model="x"),
+        LLMOutput(agent_id="root", seq=2, code="done('ok')"),
+        ExecAction(agent_id="root", seq=3, code="done('ok')"),
+        DoneOutput(agent_id="root", seq=4, result="ok"),
+    ]
+
+    steps = retrace_steps(graph)
+
+    assert [node.global_step for node in graph.nodes] == [None] * 5
+    assert [_state_count(step) for step in steps] == [1, 3, 5]
+
+
+def test_retrace_steps_uses_global_step_prefix_for_edited_graphs():
+    graph = Graph(agent_id="root")
+    original_output = LLMOutput(
+        agent_id="root",
+        seq=2,
+        global_step=1,
+        code="done('old')",
+    )
+    graph.nodes = [
+        UserQuery(agent_id="root", seq=0, global_step=0, content="kick"),
+        LLMAction(agent_id="root", seq=1, global_step=1, model="x"),
+        original_output,
+        ExecAction(agent_id="root", seq=3, global_step=2, code="done('old')"),
+        DoneOutput(agent_id="root", seq=4, global_step=2, result="old"),
+    ]
+
+    edited = graph.replace_node(
+        original_output.id,
+        LLMOutput(code="done('new')"),
+        truncate="none",
+    )
+    steps = retrace_steps(edited)
+
+    assert edited.nodes[2].global_step == 3
+    assert not any(
+        any(node.type == "done_output" for node in step.nodes) for step in steps[:-1]
+    )
+    assert steps[-1].nodes[-1].type == "done_output"
+
+
+def test_replace_on_legacy_graph_stamps_only_the_edit():
+    # ``global_step`` is optional and only stamped at node creation. A legacy
+    # graph whose existing nodes were never stamped stays that way; replace
+    # only stamps the node it creates (the timeline falls back to structural
+    # ordering whenever any node is unstamped).
+    graph = Graph(agent_id="root")
+    original_output = LLMOutput(
+        agent_id="root",
+        seq=2,
+        code="done('old')",
+    )
+    graph.nodes = [
+        UserQuery(agent_id="root", seq=0, content="kick"),
+        LLMAction(agent_id="root", seq=1, model="x"),
+        original_output,
+    ]
+
+    edited = graph.replace_node(
+        original_output.id,
+        LLMOutput(code="done('new')"),
+        truncate="descendants",
+        branch_id="edited-route",
+    )
+
+    assert [node.global_step for node in edited.nodes] == [None, None, 0]
+    assert edited.nodes[-1].branch_id == "edited-route"
 
 
 # ── max-concurrency / "realistic parallelism" guarantees ─────────────
@@ -308,8 +395,7 @@ def test_critical_path_equals_longest_child_not_sum(tmp_path):
     summed = sum(ticks_per_child.values())
 
     assert intervening == longest, (
-        f"expected critical path {longest} ticks (longest child); "
-        f"got {intervening}"
+        f"expected critical path {longest} ticks (longest child); " f"got {intervening}"
     )
     assert intervening < summed, (
         "critical path matched the SUM of child tick-counts — "
@@ -422,9 +508,10 @@ def test_mismatched_sibling_lengths_run_in_parallel():
     for i, tick in enumerate(post_sup_ticks):
         agents_in_tick = {aid for aid, _ in tick}
         if i < short_ticks:
-            assert agents_in_tick == {"root.short", "root.long"}, (
-                f"tick {i} should have both children advancing, got {agents_in_tick}"
-            )
+            assert agents_in_tick == {
+                "root.short",
+                "root.long",
+            }, f"tick {i} should have both children advancing, got {agents_in_tick}"
         else:
             assert agents_in_tick == {"root.long"}, (
                 f"tick {i} (post-short-finish) should be long-only, "
@@ -445,9 +532,9 @@ def test_finished_children_drop_out_of_subsequent_ticks(tmp_path):
         for aid, idx in tick:
             if aid not in cumulative:
                 continue
-            assert cumulative[aid] < final_lens[aid], (
-                f"{aid!r} kept appearing after reaching terminal state"
-            )
+            assert (
+                cumulative[aid] < final_lens[aid]
+            ), f"{aid!r} kept appearing after reaching terminal state"
             cumulative[aid] += 1
         # Once an agent has emitted all its states, it shouldn't be
         # in any future tick.

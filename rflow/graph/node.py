@@ -54,6 +54,8 @@ class Node(BaseModel):
     id: str = Field(default_factory=new_id)
     agent_id: str = "root"
     seq: int = 0
+    global_step: int | None = None
+    branch_id: str | None = None
     output_schema: dict[str, Any] | None = None
 
     @property

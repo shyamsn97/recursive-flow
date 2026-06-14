@@ -540,6 +540,7 @@ class RecursiveFlow(LLMClient):
         *,
         force_final: bool,
         model: str | None = None,
+        global_step: int | None = None,
     ) -> None:
         """LLM half of one turn: write ``LLMAction → LLMOutput``.
 
@@ -559,9 +560,16 @@ class RecursiveFlow(LLMClient):
             last,
             force_final=force_final,
             model=model,
+            global_step=global_step,
         )
 
-    def step_exec(self, graph: Graph, llm_output: LLMOutput) -> None:
+    def step_exec(
+        self,
+        graph: Graph,
+        llm_output: LLMOutput,
+        *,
+        global_step: int | None = None,
+    ) -> None:
         """Exec half of one turn: write ``ExecAction → CodeObservation``.
 
         Reads the code from ``llm_output`` (the assistant's reply
@@ -570,7 +578,7 @@ class RecursiveFlow(LLMClient):
         :class:`ExecOutput` / :class:`SupervisingOutput` /
         :class:`ErrorOutput` / :class:`DoneOutput`).
         """
-        return transitions.step_exec(self, graph, llm_output)
+        return transitions.step_exec(self, graph, llm_output, global_step=global_step)
 
     def _run_exec(
         self,
@@ -584,6 +592,8 @@ class RecursiveFlow(LLMClient):
         self,
         graph: Graph,
         last: SupervisingOutput,
+        *,
+        global_step: int | None = None,
     ) -> None:
         """Resume half: write ``ResumeAction → CodeObservation``.
 
@@ -593,7 +603,12 @@ class RecursiveFlow(LLMClient):
         with ``flow_delegate`` in replay mode so it pauses at the same
         await before the regular resume path takes over.
         """
-        return transitions.step_after_supervising(self, graph, last)
+        return transitions.step_after_supervising(
+            self,
+            graph,
+            last,
+            global_step=global_step,
+        )
 
     # ── LLM half-step ────────────────────────────────────────────────
 
@@ -952,7 +967,8 @@ class RecursiveFlow(LLMClient):
         string instead of a handle if the child cannot be created
         (max depth reached, unknown model, …).
         """
-        parent = self.session.load_graph().agents[parent_agent_id]
+        full_graph = self.session.load_graph()
+        parent = full_graph.agents[parent_agent_id]
         if parent.depth >= self.config.max_depth:
             return f"[refused: max depth {self.config.max_depth}] Do this directly."
         if model not in self.llm_clients:
@@ -986,6 +1002,12 @@ class RecursiveFlow(LLMClient):
             parent_node_id=parent_node_id,
         )
         child_graph.set_context(context)
+        parent_current = parent.current()
+        child_global_step = (
+            parent_current.global_step + 1
+            if parent_current is not None and parent_current.global_step is not None
+            else full_graph.next_global_step()
+        )
         initial_query = prepare_node_for_append(
             child_graph,
             UserQuery(
@@ -999,6 +1021,7 @@ class RecursiveFlow(LLMClient):
                     context_info=context_info,
                 ),
             ),
+            global_step=child_global_step,
         )
         child_graph.nodes.append(initial_query)
         child_graph.system_prompt = self.build_system_prompt(child_graph)

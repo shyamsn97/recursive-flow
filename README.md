@@ -730,13 +730,15 @@ scaling / label-normalization flags (`--marker-mult`, `--text-mult`,
 - [x] `LocalRuntime` + `DockerRuntime` — battle-tested
 - [~] `ModalRuntime` / `E2BRuntime` / `DaytonaRuntime` — full support: native SDK file transfer, real-sandbox CI, depth>1 delegation, heavier example
 - [~] Depth × breadth sweep (accuracy vs `max_depth`) on an OOLONG/BABILong subset
-- [~] [RAO](https://apga.github.io/RAO/) (recursive agent optimization) support
+- [ ] [RAO library module](docs/research/rao_implementation_plan.md): `rflow.rao` rollout collection, per-node rewards, leave-one-out advantages, depth weighting, trainer export
+- [ ] [DeLM-style coordination](docs/research/delm_vs_rlmflow.md): shared task queue, verified shared context, multi-worker coordinator over `RecursiveFlow` graphs
 - [ ] OOLONG, LongBench-v2, CodeQA, SWE-bench benchmarks
 
 ## Docs
 
 The top-level docs are short, user-facing guides. The deep dive lives
-in [`docs/internals.md`](docs/internals.md).
+in [`docs/internals.md`](docs/internals.md). Research notes live under
+[`docs/research/`](docs/research/).
 
 - [**Internals**](docs/internals.md): deep reference — engine
   architecture, step lifecycle (`act` → `apply_one`), the REPL `await`

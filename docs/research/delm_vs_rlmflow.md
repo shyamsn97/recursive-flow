@@ -9,7 +9,7 @@ Sources:
 - DeLM repository: <https://github.com/yuzhenmao/DeLM>
 - DeLM paper: <https://arxiv.org/abs/2606.10662>
 - Local `recursive-flow` architecture docs: `README.md`, `docs/internals.md`,
-  `docs/control.md`, and the core implementation under `recursive-flow/`.
+  `docs/control.md`, and the core implementation under `rflow/`.
 
 ## Short Answer
 
@@ -245,7 +245,7 @@ Best for: validating prompts and user experience quickly.
 
 ### Option 2: Add A Reusable Coordinator Library
 
-Add a new module, likely under `recursive-flow/control/` or `recursive-flow/coordination/`,
+Add a new module, likely under `rflow/control/` or `rflow/coordination/`,
 that provides:
 
 - `SharedTaskQueue`
@@ -628,10 +628,10 @@ single Python process.
 
 Likely files:
 
-- `recursive-flow/coordination/__init__.py`
-- `recursive-flow/coordination/models.py`
-- `recursive-flow/coordination/store.py`
-- `recursive-flow/coordination/coordinator.py`
+- `rflow/coordination/__init__.py`
+- `rflow/coordination/models.py`
+- `rflow/coordination/store.py`
+- `rflow/coordination/coordinator.py`
 - `examples/control/shared_context/...`
 
 Features:

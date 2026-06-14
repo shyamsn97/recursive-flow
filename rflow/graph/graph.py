@@ -235,13 +235,59 @@ class Graph:
     def edges(self) -> EdgesView:
         return EdgesView(self)
 
-    def find(self, node_id: str) -> Node | None:
-        """Bare :class:`Node` lookup by id across the whole subtree."""
+    def find(self, node_id: str | Iterable[str]) -> Node | None | list[Node | None]:
+        """Bare :class:`Node` lookup by id across the whole subtree.
+
+        Pass a single id to get a ``Node | None``, or an iterable of ids to
+        get a list of ``Node | None`` aligned to the input order.
+        """
+        if not isinstance(node_id, str):
+            index = {n.id: n for g in self.walk() for n in g.nodes}
+            return [index.get(nid) for nid in node_id]
         for g in self.walk():
             for n in g.nodes:
                 if n.id == node_id:
                     return n
         return None
+
+    def get_node(self, node_id: str) -> Node:
+        """Strict :meth:`find`: the node with ``node_id`` or raise ``KeyError``."""
+        node = self.find(node_id)
+        if node is None:
+            raise KeyError(node_id)
+        return node
+
+    def get_nodes(self, node_ids: Iterable[str]) -> list[Node]:
+        """Strict bulk lookup: nodes for ``node_ids`` or raise ``KeyError``.
+
+        Returns nodes aligned to ``node_ids`` order; raises ``KeyError`` listing
+        any ids that are missing from the subtree.
+        """
+        index = {n.id: n for g in self.walk() for n in g.nodes}
+        ids = list(node_ids)
+        missing = [nid for nid in ids if nid not in index]
+        if missing:
+            raise KeyError(missing)
+        return [index[nid] for nid in ids]
+
+    def filter(
+        self,
+        predicate: Callable[[Node], bool] | None = None,
+        /,
+        **filters: Any,
+    ) -> list[Node]:
+        """Nodes across the subtree matching ``predicate`` and/or ``filters``.
+
+        ``predicate`` is an arbitrary callable; ``filters`` are exact-match
+        attribute checks. Examples::
+
+            graph.filter(lambda n: n.type == "supervising_output")
+            graph.filter(type="supervising_output")
+            graph.filter(lambda n: n.seq > 2, agent_id="root")
+
+        Thin wrapper over ``graph.all_nodes.where(...)``.
+        """
+        return self.all_nodes.where(predicate, **filters)
 
     # ── sub-rooting ──────────────────────────────────────────────────
 
@@ -291,6 +337,25 @@ class Graph:
     def total_tokens(self) -> int:
         i, o = self.tokens()
         return i + o
+
+    # ── logical ordering ─────────────────────────────────────────────
+
+    def max_global_step(self) -> int | None:
+        """Largest ``Node.global_step`` recorded anywhere in this subtree."""
+
+        steps = [
+            node.global_step
+            for graph in self.walk()
+            for node in graph.nodes
+            if node.global_step is not None
+        ]
+        return max(steps) if steps else None
+
+    def next_global_step(self) -> int:
+        """Next logical visualization step for new nodes in this subtree."""
+
+        current = self.max_global_step()
+        return 0 if current is None else current + 1
 
     # ── context payloads ─────────────────────────────────────────────
 
@@ -421,14 +486,17 @@ class Graph:
 
     def replace_node(
         self,
-        node_id: str,
+        target: str | Node,
         node: Node,
         *,
         truncate: str = "descendants",
+        branch_id: str | None = None,
         output_schema: dict[str, Any] | None = None,
         inherit_output_schema: bool = True,
     ) -> Graph:
-        """Return a copy with ``node_id`` replaced by ``node``.
+        """Return a copy with ``target`` replaced by ``node``.
+
+        ``target`` may be a node id or a :class:`Node` (its ``id`` is used).
 
         ``truncate`` defaults to ``"descendants"``. Valid values are:
         - ``"none"``: replace only the node;
@@ -442,9 +510,10 @@ class Graph:
 
         return replace_node(
             self,
-            node_id,
+            target,
             node,
             truncate=truncate,
+            branch_id=branch_id,
             output_schema=output_schema,
             inherit_output_schema=inherit_output_schema,
         )
@@ -455,6 +524,7 @@ class Graph:
         node: ActionNode,
         *,
         truncate: str = "descendants",
+        branch_id: str | None = None,
         output_schema: dict[str, Any] | None = None,
         inherit_output_schema: bool = True,
     ) -> Graph:
@@ -467,6 +537,7 @@ class Graph:
             agent_id,
             node,
             truncate=truncate,
+            branch_id=branch_id,
             output_schema=output_schema,
             inherit_output_schema=inherit_output_schema,
         )
@@ -477,6 +548,7 @@ class Graph:
         node: ObservationNode,
         *,
         truncate: str = "descendants",
+        branch_id: str | None = None,
         output_schema: dict[str, Any] | None = None,
         inherit_output_schema: bool = True,
     ) -> Graph:
@@ -489,6 +561,7 @@ class Graph:
             agent_id,
             node,
             truncate=truncate,
+            branch_id=branch_id,
             output_schema=output_schema,
             inherit_output_schema=inherit_output_schema,
         )
@@ -543,6 +616,7 @@ class Graph:
         target: str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]],
         node: Node,
         mode: str = "append",
+        branch_id: str | None = None,
         output_schema: dict[str, Any] | None = None,
         inherit_output_schema: bool = True,
     ) -> Graph:
@@ -559,6 +633,7 @@ class Graph:
             target=target,
             node=node,
             mode=mode,
+            branch_id=branch_id,
             output_schema=output_schema,
             inherit_output_schema=inherit_output_schema,
         )
@@ -569,6 +644,7 @@ class Graph:
         target: str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]],
         output: str,
         content: str | None = None,
+        branch_id: str | None = None,
     ) -> Graph:
         from rflow.graph.injection import inject_output
 
@@ -577,6 +653,7 @@ class Graph:
             target=target,
             output=output,
             content=content,
+            branch_id=branch_id,
         )
 
     def _resolve_injection_targets(

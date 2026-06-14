@@ -16,6 +16,7 @@ def inject(
     target: str | re.Pattern[str] | Callable[[Any], Iterable[str | Any]],
     node: Node,
     mode: str = "append",
+    branch_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
     inherit_output_schema: bool = True,
 ) -> Any:
@@ -27,11 +28,14 @@ def inject(
     targets = resolve_injection_targets(out, target)
     if not targets:
         raise KeyError(f"no injection targets matched {target!r}")
+    global_step = out.next_global_step()
     for sub in targets:
         cur = sub.current()
         fixed = node_for_injection(
             sub,
             node,
+            global_step=global_step,
+            branch_id=branch_id,
             output_schema=output_schema,
             inherit_output_schema=inherit_output_schema,
         )
@@ -51,11 +55,13 @@ def inject_output(
     target: str | re.Pattern[str] | Callable[[Any], Iterable[str | Any]],
     output: str,
     content: str | None = None,
+    branch_id: str | None = None,
 ) -> Any:
     return inject(
         graph,
         target=target,
         node=ExecOutput(output=output, content=content or output),
+        branch_id=branch_id,
     )
 
 
@@ -85,12 +91,16 @@ def node_for_injection(
     sub: Any,
     node: Node,
     *,
+    global_step: int | None = None,
+    branch_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
     inherit_output_schema: bool = True,
 ) -> Node:
     return _node_for_injection(
         sub,
         node,
+        global_step=global_step,
+        branch_id=branch_id,
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,
     )
@@ -100,6 +110,8 @@ def _node_for_injection(
     sub: Any,
     node: Node,
     *,
+    global_step: int | None,
+    branch_id: str | None,
     output_schema: dict[str, Any] | None,
     inherit_output_schema: bool,
 ) -> Node:
@@ -110,6 +122,8 @@ def _node_for_injection(
         replacement=node,
         agent_id=sub.agent_id,
         seq=next_seq,
+        global_step=global_step if global_step is not None else sub.next_global_step(),
+        branch_id=branch_id,
         graph_output_schema=getattr(sub, "output_schema", None),
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,

@@ -75,21 +75,58 @@ def retrace_steps(graph: Graph) -> list[Graph]:
     ``(action, observation)`` pair) per ready agent. The final
     snapshot equals ``graph``.
     """
-    ticks = _execution_ticks(graph)
+    ticks = (
+        _global_step_ticks(graph)
+        if _all_nodes_have_global_steps(graph)
+        else _execution_ticks(graph)
+    )
+    return _snapshots_from_ticks(graph, ticks)
+
+
+def _snapshots_from_ticks(
+    graph: Graph, ticks: list[list[tuple[str, int]]]
+) -> list[Graph]:
     if not ticks:
         return [graph]
 
     snapshots: list[Graph] = []
     counts: dict[str, int] = dict.fromkeys(graph.agents, 0)
     for tick in ticks:
-        for aid, _ in tick:
-            counts[aid] += 1
+        for aid, index in tick:
+            counts[aid] = max(counts.get(aid, 0), index + 1)
         snap = graph.copy(deep=True)
         for sub in snap.walk():
             keep = counts.get(sub.agent_id, 0)
             del sub.nodes[keep:]
         snapshots.append(snap)
     return snapshots
+
+
+def _all_nodes_have_global_steps(graph: Graph) -> bool:
+    nodes = list(graph.all_nodes)
+    return bool(nodes) and all(node.global_step is not None for node in nodes)
+
+
+def _global_step_ticks(graph: Graph) -> list[list[tuple[str, int]]]:
+    steps = sorted(
+        {node.global_step for node in graph.all_nodes if node.global_step is not None}
+    )
+    counts: dict[str, int] = dict.fromkeys(graph.agents, 0)
+    ticks: list[list[tuple[str, int]]] = []
+    for cutoff in steps:
+        tick: list[tuple[str, int]] = []
+        for sub in graph.walk():
+            keep = counts.get(sub.agent_id, 0)
+            while keep < len(sub.nodes):
+                step = sub.nodes[keep].global_step
+                if step is None or step > cutoff:
+                    break
+                tick.append((sub.agent_id, keep))
+                keep += 1
+            counts[sub.agent_id] = keep
+        if tick:
+            ticks.append(tick)
+    return ticks
 
 
 def _execution_ticks(graph: Graph) -> list[list[tuple[str, int]]]:
@@ -162,12 +199,30 @@ def _execution_ticks(graph: Graph) -> list[list[tuple[str, int]]]:
         # final tick for this agent.
         return max(1, n - i)
 
+    def crosses_branch(aid: str) -> bool:
+        """Whether this agent's next advance steps onto an edited node.
+
+        A ``branch_id`` tags the node a fork/inject edit introduced. The edit
+        happened after the baseline finished, so we hold edited nodes back
+        until the baseline run has nothing left to advance — that way a forked
+        run shows its untouched siblings already complete before the edit (and
+        its consequences) play forward.
+        """
+        i = pos[aid]
+        return any(
+            states[aid][j].branch_id is not None
+            for j in range(i, min(i + step_count(aid), len(states[aid])))
+        )
+
     while True:
         ready = sorted(aid for aid in pos if is_ready(aid))
         if not ready:
             break
+        # Defer edited (branch-tagged) advances while baseline work remains.
+        baseline = [aid for aid in ready if not crosses_branch(aid)]
+        advancing = baseline or ready
         tick: list[tuple[str, int]] = []
-        for aid in ready:
+        for aid in advancing:
             count = step_count(aid)
             for _ in range(count):
                 tick.append((aid, pos[aid]))

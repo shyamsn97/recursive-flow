@@ -39,3 +39,11 @@ Pick the doc that matches what you're trying to do.
   resume semantics, cold-start replay, persistence, and the full
   `RecursiveFlow` override surface. **Start here if you want to subclass
   the engine.**
+
+## Research Notes
+
+- [RAO implementation plan](research/rao_implementation_plan.md) — how to
+  implement Recursive Agent Optimization as a first-class `rflow.rao` module
+  over `RecursiveFlow` rollouts.
+- [DeLM vs. RecursiveFlow](research/delm_vs_rlmflow.md) — how DeLM-style
+  coordination could sit on top of recursive execution graphs.

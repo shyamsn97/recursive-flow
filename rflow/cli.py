@@ -64,6 +64,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         to_mermaid_flowchart,
         to_mermaid_sequence,
     )
+    from rflow.utils.viewer import slice_graphs_at_branch
     from rflow.utils.viz import (
         ascii_boxes,
         code_log,
@@ -74,6 +75,11 @@ def cmd_render(args: argparse.Namespace) -> int:
     )
 
     graphs = _load(Path(args.path))
+    if args.branch_id:
+        try:
+            graphs = slice_graphs_at_branch(graphs, args.branch_id)
+        except ValueError as exc:
+            raise SystemExit(f"recursive-flow: {exc}") from None
     topo = graphs[-1]
 
     fmt = args.format
@@ -306,6 +312,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--image-format",
         default="png",
         help="image suffix for --format steps (default: png)",
+    )
+    r.add_argument(
+        "--branch-id",
+        default=None,
+        help="start timeline renders at the first snapshot containing this node id",
     )
     r.set_defaults(func=cmd_render)
 

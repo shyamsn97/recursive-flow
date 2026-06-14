@@ -28,8 +28,6 @@ from pydantic import BaseModel
 
 import rflow
 
-DIRECTION_CHILDREN = {"root.rows", "root.cols", "root.diagonals"}
-
 
 class WordHit(BaseModel):
     """One found word and its inclusive coordinates."""
@@ -87,20 +85,6 @@ def default_source() -> Path:
         / "word-search-workspace"
         / "word-search-baseline"
     )
-
-
-def find_supervising(
-    graph: rflow.Graph,
-    agent_id: str,
-    *,
-    waiting_on: set[str] | None = None,
-) -> rflow.SupervisingOutput:
-    for node in reversed(graph[agent_id].nodes):
-        if isinstance(node, rflow.SupervisingOutput) and (
-            waiting_on is None or set(node.waiting_on) == waiting_on
-        ):
-            return node
-    raise ValueError(f"could not find matching supervising node for {agent_id!r}")
 
 
 def summarize(label: str, graph: rflow.Graph) -> None:
@@ -169,24 +153,26 @@ def main() -> None:
     summarize("Loaded real word-search run", graph)
 
     cols_graph = graph.replace_node(
-        find_supervising(graph, "root.cols").id,
+        graph.filter(lambda n: n.agent_id == "root.cols" and n.type == "supervising_output")[-1],
         rflow.ExecOutput(
             output=COLS_FUNCTION_PROMPT,
             content=f"REPL output for previous block:\n{COLS_FUNCTION_PROMPT}",
         ),
         truncate="descendants",
+        branch_id="cols-direct",
     )
     cols_workspace = source_workspace.fork(
         source_workspace.root.parent / "word-search-cols-direct",
     )
 
     root_graph = graph.replace_node(
-        find_supervising(graph, "root", waiting_on=DIRECTION_CHILDREN).id,
+        graph.filter(lambda n: n.agent_id == "root" and n.type == "supervising_output")[-1],
         rflow.ExecOutput(
             output=ROOT_DIRECT_SCAN_PROMPT,
             content=f"REPL output for previous block:\n{ROOT_DIRECT_SCAN_PROMPT}",
         ),
         truncate="descendants",
+        branch_id="direct-scan",
     )
     root_workspace = source_workspace.fork(
         source_workspace.root.parent / "word-search-direct-scan",

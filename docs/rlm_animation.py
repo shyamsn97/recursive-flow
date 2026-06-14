@@ -28,16 +28,18 @@ from manim import (
     UP,
     Circle,
     Create,
-    DashedLine,
     FadeIn,
     FadeOut,
     Flash,
-    GrowFromCenter,
+    LaggedStart,
     Line,
     RegularPolygon,
+    ReplacementTransform,
     RoundedRectangle,
     Scene,
+    Star,
     Text,
+    TransformFromCopy,
     VGroup,
 )
 
@@ -45,11 +47,14 @@ BG = "#0B0F14"
 WHITE_C = "#E6EDF3"
 DIM = "#6E7681"
 
-Q_C = "#F4B860"    # query
-A_C = "#5BC0EB"    # action / child call
-S_C = "#A685E2"    # supervising / wait / resume
-R_C = "#7BD389"    # result
-HOT = "#FFD60A"    # focus only
+Q_C = "#58A6FF"  # query
+LLM_C = "#BC8CFF"
+EXEC_C = "#FF9E64"
+S_C = "#FFD33D"  # supervising
+RESUME_C = "#56D4DD"
+R_C = "#56D364"  # done
+HOT = "#FFD60A"  # focus only
+LABEL_C = "#3FB950"
 
 FS_HEADER = 24
 FS_BODY = 14
@@ -62,24 +67,35 @@ CODE_FONT = "Menlo"
 
 def typed_node(kind, label="", *, r=0.30, fs=FS_BODY):
     """Small typed graph node."""
-    if kind == "Q":
+    if kind in {"Q", "query"}:
         shape = Circle(radius=r, color=Q_C, fill_opacity=0.18, stroke_width=2)
-    elif kind == "A":
+    elif kind in {"L", "llm"}:
+        shape = RegularPolygon(n=4, color=LLM_C, fill_opacity=0.18, stroke_width=2)
+        shape.rotate(0.7853981633974483).scale(r)
+    elif kind in {"E", "exec"}:
         shape = RoundedRectangle(
-            corner_radius=0.10,
-            width=r * 2.1,
-            height=r * 1.55,
-            color=A_C,
+            corner_radius=0.015,
+            width=r * 1.72,
+            height=r * 1.72,
+            color=EXEC_C,
             fill_opacity=0.18,
             stroke_width=2,
         )
-    elif kind == "S":
-        shape = RegularPolygon(n=4, color=S_C, fill_opacity=0.18, stroke_width=2)
-        shape.rotate(0.7853981633974483).scale(r)
-    elif kind == "R":
-        outer = Circle(radius=r, color=R_C, fill_opacity=0.0, stroke_width=2)
-        inner = Circle(radius=r * 0.72, color=R_C, fill_opacity=0.20, stroke_width=2)
-        shape = VGroup(outer, inner)
+    elif kind in {"S", "supervising"}:
+        shape = Star(
+            n=5,
+            outer_radius=r,
+            inner_radius=r * 0.45,
+            color=S_C,
+            fill_opacity=0.22,
+            stroke_width=2,
+        )
+    elif kind in {"T", "resume"}:
+        shape = RegularPolygon(n=3, color=RESUME_C, fill_opacity=0.20, stroke_width=2)
+        shape.rotate(-1.5707963267948966).scale(r)
+    elif kind in {"R", "done"}:
+        shape = RegularPolygon(n=6, color=R_C, fill_opacity=0.22, stroke_width=2)
+        shape.scale(r)
     else:
         shape = Circle(radius=r, color=DIM, stroke_width=1)
 
@@ -95,33 +111,488 @@ def typed_node(kind, label="", *, r=0.30, fs=FS_BODY):
 
 def tiny_graph(specs, *, root_pos, scale=1.0):
     """Small static graph snapshot for the 'evolves every step' phase."""
-    nodes = []
-    for label, kind, _children in specs:
-        nodes.append(typed_node(kind, label, r=0.18 * scale, fs=max(int(7 * scale), 7)))
+    nodes = [typed_node(kind, "", r=0.15 * scale) for _label, kind, _children in specs]
+    x_by_index: dict[int, float] = {}
+    leaf_cursor = 0
+    leaf_spacing = 0.62 * scale
+    level_gap = 0.56 * scale
 
-    def layout(idx, pos, depth):
-        nodes[idx].move_to(pos)
+    def assign_x(idx):
+        nonlocal leaf_cursor
         children = specs[idx][2]
         if not children:
-            return
-        spread = 0.92 * scale / max(depth, 1)
-        start = pos[0] - spread * (len(children) - 1) / 2
-        for j, child_idx in enumerate(children):
-            child_pos = pos + DOWN * 0.62 * scale + RIGHT * (start - pos[0] + spread * j)
-            layout(child_idx, child_pos, depth + 1)
+            x_by_index[idx] = leaf_cursor * leaf_spacing
+            leaf_cursor += 1
+            return x_by_index[idx]
+        child_xs = [assign_x(child_idx) for child_idx in children]
+        x_by_index[idx] = sum(child_xs) / len(child_xs)
+        return x_by_index[idx]
 
-    layout(0, root_pos, 1)
+    assign_x(0)
+    center_x = x_by_index[0]
+
+    def layout(idx, depth):
+        x = x_by_index[idx] - center_x
+        nodes[idx].move_to(root_pos + RIGHT * x + DOWN * (depth * level_gap))
+        for child_idx in specs[idx][2]:
+            layout(child_idx, depth + 1)
+
+    layout(0, 0)
 
     edges = VGroup()
     for idx, (_label, _kind, children) in enumerate(specs):
         for child_idx in children:
-            edges.add(Line(
-                nodes[idx].get_bottom(),
-                nodes[child_idx].get_top(),
+            edges.add(
+                Line(
+                    nodes[idx].get_bottom(),
+                    nodes[child_idx].get_top(),
+                    color=DIM,
+                    stroke_width=1.1,
+                ).set_opacity(0.75)
+            )
+    return VGroup(edges, *nodes)
+
+
+def _pill(label, color):
+    box = RoundedRectangle(
+        corner_radius=0.12,
+        width=1.42,
+        height=0.42,
+        color=color,
+        stroke_width=1.3,
+        fill_opacity=0.08,
+    )
+    text = Text(label, font=CODE_FONT, font_size=FS_CAP, color=color)
+    return VGroup(box, text)
+
+
+def code_card(lines, *, width=4.35, height=1.82, font_size=7, header_size=FS_TINY):
+    box = RoundedRectangle(
+        corner_radius=0.12,
+        width=width,
+        height=height,
+        color=DIM,
+        stroke_width=1.0,
+        fill_opacity=0.10,
+    )
+    header = Text("python", font=CODE_FONT, font_size=header_size, color=DIM)
+    header.next_to(box.get_top(), DOWN, buff=0.14).align_to(
+        box.get_left() + RIGHT * 0.20, LEFT
+    )
+    rendered_lines = VGroup(
+        *[
+            Text(line, font=CODE_FONT, font_size=font_size, color=color)
+            for line, color in lines
+        ]
+    ).arrange(DOWN, aligned_edge=LEFT, buff=0.09)
+    rendered_lines.next_to(header, DOWN, buff=0.14).align_to(
+        box.get_left() + RIGHT * 0.20, LEFT
+    )
+    max_w = width - 0.35
+    if rendered_lines.width > max_w:
+        rendered_lines.set_width(max_w)
+        rendered_lines.next_to(header, DOWN, buff=0.14).align_to(
+            box.get_left() + RIGHT * 0.20, LEFT
+        )
+    return VGroup(box, header, rendered_lines)
+
+
+def restore_typed_node_fills(graph):
+    """Re-apply translucent fills after animations that flatten node styling."""
+    for mob in graph.get_family():
+        mob.set_opacity(1)
+        if isinstance(mob, Star):
+            mob.set_fill(color=S_C, opacity=0.22)
+            mob.set_stroke(opacity=1)
+        elif isinstance(mob, RoundedRectangle):
+            mob.set_fill(opacity=0.18)
+            mob.set_stroke(opacity=1)
+        elif isinstance(mob, Circle):
+            mob.set_fill(opacity=0.18)
+            mob.set_stroke(opacity=1)
+        elif isinstance(mob, RegularPolygon):
+            mob.set_fill(opacity=0.20)
+            mob.set_stroke(opacity=1)
+        elif isinstance(mob, Line):
+            mob.set_stroke(opacity=0.62)
+
+
+def agent_stack(label, kinds, *, x, top_y, r=0.10, dy=0.30, fs=FS_TINY):
+    """Renderer-style vertical stack for one agent trajectory."""
+
+    if label:
+        label_mob = Text(label, font=CODE_FONT, font_size=fs, color=LABEL_C)
+        label_mob.move_to(RIGHT * x + UP * (top_y + 0.24))
+    else:
+        label_mob = VGroup()
+    nodes = [
+        typed_node(kind, "", r=r).move_to(RIGHT * x + UP * (top_y - dy * index))
+        for index, kind in enumerate(kinds)
+    ]
+    edges = VGroup(
+        *[
+            Line(
+                nodes[index].get_bottom(),
+                nodes[index + 1].get_top(),
+                color=DIM,
+                stroke_width=0.65,
+            ).set_opacity(0.62)
+            for index in range(len(nodes) - 1)
+        ]
+    )
+    return VGroup(edges, *nodes, label_mob), nodes, edges, label_mob
+
+
+def stack_ticks(nodes, edges, label):
+    """Split an agent stack into growth ticks: (label+root), then edge+node."""
+    ticks = [VGroup(label, nodes[0])]
+    for i in range(1, len(nodes)):
+        ticks.append(VGroup(edges[i - 1], nodes[i]))
+    return ticks
+
+
+def rendered_style_graph():
+    """Deep symmetric recursive swarm: root -> agents -> subagents -> leaves."""
+
+    branching = [3, 2, 2, 2]  # children spawned at depth 0, 1, 2, 3
+    depth_count = len(branching) + 1  # 5 levels (root .. leaves)
+    level_style = [
+        dict(top_y=2.25, r=0.130, dy=0.24, fs=7),
+        dict(top_y=1.32, r=0.108, dy=0.22, fs=6),
+        dict(top_y=0.40, r=0.090, dy=0.20, fs=5),
+        dict(top_y=-0.50, r=0.076, dy=0.185, fs=4),
+        dict(top_y=-1.42, r=0.064, dy=0.165, fs=4),
+    ]
+    leaf_spacing = 0.50
+
+    # 1) enumerate the tree with hierarchical labels.
+    tree: list[dict] = []
+
+    def add(label, depth, parent):
+        idx = len(tree)
+        tree.append({"label": label, "depth": depth, "parent": parent, "children": []})
+        if parent is not None:
+            tree[parent]["children"].append(idx)
+        if depth < len(branching):
+            for i in range(branching[depth]):
+                child_label = f"agent.{i}" if depth == 0 else f"{label}.{i}"
+                add(child_label, depth + 1, idx)
+        return idx
+
+    add("root", 0, None)
+
+    # 2) place leaves evenly, center every parent over its children.
+    leaf_cursor = [0]
+
+    def assign_x(idx):
+        node = tree[idx]
+        if not node["children"]:
+            node["x"] = leaf_cursor[0] * leaf_spacing
+            leaf_cursor[0] += 1
+        else:
+            for child in node["children"]:
+                assign_x(child)
+            node["x"] = sum(tree[c]["x"] for c in node["children"]) / len(
+                node["children"]
+            )
+
+    assign_x(0)
+    center = tree[0]["x"]
+    for node in tree:
+        node["x"] -= center
+
+    # 3) build each agent stack and bucket mobjects into reveal rings.
+    rings = [[VGroup(), VGroup(), VGroup()] for _ in range(depth_count)]
+    for idx, node in enumerate(tree):
+        d = node["depth"]
+        st = level_style[d]
+        is_leaf = not node["children"]
+        middle = "llm" if d % 2 == 0 else "exec"
+        kinds = ["query", middle, "done" if is_leaf else "supervising"]
+        show_label = d <= 1
+        _stack, nodes, edges, label = agent_stack(
+            node["label"] if show_label else "",
+            kinds,
+            x=node["x"],
+            top_y=st["top_y"],
+            r=st["r"],
+            dy=st["dy"],
+            fs=st["fs"],
+        )
+        node["nodes"] = nodes
+        if node["parent"] is not None:
+            parent_nodes = tree[node["parent"]]["nodes"]
+            fan = Line(
+                parent_nodes[-1].get_center(),
+                nodes[0].get_center(),
+                color=DIM,
+                stroke_width=max(0.30, 0.62 - 0.08 * d),
+            ).set_opacity(0.42 - 0.03 * d)
+            rings[d][0].add(fan)
+        rings[d][0].add(label, nodes[0])
+        for k in range(1, len(nodes) - 1):
+            rings[d][1].add(edges[k - 1], nodes[k])
+        rings[d][2].add(edges[len(nodes) - 2], nodes[-1])
+
+    stages = [ring for level in rings for ring in level]
+    graph = VGroup(*stages)
+    graph.scale(1.18)
+    graph.move_to(DOWN * 0.18)
+    return graph, stages
+
+
+def node_type_legend(*, font_size=8, icon_r=0.062):
+    """Small legend explaining typed node shapes."""
+    items = [
+        ("query", "query"),
+        ("llm", "llm"),
+        ("exec", "exec"),
+        ("supervising", "wait"),
+        ("resume", "resume"),
+        ("done", "done"),
+    ]
+    legend = VGroup()
+    for text, kind in items:
+        icon = typed_node(kind, "", r=icon_r)
+        label = Text(text, font=CODE_FONT, font_size=font_size, color=DIM)
+        label.next_to(icon, RIGHT, buff=0.08)
+        legend.add(VGroup(icon, label))
+    legend.arrange(RIGHT, buff=0.28)
+    return legend
+
+
+def fork_supervising_graph(x_center):
+    """Multitree at a supervising wait: root fans out to child agents."""
+
+    r_root = 0.20
+    r_child = 0.16
+    dy_root = 0.46
+    dy_child = 0.38
+
+    root, root_nodes, root_edges, root_label = agent_stack(
+        "root",
+        ["query", "llm", "exec", "supervising"],
+        x=x_center,
+        top_y=1.55,
+        r=r_root,
+        dy=dy_root,
+        fs=FS_CAP,
+    )
+    wait_y = root_nodes[3].get_center()[1] - dy_root * 1.55
+    agent0, agent0_nodes, agent0_edges, agent0_label = agent_stack(
+        "agent.0",
+        ["query", "llm", "exec"],
+        x=x_center - 0.95,
+        top_y=wait_y,
+        r=r_child,
+        dy=dy_child,
+        fs=FS_CAP,
+    )
+    agent1, agent1_nodes, agent1_edges, agent1_label = agent_stack(
+        "agent.1",
+        ["query", "llm", "exec"],
+        x=x_center,
+        top_y=wait_y,
+        r=r_child,
+        dy=dy_child,
+        fs=FS_CAP,
+    )
+    agent2, agent2_nodes, agent2_edges, agent2_label = agent_stack(
+        "agent.2",
+        ["query", "llm", "done"],
+        x=x_center + 0.95,
+        top_y=wait_y,
+        r=r_child,
+        dy=dy_child,
+        fs=FS_CAP,
+    )
+    fanout = VGroup(
+        *[
+            Line(
+                root_nodes[3].get_center(),
+                child.get_center(),
                 color=DIM,
                 stroke_width=1.1,
-            ).set_opacity(0.75))
-    return VGroup(edges, *nodes)
+            ).set_opacity(0.55)
+            for child in (agent0_nodes[0], agent1_nodes[0], agent2_nodes[0])
+        ]
+    )
+    root_query = VGroup(root_label, root_nodes[0])
+    root_llm = VGroup(root_edges[0], root_nodes[1])
+    root_exec = VGroup(root_edges[1], root_nodes[2])
+    root_wait = VGroup(root_edges[2], root_nodes[3])
+    child_query = VGroup(
+        fanout,
+        agent0_label,
+        agent0_nodes[0],
+        agent1_label,
+        agent1_nodes[0],
+        agent2_label,
+        agent2_nodes[0],
+    )
+    child_llm = VGroup(
+        agent0_edges[0],
+        agent0_nodes[1],
+        agent1_edges[0],
+        agent1_nodes[1],
+        agent2_edges[0],
+        agent2_nodes[1],
+    )
+    child_tail = VGroup(
+        agent0_edges[1],
+        agent0_nodes[2],
+        agent1_edges[1],
+        agent1_nodes[2],
+        agent2_edges[1],
+        agent2_nodes[2],
+    )
+    graph = VGroup(
+        root_query,
+        root_llm,
+        root_exec,
+        root_wait,
+        child_query,
+        child_llm,
+        child_tail,
+    )
+    stages = [
+        root_query,
+        root_llm,
+        root_exec,
+        root_wait,
+        child_query,
+        child_llm,
+        child_tail,
+    ]
+    refs = {
+        "supervising": root_nodes[3],
+        "exec_node": root_nodes[2],
+        "exec_edge": root_edges[2],
+        "children": VGroup(agent0, agent1, agent2, fanout),
+        "root_nodes": root_nodes,
+        "root_edges": root_edges,
+        "root_label": root_label,
+    }
+    return graph, stages, refs
+
+
+def fork_graph_refs(graph):
+    """Resolve inject/fork refs from a fork_supervising_graph instance."""
+    return {
+        "supervising": graph[3][1],
+        "children": VGroup(graph[4], graph[5], graph[6]),
+        "root_label": graph[0][0],
+    }
+
+
+def simplified_style_graph(*, with_labels=True):
+    """Smaller renderer-style graph for the opening and branch edit payoff."""
+
+    def lbl(name):
+        return name if with_labels else ""
+
+    root, root_nodes, root_edges, root_label = agent_stack(
+        lbl("root"),
+        ["query", "llm", "exec", "supervising"],
+        x=0.0,
+        top_y=2.05,
+        r=0.13,
+        dy=0.35,
+    )
+
+    agent_defs = [("agent.0", -2.65), ("agent.1", 0.0), ("agent.2", 2.65)]
+    agents = []
+    fanout_edges = VGroup()
+    child_query = VGroup()
+    child_llm = VGroup()
+    child_exec = VGroup()
+    child_wait = VGroup()
+    for name, ax in agent_defs:
+        _stack, a_nodes, a_edges, a_label = agent_stack(
+            lbl(name),
+            ["query", "llm", "exec", "supervising"],
+            x=ax,
+            top_y=0.52,
+            r=0.11,
+            dy=0.31,
+        )
+        agents.append(a_nodes)
+        fanout_edges.add(
+            Line(
+                root_nodes[3].get_center(),
+                a_nodes[0].get_center(),
+                color=DIM,
+                stroke_width=0.62,
+            ).set_opacity(0.45)
+        )
+        child_query.add(a_label, a_nodes[0])
+        child_llm.add(a_edges[0], a_nodes[1])
+        child_exec.add(a_edges[1], a_nodes[2])
+        child_wait.add(a_edges[2], a_nodes[3])
+    child_query.add(fanout_edges)
+
+    leaf_offsets = [-0.66, 0.66]
+    leaf_queries = VGroup()
+    leaf_llm = VGroup()
+    leaf_exec = VGroup()
+    leaf_finish = VGroup()
+    for (name, ax), a_nodes in zip(agent_defs, agents):
+        for i, off in enumerate(leaf_offsets):
+            _stack, nodes, edges, label = agent_stack(
+                lbl(f"{name}.{i}"),
+                ["query", "llm", "exec", "done"],
+                x=ax + off,
+                top_y=-1.06,
+                r=0.082,
+                dy=0.24,
+                fs=6,
+            )
+            fan_line = Line(
+                a_nodes[3].get_center(),
+                nodes[0].get_center(),
+                color=DIM,
+                stroke_width=0.42,
+            ).set_opacity(0.42)
+            leaf_queries.add(fan_line, label, nodes[0])
+            leaf_llm.add(edges[0], nodes[1])
+            leaf_exec.add(edges[1], nodes[2])
+            leaf_finish.add(edges[2], nodes[3])
+
+    root_query = VGroup(root_label, root_nodes[0])
+    root_llm = VGroup(root_edges[0], root_nodes[1])
+    root_exec = VGroup(root_edges[1], root_nodes[2])
+    root_wait = VGroup(root_edges[2], root_nodes[3])
+    graph = VGroup(
+        root_query,
+        root_llm,
+        root_exec,
+        root_wait,
+        child_query,
+        child_llm,
+        child_exec,
+        child_wait,
+        leaf_queries,
+        leaf_llm,
+        leaf_exec,
+        leaf_finish,
+    )
+    graph.scale(1.05)
+    graph.move_to(DOWN * 0.02)
+    stages = [
+        root_query,
+        root_llm,
+        root_exec,
+        root_wait,
+        child_query,
+        child_llm,
+        child_exec,
+        child_wait,
+        leaf_queries,
+        leaf_llm,
+        leaf_exec,
+        leaf_finish,
+    ]
+    return graph, stages, {}
 
 
 def fade_clear(scene, *mobjs, run_time=0.55):
@@ -139,308 +610,414 @@ class RecursiveFlowHero(Scene):
 
     def _graph_first_animation(self):
         brand = Text(
-            "recursive-flow",
-            font=CODE_FONT,
-            font_size=28,
-            color=WHITE_C,
-        ).to_corner(UP + LEFT, buff=0.28)
+            "recursive-flow", font=CODE_FONT, font_size=26, color=WHITE_C
+        ).to_corner(UP + LEFT, buff=0.30)
+        self.play(FadeIn(brand), run_time=0.30)
 
-        headline = Text(
-            "recursive agents as graphs",
+        def reveal_stage(stage):
+            return LaggedStart(
+                *[FadeIn(item, shift=DOWN * 0.025) for item in stage],
+                lag_ratio=0.08,
+            )
+
+        # Phase 1 — recursive agents as dynamic graphs.
+        head = Text(
+            "Recursive agents as dynamic graphs.",
             font=CODE_FONT,
             font_size=FS_HEADER,
             color=WHITE_C,
         ).to_edge(UP, buff=0.55)
+        self.play(FadeIn(head, shift=DOWN * 0.06), run_time=0.60)
 
-        subhead = Text(
-            "see every call, wait, resume, and result",
-            font=CODE_FONT,
-            font_size=FS_CAP,
-            color=DIM,
-        ).next_to(headline, DOWN, buff=0.22)
+        p1_graph, p1_stages, _ = simplified_style_graph(with_labels=True)
+        p1_graph.scale(1.10)
+        p1_graph.move_to(DOWN * 0.05)
+        p1_legend = node_type_legend()
+        p1_legend.to_edge(DOWN, buff=0.38)
+        run_stack = VGroup(p1_graph, p1_legend)
 
-        self.play(FadeIn(brand), run_time=0.25)
-        self.play(FadeIn(headline, shift=DOWN * 0.08), run_time=0.45)
-        self.play(FadeIn(subhead, shift=DOWN * 0.04), run_time=0.35)
-
-        root_q = typed_node("Q", "root", r=0.42, fs=FS_CAP).move_to(UP * 1.70)
-        root_a = typed_node("A", "plan", r=0.38, fs=FS_CAP).move_to(UP * 0.85)
-        root_s = typed_node("S", "wait", r=0.38, fs=FS_CAP).move_to(UP * 0.02)
-
-        search = typed_node("A", "search", r=0.34, fs=FS_SMALL).move_to(LEFT * 2.45 + DOWN * 0.82)
-        code = typed_node("A", "code", r=0.34, fs=FS_SMALL).move_to(DOWN * 0.82)
-        verify = typed_node("A", "verify", r=0.34, fs=FS_SMALL).move_to(RIGHT * 2.45 + DOWN * 0.82)
-
-        chunk0 = typed_node("R", "c0", r=0.28, fs=FS_SMALL).move_to(LEFT * 3.20 + DOWN * 1.95)
-        chunk1 = typed_node("R", "c1", r=0.28, fs=FS_SMALL).move_to(LEFT * 1.65 + DOWN * 1.95)
-        patch = typed_node("R", "patch", r=0.28, fs=FS_TINY).move_to(DOWN * 1.95)
-        retry = typed_node("A", "retry", r=0.28, fs=FS_TINY).move_to(RIGHT * 1.65 + DOWN * 1.95)
-        ok = typed_node("R", "ok", r=0.28, fs=FS_SMALL).move_to(RIGHT * 3.20 + DOWN * 1.95)
-
-        done = typed_node("R", "done", r=0.42, fs=FS_CAP).move_to(DOWN * 2.95)
-
-        edges = [
-            Line(root_q.get_bottom(), root_a.get_top(), color=DIM, stroke_width=1.4),
-            Line(root_a.get_bottom(), root_s.get_top(), color=DIM, stroke_width=1.4),
-            DashedLine(root_s.get_bottom(), search.get_top(), color=A_C, stroke_width=1.2),
-            DashedLine(root_s.get_bottom(), code.get_top(), color=A_C, stroke_width=1.2),
-            DashedLine(root_s.get_bottom(), verify.get_top(), color=A_C, stroke_width=1.2),
-            Line(search.get_bottom(), chunk0.get_top(), color=DIM, stroke_width=1.0),
-            Line(search.get_bottom(), chunk1.get_top(), color=DIM, stroke_width=1.0),
-            Line(code.get_bottom(), patch.get_top(), color=DIM, stroke_width=1.0),
-            Line(verify.get_bottom(), retry.get_top(), color=HOT, stroke_width=1.0),
-            Line(verify.get_bottom(), ok.get_top(), color=DIM, stroke_width=1.0),
-            DashedLine(chunk0.get_bottom(), done.get_top(), color=S_C, stroke_width=0.9),
-            DashedLine(chunk1.get_bottom(), done.get_top(), color=S_C, stroke_width=0.9),
-            DashedLine(patch.get_bottom(), done.get_top(), color=S_C, stroke_width=0.9),
-            DashedLine(retry.get_bottom(), done.get_top(), color=S_C, stroke_width=0.9),
-            DashedLine(ok.get_bottom(), done.get_top(), color=S_C, stroke_width=0.9),
-        ]
-
-        graph_nodes = [
-            root_q,
-            root_a,
-            root_s,
-            search,
-            code,
-            verify,
-            chunk0,
-            chunk1,
-            patch,
-            retry,
-            ok,
-            done,
-        ]
-
-        self.play(GrowFromCenter(root_q), run_time=0.55)
-        self.play(Create(edges[0]), GrowFromCenter(root_a), run_time=0.55)
-        self.play(Create(edges[1]), GrowFromCenter(root_s), run_time=0.55)
         self.play(
-            Create(edges[2]),
-            Create(edges[3]),
-            Create(edges[4]),
-            GrowFromCenter(search),
-            GrowFromCenter(code),
-            GrowFromCenter(verify),
-            run_time=0.95,
+            LaggedStart(
+                *[reveal_stage(stage) for stage in p1_stages[:4]],
+                lag_ratio=0.35,
+            ),
+            run_time=2.00,
         )
         self.play(
-            Create(edges[5]),
-            Create(edges[6]),
-            Create(edges[7]),
-            Create(edges[8]),
-            Create(edges[9]),
-            GrowFromCenter(chunk0),
-            GrowFromCenter(chunk1),
-            GrowFromCenter(patch),
-            GrowFromCenter(retry),
-            GrowFromCenter(ok),
-            run_time=1.05,
+            LaggedStart(
+                *[reveal_stage(stage) for stage in p1_stages[4:8]],
+                lag_ratio=0.30,
+            ),
+            run_time=1.60,
         )
         self.play(
-            *[Create(edge) for edge in edges[10:]],
-            GrowFromCenter(done),
-            run_time=1.05,
+            LaggedStart(
+                *[reveal_stage(stage) for stage in p1_stages[8:]],
+                lag_ratio=0.25,
+            ),
+            run_time=1.80,
         )
+        self.play(FadeIn(p1_legend, shift=UP * 0.04), run_time=0.55)
+        self.wait(0.85)
 
-        footer = Text(
-            "deep trees stay readable",
-            font=CODE_FONT,
-            font_size=FS_BODY,
-            color=WHITE_C,
-        ).to_edge(DOWN, buff=0.35)
-        self.play(FadeIn(footer, shift=UP * 0.06), run_time=0.40)
-        self.play(Flash(done, color=R_C, flash_radius=0.55, line_length=0.12), run_time=0.55)
-        self.wait(1.45)
-
-        # The older animation's strongest beat: the graph itself evolves
-        # step by step, so every intermediate node is a usable handle.
-        self.play(
-            FadeOut(footer),
-            FadeOut(headline),
-            FadeOut(subhead),
-            *[FadeOut(node) for node in graph_nodes],
-            *[FadeOut(edge) for edge in edges],
-            run_time=0.55,
-        )
-
+        # Phase 2 — step through the live run: it is a graph, not a recording.
         step_title = Text(
-            "the graph evolves every step",
+            "Step through the live run.",
             font=CODE_FONT,
             font_size=FS_HEADER,
             color=WHITE_C,
-        ).to_edge(UP, buff=0.85)
+        ).to_edge(UP, buff=0.55)
+        step_note = Text(
+            "live, executable graph",
+            font=CODE_FONT,
+            font_size=FS_CAP,
+            color=DIM,
+        ).next_to(step_title, DOWN, buff=0.18)
+        self.play(
+            FadeOut(run_stack, shift=DOWN * 0.05),
+            ReplacementTransform(head, step_title),
+            FadeIn(step_note, shift=UP * 0.03),
+            run_time=0.70,
+        )
+        head = step_title
 
-        self.play(FadeIn(step_title, shift=DOWN * 0.08), run_time=0.45)
-
-        # One large snapshot at a time. This is slower, clearer, and avoids
-        # the overlap caused by putting several dense graphs side by side.
         snapshot_steps = [
+            ([("root", "query", [])], "root receives the query"),
             (
-                [("root", "Q", [])],
-                "root query",
-            ),
-            (
-                [("root", "A", [])],
-                "agent writes code",
-            ),
-            (
-                [("root", "S", [1, 2, 3]), ("search", "A", []), ("code", "A", []), ("verify", "A", [])],
-                "launch_subagents fanout",
+                [("query", "query", [1]), ("llm", "llm", [])],
+                "the llm proposes the next action",
             ),
             (
                 [
-                    ("root", "S", [1, 2, 3]),
-                    ("search", "A", [4, 5]),
-                    ("code", "R", []),
-                    ("verify", "A", []),
-                    ("c0", "R", []),
-                    ("c1", "R", []),
+                    ("query", "query", [1]),
+                    ("llm", "llm", [2]),
+                    ("exec", "exec", [3]),
+                    ("wait", "supervising", []),
                 ],
-                "partial results return",
+                "execution pauses at a wait",
             ),
             (
                 [
-                    ("root", "S", [1, 2, 3]),
-                    ("search", "R", [4, 5]),
-                    ("code", "R", []),
-                    ("verify", "A", [6]),
-                    ("c0", "R", []),
-                    ("c1", "R", []),
-                    ("retry", "A", []),
+                    ("query", "query", [1]),
+                    ("llm", "llm", [2]),
+                    ("exec", "exec", [3]),
+                    ("wait", "supervising", [4, 7, 10]),
+                    ("agent.0", "query", [5]),
+                    ("llm", "llm", [6]),
+                    ("done", "done", []),
+                    ("agent.1", "query", [8]),
+                    ("llm", "llm", [9]),
+                    ("done", "done", []),
+                    ("agent.2", "query", [11]),
+                    ("llm", "llm", [12]),
+                    ("done", "done", []),
                 ],
-                "one branch retries",
+                "children run in parallel",
             ),
             (
                 [
-                    ("root", "R", [1, 2, 3]),
-                    ("search", "R", [4, 5]),
-                    ("code", "R", []),
-                    ("verify", "R", [6, 7]),
-                    ("c0", "R", []),
-                    ("c1", "R", []),
-                    ("retry", "A", []),
-                    ("ok", "R", []),
+                    ("query", "query", [1]),
+                    ("llm", "llm", [2]),
+                    ("exec", "exec", [3]),
+                    ("wait", "supervising", [4, 7, 10, 13]),
+                    ("agent.0", "query", [5]),
+                    ("llm", "llm", [6]),
+                    ("done", "done", []),
+                    ("agent.1", "query", [8]),
+                    ("llm", "llm", [9]),
+                    ("done", "done", []),
+                    ("agent.2", "query", [11]),
+                    ("llm", "llm", [12]),
+                    ("done", "done", []),
+                    ("resume", "resume", [14]),
+                    ("done", "done", []),
                 ],
-                "final result",
+                "the parent resumes with their results",
             ),
         ]
 
-        timeline = Line(LEFT * 4.8 + DOWN * 2.35, RIGHT * 4.8 + DOWN * 2.35, color=DIM, stroke_width=1.2)
-        dots = VGroup(*[
-            Circle(radius=0.07, color=DIM, fill_opacity=0.35, stroke_width=1.0)
-            .move_to(LEFT * 4.8 + RIGHT * (9.6 * i / (len(snapshot_steps) - 1)) + DOWN * 2.35)
-            for i in range(len(snapshot_steps))
-        ])
-        self.play(Create(timeline), FadeIn(dots), run_time=0.55)
+        timeline = Line(
+            LEFT * 4.8 + DOWN * 3.28,
+            RIGHT * 4.8 + DOWN * 3.28,
+            color=DIM,
+            stroke_width=1.2,
+        )
+        dots = VGroup(
+            *[
+                Circle(
+                    radius=0.07, color=DIM, fill_opacity=0.35, stroke_width=1.0
+                ).move_to(
+                    LEFT * 4.8
+                    + RIGHT * (9.6 * i / (len(snapshot_steps) - 1))
+                    + DOWN * 3.28
+                )
+                for i in range(len(snapshot_steps))
+            ]
+        )
+        self.play(Create(timeline), FadeIn(dots), run_time=0.40)
 
         active_graph = None
         active_label = None
         active_dot = None
         for i, (specs, label_text) in enumerate(snapshot_steps):
-            graph = tiny_graph(specs, root_pos=UP * 0.95, scale=1.95)
+            graph = tiny_graph(specs, root_pos=UP * 1.05, scale=1.00)
             label = Text(label_text, font=CODE_FONT, font_size=FS_BODY, color=WHITE_C)
-            label.move_to(DOWN * 1.88)
-            dot = Circle(radius=0.11, color=HOT, fill_opacity=0.65, stroke_width=1.5).move_to(dots[i])
+            label.move_to(DOWN * 2.62)
+            dot = Circle(
+                radius=0.11, color=HOT, fill_opacity=0.65, stroke_width=1.5
+            ).move_to(dots[i])
             if active_graph is not None:
-                self.play(FadeOut(active_graph), FadeOut(active_label), FadeOut(active_dot), run_time=0.45)
+                self.play(
+                    FadeOut(active_graph),
+                    FadeOut(active_label),
+                    FadeOut(active_dot),
+                    run_time=0.40,
+                )
             self.play(
-                FadeIn(graph, shift=DOWN * 0.08),
-                FadeIn(label, shift=UP * 0.05),
+                FadeIn(graph, shift=DOWN * 0.06),
+                FadeIn(label, shift=UP * 0.04),
                 FadeIn(dot),
-                run_time=0.95,
+                run_time=0.70,
             )
-            self.wait(0.75)
+            self.wait(0.55)
             active_graph = graph
             active_label = label
             active_dot = dot
 
-        timeline_footer = Text(
-            "retrace · fork · inspect every state",
-            font=CODE_FONT,
-            font_size=FS_BODY,
-            color=WHITE_C,
-        ).to_edge(DOWN, buff=0.35)
-        self.play(FadeOut(active_label), FadeOut(active_dot), FadeIn(timeline_footer, shift=UP * 0.06), run_time=0.45)
-        self.wait(1.55)
-
         self.play(
-            FadeOut(step_title),
-            FadeOut(timeline_footer),
-            FadeOut(active_graph),
-            FadeOut(timeline),
-            FadeOut(dots),
+            FadeOut(
+                VGroup(
+                    step_note, timeline, dots, active_graph, active_label, active_dot
+                ),
+                shift=DOWN * 0.05,
+            ),
             run_time=0.55,
         )
 
-        code_title = Text(
-            "launch_subagents takes a list of child specs",
+        # Phase 3 — multitree at supervising, fork, replace with straight path.
+        fork_code = code_card(
+            [
+                ("supervising_node = graph.filter(", DIM),
+                ("    filter=lambda node:", DIM),
+                ('    node.type == "supervising_output")', DIM),
+                ("forked_graph = graph.replace_node(", DIM),
+                ("    supervising_node,", DIM),
+                ("    rflow.ExecOutput(output=prompt),", DIM),
+                ('    truncate="descendants")', DIM),
+                ("forked_graph = agent.step(forked_graph)", DIM),
+            ],
+            width=5.35,
+            height=3.10,
+            font_size=9,
+            header_size=FS_SMALL,
+        )
+        fork_code.to_edge(LEFT, buff=0.40)
+
+        fork_title = Text(
+            "Fork the run.", font=CODE_FONT, font_size=FS_HEADER, color=WHITE_C
+        ).to_edge(UP, buff=0.55)
+
+        fork_code_lines = fork_code[2]
+
+        def fork_light(idx):
+            return [
+                fork_code_lines[i].animate.set_color(HOT if i == idx else DIM)
+                for i in range(len(fork_code_lines))
+            ]
+
+        fr = 0.20
+        fdy = 0.46
+        orig_x = 2.05
+        fork_x = 5.35
+
+        def fnode(kind, pos, *, r=fr):
+            return typed_node(kind, "", r=r).move_to(pos)
+
+        def graph_edge(a, b):
+            return Line(
+                a.get_bottom(),
+                b.get_top(),
+                color=DIM,
+                stroke_width=0.65,
+            ).set_opacity(0.62)
+
+        orig, tree_stages, _ = fork_supervising_graph(x_center=0)
+        fork_tree = orig.copy()
+        graph_anchor = UP * 0.15
+        orig.move_to(graph_anchor)
+        fork_tree.move_to(RIGHT * fork_x + graph_anchor)
+        fork_refs = fork_graph_refs(fork_tree)
+
+        # Step 1 — a supervising multitree with child agents (graph only, no code).
+        multitree_title = Text(
+            "Every recursive run is an editable graph.",
+            font=CODE_FONT,
+            font_size=FS_HEADER,
+            color=WHITE_C,
+        ).to_edge(UP, buff=0.55)
+        self.play(ReplacementTransform(head, multitree_title), run_time=0.55)
+        head = multitree_title
+        for stage in tree_stages:
+            self.play(reveal_stage(stage), run_time=0.50)
+        self.wait(0.45)
+
+        # Step 2 — fork copies the multitree; code appears, original dims and slides left.
+        self.play(ReplacementTransform(head, fork_title), run_time=0.45)
+        head = fork_title
+        fork_badge = VGroup(
+            RoundedRectangle(
+                corner_radius=0.10,
+                width=1.65,
+                height=0.44,
+                color=HOT,
+                stroke_width=1.3,
+                fill_opacity=0.08,
+            ),
+            Text("forked run", font=CODE_FONT, font_size=FS_CAP, color=HOT),
+        ).next_to(fork_tree[0][0], UP, buff=0.16)
+        self.play(FadeIn(fork_code, shift=UP * 0.06), *fork_light(0), run_time=0.55)
+        self.play(
+            orig.animate.move_to(RIGHT * orig_x + graph_anchor),
+            TransformFromCopy(orig, fork_tree),
+            run_time=1.10,
+        )
+        restore_typed_node_fills(orig)
+        restore_typed_node_fills(fork_tree)
+        self.play(FadeIn(fork_badge, shift=UP * 0.05), run_time=0.40)
+        self.wait(0.45)
+
+        # Step 3 — on the fork, replace supervising + children with a straight path.
+        inject_title = Text(
+            "Perform surgery on the graph.",
+            font=CODE_FONT,
+            font_size=FS_HEADER,
+            color=WHITE_C,
+        ).to_edge(UP, buff=0.55)
+        supervising = fork_refs["supervising"]
+        children = fork_refs["children"]
+        hi_box = RoundedRectangle(
+            corner_radius=0.06,
+            width=0.52,
+            height=0.52,
+            color=HOT,
+            stroke_width=2.4,
+            fill_opacity=0.0,
+        ).move_to(supervising)
+        self.play(
+            ReplacementTransform(head, inject_title),
+            *fork_light(3),
+            Create(hi_box),
+            run_time=0.65,
+        )
+        head = inject_title
+        self.wait(0.25)
+        inj = fnode("llm", supervising.get_center())
+        inj_pos = supervising.get_center()
+        self.play(FadeOut(children, shift=DOWN * 0.22), run_time=0.55)
+        self.remove(children, *children, *children.get_family())
+        self.play(ReplacementTransform(supervising, inj), run_time=0.65)
+        restore_typed_node_fills(fork_tree)
+        restore_typed_node_fills(inj)
+        self.play(Flash(inj, color=LLM_C, flash_radius=0.32), run_time=0.38)
+        self.wait(0.35)
+
+        # Step 4 — continue the fork: exec, then done.
+        cont_title = Text(
+            "Continue from the fork.",
+            font=CODE_FONT,
+            font_size=FS_HEADER,
+            color=WHITE_C,
+        ).to_edge(UP, buff=0.55)
+        _, tail_nodes, tail_edges, _ = agent_stack(
+            "",
+            ["exec", "done"],
+            x=inj_pos[0],
+            top_y=inj_pos[1] - fdy,
+            r=fr,
+            dy=fdy,
+            fs=FS_CAP,
+        )
+        cr, cd = tail_nodes
+        e_ir = graph_edge(inj, cr)
+        e_rd = tail_edges[0]
+        fork_tail = VGroup(e_ir, cr, e_rd, cd)
+        fork_rhs = VGroup(fork_tree, fork_badge, inj, fork_tail)
+        self.play(
+            ReplacementTransform(head, cont_title),
+            *fork_light(7),
+            FadeOut(hi_box),
+            run_time=0.60,
+        )
+        head = cont_title
+        self.play(
+            LaggedStart(
+                FadeIn(VGroup(e_ir, cr), shift=DOWN * 0.04),
+                FadeIn(VGroup(e_rd, cd), shift=DOWN * 0.04),
+                lag_ratio=0.40,
+            ),
+            run_time=1.10,
+        )
+        restore_typed_node_fills(fork_tail)
+        self.play(Flash(cd, color=R_C, flash_radius=0.30), run_time=0.38)
+        self.wait(0.80)
+
+        fork_mobs = VGroup(fork_code, orig, fork_rhs)
+
+        finale_title = Text(
+            "Thousands of agent steps — in one modular graph.",
+            font=CODE_FONT,
+            font_size=FS_HEADER,
+            color=WHITE_C,
+        ).to_edge(UP, buff=0.55).shift(DOWN * 0.34)
+        dense_graph, dense_stages = rendered_style_graph()
+        dense_captions = [
+            "one root receives the query",
+            "the root reasons",
+            "the root reaches a supervising wait",
+            "it spawns its first layer of agents",
+            "those agents reason in parallel",
+            "each agent waits on its own children",
+            "every agent spawns more agents",
+            "the swarm reasons, breadth-first",
+            "deeper supervising waits open up",
+            "the swarm keeps branching",
+            "parallel reasoning, everywhere at once",
+            "still more waits, one layer down",
+            "leaf agents fan out at the edges",
+            "the leaves finish their work",
+            "one query, one graph — the whole swarm",
+        ]
+        finale_caption = Text(
+            dense_captions[0],
             font=CODE_FONT,
             font_size=FS_BODY,
             color=WHITE_C,
-        ).move_to(UP * 2.25)
-
-        code_box = RoundedRectangle(
-            corner_radius=0.12,
-            width=10.4,
-            height=4.15,
-            color=DIM,
-            stroke_width=1.0,
-            fill_opacity=0.06,
-        ).move_to(DOWN * 0.05)
-        repl_header = Text(
-            "REPL",
-            font=CODE_FONT,
-            font_size=FS_TINY,
-            color=DIM,
-        ).move_to(code_box.get_corner(UP + RIGHT) + DOWN * 0.18 + LEFT * 0.35)
-        ctx_tab = RoundedRectangle(
-            corner_radius=0.08,
-            width=1.28,
-            height=0.36,
-            color=Q_C,
-            stroke_width=1.2,
-            fill_opacity=0.18,
-        ).move_to(code_box.get_corner(UP + LEFT) + DOWN * 0.20 + RIGHT * 0.80)
-        ctx_label = Text("CONTEXT", font=CODE_FONT, font_size=FS_TINY, color=Q_C).move_to(ctx_tab)
-        ctx = VGroup(ctx_tab, ctx_label)
-        code_lines = VGroup(
-            Text(">>> chunks = chunked(CONTEXT.lines(0, CONTEXT.line_count()), 500)", font=CODE_FONT, font_size=FS_SMALL, color=Q_C),
-            Text(">>> child_specs = [", font=CODE_FONT, font_size=FS_SMALL, color=S_C),
-            Text("...   {", font=CODE_FONT, font_size=FS_SMALL, color=WHITE_C),
-            Text("...     'name': f'chunk_{i}',", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
-            Text("...     'query': 'inspect your CONTEXT slice',", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
-            Text("...     'context': '\\n'.join(chunk),", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
-            Text("...   } for i, chunk in enumerate(chunks)", font=CODE_FONT, font_size=FS_SMALL, color=A_C),
-            Text("... ]  # list[dict], even for one child", font=CODE_FONT, font_size=FS_SMALL, color=S_C),
-            Text(">>> results = await launch_subagents(child_specs)", font=CODE_FONT, font_size=FS_SMALL, color=S_C),
-            Text(">>> final = combine(results)", font=CODE_FONT, font_size=FS_SMALL, color=WHITE_C),
-            Text(">>> done(final)", font=CODE_FONT, font_size=FS_SMALL, color=R_C),
-        ).arrange(DOWN, aligned_edge=LEFT, buff=0.08)
-        code_lines.move_to(code_box.get_center() + DOWN * 0.12)
-
-        code_caption = Text(
-            "one launcher: await launch_subagents([{...}, {...}])",
-            font=CODE_FONT,
-            font_size=FS_CAP,
-            color=DIM,
-        ).next_to(code_box, DOWN, buff=0.30)
-
-        self.play(FadeIn(code_title, shift=DOWN * 0.06), run_time=0.65)
-        self.play(FadeIn(code_box), FadeIn(repl_header), FadeIn(ctx), run_time=0.70)
-        for line in code_lines:
-            self.play(FadeIn(line, shift=UP * 0.04), run_time=0.55)
-            self.wait(0.10)
-        self.play(FadeIn(code_caption, shift=UP * 0.04), run_time=0.55)
-        self.wait(2.40)
-
-        fade_clear(
-            self,
-            brand,
-            code_title,
-            code_box,
-            repl_header,
-            ctx,
-            code_lines,
-            code_caption,
+        ).to_edge(DOWN, buff=0.30)
+        self.play(
+            FadeOut(head),
+            FadeOut(fork_mobs),
+            FadeIn(finale_title, shift=DOWN * 0.05),
+            run_time=0.75,
         )
+        self.play(
+            reveal_stage(dense_stages[0]),
+            FadeIn(finale_caption, shift=UP * 0.05),
+            run_time=0.50,
+        )
+        for stage, caption_text in zip(dense_stages[1:], dense_captions[1:]):
+            next_caption = Text(
+                caption_text,
+                font=CODE_FONT,
+                font_size=FS_BODY,
+                color=WHITE_C,
+            ).to_edge(DOWN, buff=0.30)
+            self.play(
+                reveal_stage(stage),
+                FadeOut(finale_caption, shift=DOWN * 0.03),
+                FadeIn(next_caption, shift=UP * 0.03),
+                run_time=0.36,
+            )
+            finale_caption = next_caption
+        self.play(Flash(dense_graph, color=R_C, flash_radius=0.35), run_time=0.36)
+        self.play(FadeOut(finale_caption), run_time=0.35)
+        self.wait(1.60)

@@ -36,6 +36,15 @@ from rflow.utils import check_wait_syntax
 def apply_one(engine, action) -> None:
     """Materialize one action against the persisted graph."""
 
+    previous_global_step = getattr(engine, "_planned_global_step", None)
+    engine._planned_global_step = action.global_step
+    try:
+        _apply_one(engine, action)
+    finally:
+        engine._planned_global_step = previous_global_step
+
+
+def _apply_one(engine, action) -> None:
     graph = engine.session.load_graph().agents[action.agent_id]
 
     over = budget_exceeded(graph, engine.config.max_budget)
@@ -44,6 +53,7 @@ def apply_one(engine, action) -> None:
             engine.session,
             graph,
             DoneOutput(result=f"[budget exceeded: {over} tokens]"),
+            global_step=action.global_step,
         )
         return
 
@@ -70,16 +80,19 @@ def step_llm(
     *,
     force_final: bool,
     model: str | None = None,
+    global_step: int | None = None,
 ) -> None:
     """LLM half of one turn: write ``LLMAction -> LLMOutput``."""
 
+    if global_step is None:
+        global_step = getattr(engine, "_planned_global_step", None)
     llm_model = model or graph.config.get("model", "default")
     llm_action = LLMAction(
         agent_id=graph.agent_id,
         seq=last.seq + 1,
         model=llm_model,
     )
-    append_node(engine.session, graph, llm_action)
+    append_node(engine.session, graph, llm_action, global_step=global_step)
 
     try:
         llm_output, usage = engine.reply_to(graph, llm_action, force_final=force_final)
@@ -99,9 +112,17 @@ def step_llm(
     append_node(engine.session, graph, llm_output)
 
 
-def step_exec(engine, graph: Graph, llm_output: LLMOutput) -> None:
+def step_exec(
+    engine,
+    graph: Graph,
+    llm_output: LLMOutput,
+    *,
+    global_step: int | None = None,
+) -> None:
     """Exec half of one turn: write ``ExecAction -> CodeObservation``."""
 
+    if global_step is None:
+        global_step = getattr(engine, "_planned_global_step", None)
     code = llm_output.code
 
     exec_action = ExecAction(
@@ -109,7 +130,9 @@ def step_exec(engine, graph: Graph, llm_output: LLMOutput) -> None:
         seq=llm_output.seq + 1,
         code=code,
     )
-    exec_state = append_node(engine.session, graph, exec_action)
+    exec_state = append_node(
+        engine.session, graph, exec_action, global_step=global_step
+    )
 
     if not code:
         append_node(
@@ -212,9 +235,13 @@ def step_after_supervising(
     engine,
     graph: Graph,
     last: SupervisingOutput,
+    *,
+    global_step: int | None = None,
 ) -> None:
     """Resume half: write ``ResumeAction -> CodeObservation``."""
 
+    if global_step is None:
+        global_step = getattr(engine, "_planned_global_step", None)
     if not can_resume(graph, last):
         return
 
@@ -225,7 +252,12 @@ def step_after_supervising(
         seq=last.seq + 1,
         resumed_from=list(last.waiting_on),
     )
-    resume_state = append_node(engine.session, graph, resume_action)
+    resume_state = append_node(
+        engine.session,
+        graph,
+        resume_action,
+        global_step=global_step,
+    )
 
     try:
         runtime = engine.inject_env(graph, resume_state)

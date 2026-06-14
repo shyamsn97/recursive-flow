@@ -54,6 +54,7 @@ class CallLLM:
     """
 
     agent_id: str
+    global_step: int | None = None
     force_final: bool = False
     model: str | None = None
 
@@ -68,6 +69,7 @@ class Exec:
     """
 
     agent_id: str
+    global_step: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +77,7 @@ class RunPendingExec:
     """Plan to run an already-committed ``ExecAction``."""
 
     agent_id: str
+    global_step: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +90,7 @@ class Resume:
     """
 
     agent_id: str
+    global_step: int | None = None
 
 
 Action = CallLLM | Exec | RunPendingExec | Resume

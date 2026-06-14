@@ -18,23 +18,31 @@ if TYPE_CHECKING:
 
 def replace_node(
     graph: Graph,
-    node_id: str,
+    target: str | Node,
     node: Node,
     *,
     truncate: str = "descendants",
+    branch_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
     inherit_output_schema: bool = True,
 ) -> Graph:
-    """Return a copy with ``node_id`` replaced by ``node``."""
+    """Return a copy with ``target`` replaced by ``node``.
 
+    ``target`` may be a node id or a :class:`Node` (its ``id`` is used).
+    """
+
+    node_id = target.id if isinstance(target, Node) else target
     validate_truncate(truncate)
     out = graph.copy(deep=True)
     owner = out.node_owner(node_id)
     index = owner._index_of(node_id)
+    global_step = out.next_global_step()
     old, _fixed = _replace_node_at_index(
         owner,
         index,
         node,
+        global_step=global_step,
+        branch_id=branch_id,
         truncate=truncate,
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,
@@ -51,6 +59,7 @@ def replace_last_action(
     node: ActionNode,
     *,
     truncate: str = "descendants",
+    branch_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
     inherit_output_schema: bool = True,
 ) -> Graph:
@@ -64,6 +73,7 @@ def replace_last_action(
         last.id,
         node,
         truncate=truncate,
+        branch_id=branch_id,
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,
     )
@@ -75,6 +85,7 @@ def replace_last_observation(
     node: ObservationNode,
     *,
     truncate: str = "descendants",
+    branch_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
     inherit_output_schema: bool = True,
 ) -> Graph:
@@ -88,6 +99,7 @@ def replace_last_observation(
         last.id,
         node,
         truncate=truncate,
+        branch_id=branch_id,
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,
     )
@@ -98,6 +110,8 @@ def _replace_node_at_index(
     index: int,
     node: Node,
     *,
+    global_step: int,
+    branch_id: str | None,
     truncate: str,
     output_schema: dict[str, Any] | None,
     inherit_output_schema: bool,
@@ -109,6 +123,8 @@ def _replace_node_at_index(
         owner,
         old,
         node,
+        global_step=global_step,
+        branch_id=branch_id,
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,
     )
@@ -124,6 +140,8 @@ def _node_for_replacement(
     old: Node,
     new: Node,
     *,
+    global_step: int | None = None,
+    branch_id: str | None = None,
     output_schema: dict[str, Any] | None = None,
     inherit_output_schema: bool = True,
 ) -> Node:
@@ -134,6 +152,10 @@ def _node_for_replacement(
         replacement=new,
         agent_id=old.agent_id,
         seq=old.seq,
+        global_step=(
+            global_step if global_step is not None else owner.next_global_step()
+        ),
+        branch_id=branch_id,
         graph_output_schema=owner.output_schema,
         output_schema=output_schema,
         inherit_output_schema=inherit_output_schema,

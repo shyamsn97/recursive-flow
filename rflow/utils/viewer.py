@@ -199,6 +199,20 @@ def resolve_graphs(source: ViewSource) -> list[Graph]:
     return graphs
 
 
+def slice_graphs_at_branch(graphs: list[Graph], branch_id: str) -> list[Graph]:
+    """Return snapshots starting where ``branch_id`` first appears.
+
+    Ordering (baseline finishes before the edit plays forward) is handled in
+    :func:`rflow.graph.timeline.retrace_steps`, so this just trims to the first
+    snapshot that contains the edit.
+    """
+
+    for index, graph in enumerate(graphs):
+        if any(node.branch_id == branch_id for node in graph.all_nodes):
+            return graphs[index:]
+    raise ValueError(f"branch id {branch_id!r} was not found in the render snapshots")
+
+
 def _resolve_latest_graph(source: ViewSource) -> Graph:
     graphs = resolve_graphs(source)
     if not graphs:
@@ -455,6 +469,8 @@ def _build_graph_figure(
     *,
     height: int = 360,
     title: str = "execution graph",
+    fixed_positions: dict[str, tuple[float, float]] | None = None,
+    axis_ranges: tuple[list[float], list[float]] | None = None,
 ):
     """Plotly figure showing every node, colored by type, edges from
     :attr:`Graph.edges`.
@@ -644,6 +660,11 @@ def _build_graph_figure(
         if not moved:
             break
 
+    if fixed_positions is not None:
+        for nid in list(pos):
+            if nid in fixed_positions:
+                pos[nid] = fixed_positions[nid]
+
     chain_edge_x: list[float | None] = []
     chain_edge_y: list[float | None] = []
     spawn_edge_x: list[float | None] = []
@@ -780,18 +801,22 @@ def _build_graph_figure(
         )
 
     n_edges = sum(1 for e in chain_edge_x + spawn_edge_x if e is None)
-    if node_x:
-        x_span = max(node_x) - min(node_x)
-        x_pad = max(1.0, x_span * 0.18)
-        x_range = [min(node_x) - x_pad, max(node_x) + x_pad]
+    if axis_ranges is not None:
+        x_range = list(axis_ranges[0])
+        y_range = list(axis_ranges[1])
     else:
-        x_range = [-1.0, 1.0]
-    if node_y:
-        y_span = max(node_y) - min(node_y)
-        y_pad = max(0.75, y_span * 0.16)
-        y_range = [min(node_y) - y_pad, max(node_y) + y_pad]
-    else:
-        y_range = [-1.0, 1.0]
+        if node_x:
+            x_span = max(node_x) - min(node_x)
+            x_pad = max(1.0, x_span * 0.18)
+            x_range = [min(node_x) - x_pad, max(node_x) + x_pad]
+        else:
+            x_range = [-1.0, 1.0]
+        if node_y:
+            y_span = max(node_y) - min(node_y)
+            y_pad = max(0.75, y_span * 0.16)
+            y_range = [min(node_y) - y_pad, max(node_y) + y_pad]
+        else:
+            y_range = [-1.0, 1.0]
     fig.update_layout(
         title={
             "text": f"<b>{title}</b> · {len(ordered)} states · {n_edges} edges",
@@ -827,6 +852,33 @@ def _build_graph_figure(
         },
     )
     return fig
+
+
+def _node_positions_from_figure(fig: Any) -> dict[str, tuple[float, float]]:
+    """Return plotted node positions keyed by node id from a graph figure."""
+
+    for trace in getattr(fig, "data", ()):
+        customdata = getattr(trace, "customdata", None)
+        xs = getattr(trace, "x", None)
+        ys = getattr(trace, "y", None)
+        if customdata is None or xs is None or ys is None:
+            continue
+        return {
+            str(node_id): (float(x), float(y))
+            for node_id, x, y in zip(customdata, xs, ys)
+        }
+    return {}
+
+
+def _axis_ranges_from_figure(fig: Any) -> tuple[list[float], list[float]]:
+    """Return x/y ranges from a graph figure's layout."""
+
+    x_range = list(fig.layout.xaxis.range or (-1.0, 1.0))
+    y_range = list(fig.layout.yaxis.range or (-1.0, 1.0))
+    return [float(x_range[0]), float(x_range[1])], [
+        float(y_range[0]),
+        float(y_range[1]),
+    ]
 
 
 def _scale_figure_elements(
@@ -921,6 +973,8 @@ def graph_plot(
     marker_mult: float | None = None,
     text_mult: float | None = None,
     normalize_labels: bool = False,
+    _fixed_positions: dict[str, tuple[float, float]] | None = None,
+    _axis_ranges: tuple[list[float], list[float]] | None = None,
 ):
     """Render a workspace, path, graph, or graph list in one of several formats.
 
@@ -968,6 +1022,8 @@ def graph_plot(
         height=height,
         title=title
         or f"{graph.root_agent_id} · {graph.current().type if graph.current() else 'empty'}",
+        fixed_positions=_fixed_positions,
+        axis_ranges=_axis_ranges,
     )
     if fig is None:
         raise ImportError(
@@ -993,6 +1049,8 @@ def graph_plot_html(
     marker_mult: float | None = None,
     text_mult: float | None = None,
     normalize_labels: bool = False,
+    _fixed_positions: dict[str, tuple[float, float]] | None = None,
+    _axis_ranges: tuple[list[float], list[float]] | None = None,
 ) -> str:
     rendered = graph_plot(
         source,
@@ -1004,6 +1062,8 @@ def graph_plot_html(
         marker_mult=marker_mult,
         text_mult=text_mult,
         normalize_labels=normalize_labels,
+        _fixed_positions=_fixed_positions,
+        _axis_ranges=_axis_ranges,
     )
     if hasattr(rendered, "to_html"):
         return rendered.to_html(include_plotlyjs=include_plotlyjs, full_html=False)
@@ -1035,6 +1095,8 @@ def save_image(
     normalize_labels: bool = True,
     margin: dict | None = None,
     title: str | None = None,
+    _fixed_positions: dict[str, tuple[float, float]] | None = None,
+    _axis_ranges: tuple[list[float], list[float]] | None = None,
 ) -> Path:
     """Render ``source`` to a PNG/SVG/PDF file. Requires ``kaleido``."""
     graph = _resolve_latest_graph(source)
@@ -1049,6 +1111,8 @@ def save_image(
         marker_mult=marker_mult,
         text_mult=text_mult,
         normalize_labels=normalize_labels,
+        _fixed_positions=_fixed_positions,
+        _axis_ranges=_axis_ranges,
     )
     fig.update_layout(margin=margin if margin is not None else _DEFAULT_EXPORT_MARGIN)
     try:
@@ -1088,6 +1152,18 @@ def save_steps(
     out.mkdir(parents=True, exist_ok=True)
     if not graphs:
         return out
+    reference_fig = graph_plot(
+        graphs[-1],
+        "graph",
+        height=height,
+        title="layout reference",
+        element_mult=element_mult,
+        marker_mult=marker_mult,
+        text_mult=text_mult,
+        normalize_labels=normalize_labels,
+    )
+    fixed_positions = _node_positions_from_figure(reference_fig)
+    axis_ranges = _axis_ranges_from_figure(reference_fig)
     total = len(graphs) - 1
     for i, graph in enumerate(graphs):
         current = graph.current()
@@ -1109,6 +1185,8 @@ def save_steps(
             normalize_labels=normalize_labels,
             margin=margin,
             title=title,
+            _fixed_positions=fixed_positions,
+            _axis_ranges=axis_ranges,
         )
     return out
 
@@ -1281,6 +1359,19 @@ def render_html(
     if not graphs:
         raise ValueError("render_html() needs at least one graph")
 
+    reference_fig = graph_plot(
+        graphs[-1],
+        "graph",
+        height=height,
+        title="layout reference",
+        element_mult=element_mult,
+        marker_mult=marker_mult,
+        text_mult=text_mult,
+        normalize_labels=normalize_labels,
+    )
+    fixed_positions = _node_positions_from_figure(reference_fig)
+    axis_ranges = _axis_ranges_from_figure(reference_fig)
+
     slides: list[str] = []
     dots: list[str] = []
     total = len(graphs)
@@ -1297,6 +1388,8 @@ def render_html(
             marker_mult=marker_mult,
             text_mult=text_mult,
             normalize_labels=normalize_labels,
+            _fixed_positions=fixed_positions,
+            _axis_ranges=axis_ranges,
         )
         current = graph.current()
         head_title = (
@@ -1394,6 +1487,18 @@ def save_gif(
     import io
 
     frames: list[Image.Image] = []
+    reference_fig = graph_plot(
+        graphs[-1],
+        "graph",
+        height=height,
+        title="layout reference",
+        element_mult=element_mult,
+        marker_mult=marker_mult,
+        text_mult=text_mult,
+        normalize_labels=normalize_labels,
+    )
+    fixed_positions = _node_positions_from_figure(reference_fig)
+    axis_ranges = _axis_ranges_from_figure(reference_fig)
     total = len(graphs) - 1
     for i, graph in enumerate(graphs):
         current = graph.current()
@@ -1412,6 +1517,8 @@ def save_gif(
             marker_mult=marker_mult,
             text_mult=text_mult,
             normalize_labels=normalize_labels,
+            _fixed_positions=fixed_positions,
+            _axis_ranges=axis_ranges,
         )
         fig.update_layout(
             margin=margin if margin is not None else _DEFAULT_EXPORT_MARGIN
@@ -1458,6 +1565,16 @@ def open_viewer(source: ViewSource, **launch_kwargs: Any):
         raise ValueError("open_viewer needs at least one Graph")
 
     n_steps = len(graphs)
+    reference_fig = _build_graph_figure(
+        graphs[-1],
+        height=420,
+        title=f"step {n_steps} / {n_steps}",
+    )
+    fixed_positions: dict[str, tuple[float, float]] | None = None
+    axis_ranges: tuple[list[float], list[float]] | None = None
+    if reference_fig is not None:
+        fixed_positions = _node_positions_from_figure(reference_fig)
+        axis_ranges = _axis_ranges_from_figure(reference_fig)
 
     def _coerce_step(value: Any) -> int:
         while isinstance(value, (list, tuple)) and len(value) == 1:
@@ -1471,6 +1588,8 @@ def open_viewer(source: ViewSource, **launch_kwargs: Any):
             graph,
             height=420,
             title=f"step {step + 1} / {n_steps}",
+            fixed_positions=fixed_positions,
+            axis_ranges=axis_ranges,
         )
         return fig.to_json() if fig is not None else "{}"
 
@@ -1502,9 +1621,9 @@ def open_viewer(source: ViewSource, **launch_kwargs: Any):
 
     total_nodes = sum(len(g.all_nodes) for g in graphs)
 
-    with gr.Blocks(title="RecursiveFlow Viewer", fill_height=True) as demo:
+    with gr.Blocks(title="recursive-flow viewer", fill_height=True) as demo:
         gr.Markdown(
-            f"### RecursiveFlow Viewer · {n_steps} steps · "
+            f"### recursive-flow viewer · {n_steps} steps · "
             f"{total_nodes} nodes\n"
             "Drag the slider to scrub the graph through time. "
             "Click any node to see its step-local payload + conversation."

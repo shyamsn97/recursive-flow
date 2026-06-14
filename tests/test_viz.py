@@ -23,7 +23,13 @@ from rflow.utils import (
 )
 from rflow.utils.viz import LiveView, code_log, report_md, token_sparkline
 from rflow.utils.viz import _render_rich_tree
-from rflow.utils.viewer import _build_graph_figure, _scale_figure_elements
+from rflow.utils.viewer import (
+    _axis_ranges_from_figure,
+    _build_graph_figure,
+    _node_positions_from_figure,
+    _scale_figure_elements,
+    slice_graphs_at_branch,
+)
 
 KALEIDO_INSTALLED = importlib.util.find_spec("kaleido") is not None
 PIL_INSTALLED = importlib.util.find_spec("PIL") is not None
@@ -112,9 +118,7 @@ def _multi_batch_fanout_graph(
     for aid in first_batch + second_batch:
         states = [UserQuery(id=f"{aid}_q", agent_id=aid, seq=0, content=aid)]
         for seq in range(1, child_chain_len - 1):
-            states.append(
-                LLMOutput(id=f"{aid}_llm_{seq}", agent_id=aid, seq=seq)
-            )
+            states.append(LLMOutput(id=f"{aid}_llm_{seq}", agent_id=aid, seq=seq))
         states.append(
             DoneOutput(
                 id=f"{aid}_done",
@@ -215,6 +219,25 @@ def test_plot_repeated_fanouts_keep_same_row_columns_apart():
         xs.sort()
         for left, right in zip(xs, xs[1:]):
             assert right - left >= 0.7
+
+
+@pytest.mark.skipif(not PLOTLY_INSTALLED, reason="plotly not installed")
+def test_step_frames_can_share_final_viewport_and_positions():
+    graphs = _run_steps()
+    final_fig = _build_graph_figure(graphs[-1])
+    fixed_positions = _node_positions_from_figure(final_fig)
+    axis_ranges = _axis_ranges_from_figure(final_fig)
+
+    early_fig = _build_graph_figure(
+        graphs[0],
+        fixed_positions=fixed_positions,
+        axis_ranges=axis_ranges,
+    )
+
+    assert _axis_ranges_from_figure(early_fig) == axis_ranges
+    early_positions = _node_positions_from_figure(early_fig)
+    for node_id in early_positions:
+        assert early_positions[node_id] == fixed_positions[node_id]
 
 
 @pytest.mark.skipif(not PLOTLY_INSTALLED, reason="plotly not installed")
@@ -332,7 +355,9 @@ def test_transcript_renders_query_action_result_chain():
         def chat(self, *a, **kw):
             return '```repl\ndone("ok")\n```'
 
-    agent = RecursiveFlow(_OneShot(), runtime=LocalRuntime(), config=FlowConfig(max_iterations=2))
+    agent = RecursiveFlow(
+        _OneShot(), runtime=LocalRuntime(), config=FlowConfig(max_iterations=2)
+    )
     graph = agent.start("say ok")
     while not graph.finished:
         graph = agent.step(graph)
@@ -378,6 +403,22 @@ def test_resolve_graphs_loads_workspace_or_path(tmp_path):
     assert from_workspace[-1].result() == "root:child-answer"
     assert from_path[-1].tree() == from_workspace[-1].tree()
     assert len(from_path) == len(from_workspace)
+
+
+def test_slice_graphs_at_branch_starts_at_tagged_node():
+    graphs = _run_steps()
+    target = graphs[-1].nodes[-1]
+    tagged = target.update(branch_id="edited-route")
+    graphs[-1].nodes[-1] = tagged
+
+    sliced = slice_graphs_at_branch(graphs, "edited-route")
+
+    assert sliced == [graphs[-1]]
+
+
+def test_slice_graphs_at_branch_requires_existing_branch():
+    with pytest.raises(ValueError, match="branch id 'missing'"):
+        slice_graphs_at_branch(_run_steps(), "missing")
 
 
 # ── render_html / save_html ──────────────────────────────────────────
@@ -435,7 +476,9 @@ def test_viz_helpers_accept_workspace_and_path(tmp_path):
 
     assert "tok over" in token_sparkline(workspace)
     assert "## Result" in report_md(workspace.root)
-    assert "flow_delegate(name='child', query='do the thing', context='')" in code_log(workspace.root)
+    assert "flow_delegate(name='child', query='do the thing', context='')" in code_log(
+        workspace.root
+    )
 
 
 @pytest.mark.skipif(not PLOTLY_INSTALLED, reason="plotly not installed")
@@ -592,7 +635,14 @@ def test_save_steps_empty_returns_empty_dir(tmp_path):
     reason="needs both kaleido and pillow",
 )
 def test_save_gif_writes_gif_with_magic_bytes(tmp_path):
-    out = save_gif(_run_steps(), tmp_path / "trace.gif", duration=200, width=300, height=240, scale=1.0)
+    out = save_gif(
+        _run_steps(),
+        tmp_path / "trace.gif",
+        duration=200,
+        width=300,
+        height=240,
+        scale=1.0,
+    )
     with open(out, "rb") as fh:
         assert fh.read(6) in (b"GIF87a", b"GIF89a")
 
