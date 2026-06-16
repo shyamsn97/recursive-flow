@@ -1,10 +1,10 @@
 # Prompt Customization
 
-`RecursiveFlow` builds a system prompt from named sections. Most customization should
+`Flow` builds a system prompt from named sections. Most customization should
 derive from the default builder instead of replacing the whole prompt, because
 the default sections carry the REPL protocol, the
 `launch_subagents` delegation rules,
-`CONTEXT`, `SESSION`, and the worked examples that keep recursive execution
+`INPUTS`, `HISTORY`, and the worked examples that keep recursive execution
 well-formed.
 
 Use full replacement only when you want to own that entire protocol yourself.
@@ -46,7 +46,7 @@ The default builder has seven sections, in order:
 
 | Section | Purpose |
 | --- | --- |
-| `role` | Opening contract + REPL namespace (`CONTEXT`, `llm_query_batched`, `launch_subagents`, `SESSION`, `SHOW_VARS`, `print`, `done`). |
+| `role` | Opening contract + REPL namespace (`INPUTS`, `HISTORY`, `llm_query_batched`, `launch_subagents`, `SHOW_VARS`, `print`, `done`). |
 | `strategy` | When to use `llm_query_batched` vs `launch_subagents`, "break down problems", REPL-for-computation with an inline physics example, truncation + long-context guidance. |
 | `format` | REPL block fence rules + tiny inline demo. |
 | `examples` | Five worked recipes (chunked scan, batched chunks, branch on delegate, program-style fanout, parallel fanout). |
@@ -86,11 +86,8 @@ prompt = DEFAULT_BUILDER.section(
     after="final",
 )
 
-agent = rflow.RecursiveFlow(
-    llm_client=llm,
-    workspace=workspace,
-    prompt_builder=prompt,
-)
+agent = rflow.Flow(llm, max_depth=2)
+agent.prompt_builder = prompt
 ```
 
 ### Swap A Single Section
@@ -160,33 +157,29 @@ prompt = (
 
 ## Full System Prompt Replacement
 
-`FlowConfig.system_prompt` bypasses the builder entirely:
+`Flow(system_prompt=...)` bypasses the builder entirely:
 
 ```python
 import rflow
 
-agent = rflow.RecursiveFlow(
-    llm_client=llm,
-    workspace=workspace,
-    config=rflow.FlowConfig(
-        system_prompt="""
+agent = rflow.Flow(
+    llm,
+    system_prompt="""
 You are a Python REPL agent.
 
 - Use exactly one ```repl``` block per assistant message.
 - Use available tools to make progress.
 - Call `done(answer)` exactly once when finished.
 """,
-    ),
 )
 ```
 
-This is the most fragile option. If the prompt omits `launch_subagents`,
-`CONTEXT`, `SESSION`, or the `done(...)` rule, the model will not reliably use
-those features.
+This is the most fragile option. If the prompt omits `launch_subagents`, `INPUTS`, `HISTORY`, or the
+`done(...)` rule, the model will not reliably use those features.
 
 ## Dynamic Prompts
 
-Subclass `RecursiveFlow` when the prompt should depend on the current agent,
+Subclass `Flow` when the prompt should depend on the current agent,
 depth, query, available tools, or project state. The hook receives the
 agent's `Graph` — all run-invariants are flat fields on it
 (`agent_id`, `depth`, `query`, `config`, `model`, …).
@@ -196,7 +189,7 @@ import rflow
 from rflow.prompts.default import DEFAULT_BUILDER
 
 
-class AuditFlow(rflow.RecursiveFlow):
+class AuditFlow(rflow.Flow):
     def build_system_prompt(self, graph: rflow.Graph) -> str:
         extra = (
             "At root depth, produce an executive summary after verification."
@@ -233,134 +226,72 @@ small additions like skills, memory, or project rules. A prompt section can be
 either static text or a function:
 
 ```python
-def section(engine: RecursiveFlow, graph: Graph) -> str:
+def section(flow: rflow.Flow, graph: rflow.Graph) -> str:
     ...
 ```
 
-The signature is intentionally just `engine, graph`. There is no context dict
-and no separate prompt context object. If a section needs workspace artifacts,
+The signature is intentionally just `flow, graph`. There is no context dict
+and no separate prompt context object. If a section needs file-backed skills,
 runtime tools, model registrations, config, or the current agent id, those are
-already reachable from `engine` and `graph`.
+already reachable from `flow` and `graph`.
 
-For example, the built-in tools section is equivalent to this callable section:
+For example, a small tool note can wrap the built-in tools section:
 
 ```python
-def tools_section(engine, graph):
-    baseline = engine.config.max_depth == 0
-    tool_defs = [t for t in engine.runtime.get_tool_defs() if not t.core]
-    lines = [
-        "Tool functions are already available in the REPL namespace; "
-        "do not import them from a `tools` module. Call them directly by name.",
-        "",
-    ]
-    lines += [
-        f"- `{tool_def.name}{tool_def.signature}`: {tool_def.description}"
-        for tool_def in tool_defs
-    ]
-    if len(engine.llm_clients) > 1 and not baseline:
-        lines.append(
-            "\nAvailable models for `launch_subagents([... model=...])` "
-            "and `llm_query_batched(model=...)`:"
-        )
-        for key in sorted(engine.llm_clients):
-            desc = engine.model_descriptions.get(key)
-            lines.append(f"- `{key}`: {desc}" if desc else f"- `{key}`")
-    modules = engine.runtime.available_modules()
-    if modules:
-        lines.append(f"\nPre-imported: `{'`, `'.join(modules)}`")
-    return "\n".join(lines)
+from rflow.prompts import tools_section
+
+
+def careful_tools(flow, graph):
+    return tools_section(flow, graph) + "
+- Prefer read-only tools before write tools."
+
+
+prompt = DEFAULT_BUILDER.section("tools", careful_tools, title="Tools")
 ```
 
-The built-in status section is equivalent to this:
+And a dynamic skills section is just a file reader:
 
 ```python
-def status_section(engine, graph):
-    effective_max = graph.config.get("max_depth", engine.config.max_depth)
-    if effective_max == 0:
-        return (
-            "Baseline mode: no sub-agents available. Do all work directly "
-            "in this REPL."
-        )
+from pathlib import Path
 
-    note = (
-        f"You are at recursion depth **{graph.depth}** of max "
-        f"**{effective_max}**."
-    )
-    if graph.depth == 0:
-        note += STATUS_DEPTH_ROOT
-    elif graph.depth >= effective_max - 1:
-        note += STATUS_DEPTH_NEAR_MAX
-    elif graph.depth > 0:
-        note += STATUS_DEPTH_MID
-    return note
-```
+skill_paths = [
+    Path("skills/careful-research/SKILL.md"),
+    Path("skills/coding-style/SKILL.md"),
+]
 
-And a dynamic skills section becomes a small workspace-artifact reader:
 
-```python
-def skills_section(engine, graph):
-    if engine.workspace is None:
-        return ""
-
-    paths = [
-        "skills/careful-research/SKILL.md",
-        "skills/coding-style/SKILL.md",
-    ]
+def skills_section(flow, graph):
     blocks = []
-    for path in paths:
-        if not engine.workspace.artifacts.exists(path):
+    for path in skill_paths:
+        if not path.exists():
             continue
-        body = engine.workspace.artifacts.read_text(path).strip()
-        blocks.append(f"### `{path}`\n\n{body}")
-    return "\n\n".join(blocks)
+        body = path.read_text(encoding="utf-8").strip()
+        blocks.append(f"### `{path}`
+
+{body}")
+    return "
+
+".join(blocks)
 ```
 
 Then the builder setup stays simple:
 
 ```python
-prompt = (
+flow = rflow.Flow(llm)
+flow.prompt_builder = (
     DEFAULT_BUILDER
     .section("skills", skills_section, title="Skills", before="tools")
     .section("tools", tools_section, title="Tools")
     .section("status", status_section, title="Status")
 )
-
-agent = RecursiveFlow(
-    llm_client=llm,
-    workspace=workspace,
-    runtime=runtime,
-    prompt_builder=prompt,
-)
-```
-
-This also gives a natural place for broader prompt memory:
-
-```python
-def memory_section(engine, graph):
-    if engine.workspace is None:
-        return ""
-
-    sources = {
-        "Coding preferences": "skills.md",
-        "Project soul": "openclaw/soul.md",
-    }
-    blocks = []
-    for description, path in sources.items():
-        if engine.workspace.artifacts.exists(path):
-            body = engine.workspace.artifacts.read_text(path).strip()
-            blocks.append(f"### {description}\n\n[source: `{path}`]\n\n{body}")
-    return "\n\n".join(blocks)
 ```
 
 With callable sections, skills are not an engine config knob. They are ordinary
-workspace artifacts plus a prompt section that decides what to include for the
-current `engine, graph`.
+files plus a prompt section that decides what to include for the current
+`flow, graph`.
 
-See [`examples/basics/skills.py`](../examples/basics/skills.py) for a runnable version. It
-uses a checked-in workspace at
-[`examples/_runs/example-workspaces/skills-demo`](../examples/_runs/example-workspaces/skills-demo)
-with a concrete NumPy linear-algebra `SKILL.md`, then injects that skill through
-a callable `skills` section.
+See [`examples/skills.py`](../examples/skills.py) for a runnable version with a
+concrete NumPy linear-algebra `SKILL.md`.
 
 ## Child-Specific Prompts
 
@@ -373,12 +304,12 @@ results = await launch_subagents([
     {
         "name": "api",
         "query": "Implement src/api.py. Return ONLY JSON {\"files\": [str], \"checks\": [str]}.",
-        "context": api_spec,
+        "inputs": {"spec": api_spec},
     },
     {
         "name": "tests",
         "query": "Implement tests for src/api.py. Return ONLY JSON {\"files\": [str], \"checks\": [str]}.",
-        "context": test_spec,
+        "inputs": {"spec": test_spec},
     },
 ])
 ```

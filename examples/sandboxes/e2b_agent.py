@@ -1,4 +1,7 @@
-"""Run a platformer-building RecursiveFlow task inside an E2B Sandbox.
+"""Run a platformer-building Flow task inside an E2B Sandbox.
+
+Each agent's code runs remotely in an E2B Sandbox (via an :class:`E2BRuntime`);
+files are written with plain Python inside the sandbox working directory.
 
 Setup:
     pip install -e ".[openai,e2b]"
@@ -21,11 +24,11 @@ if str(REPO_ROOT) not in sys.path:
 
 import rflow  # noqa: E402
 from rflow.runtime.sandbox.e2b import E2BRuntime  # noqa: E402
-from rflow.tools import FILE_TOOLS  # noqa: E402
 
 PLATFORMER_QUERY = """\
 Build a simple 2D side-scrolling platformer in plain HTML/CSS/JS under output/.
-No build tools, no libraries, no ES modules.
+No build tools, no libraries, no ES modules. Write files with plain Python
+(e.g. `open(path, "w").write(...)`) in the sandbox.
 
 Files:
 - output/index.html
@@ -39,14 +42,14 @@ gravity, platform collision, scrolling camera, and restart.
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run RecursiveFlow inside E2B.")
+    parser = argparse.ArgumentParser(description="Run Flow inside E2B.")
     parser.add_argument("--model", default="gpt-5")
     parser.add_argument(
         "--fast-model",
         default="gpt-5-mini",
         help="Cheaper model exposed to delegates as `model='fast'`.",
     )
-    parser.add_argument("--max-iterations", type=int, default=5)
+    parser.add_argument("--max-iters", type=int, default=5)
     parser.add_argument(
         "--max-depth",
         type=int,
@@ -73,54 +76,30 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_platformer_task(
-    runtime: E2BRuntime,
-    *,
-    model: str,
-    fast_model: str,
-    max_iterations: int,
-    max_depth: int,
-) -> None:
-    agent = rflow.RecursiveFlow(
-        llm_client=rflow.OpenAIClient(model=model),
-        runtime=runtime,
-        runtime_factory=runtime.clone,
-        config=rflow.FlowConfig(max_iterations=max_iterations, max_depth=max_depth),
-        llm_clients={
-            "fast": {
-                "model": rflow.OpenAIClient(model=fast_model),
-                "description": f"cheaper/faster model ({fast_model}); prefer for delegated subtasks.",
-            },
-        },
-    )
-    print(agent.run(PLATFORMER_QUERY))
-
-
 def main() -> None:
     args = parse_args()
-    workspace = rflow.Workspace.create(
-        REPO_ROOT / "examples" / "_runs" / "example-workspaces" / "sandbox-e2b"
-    )
     setup_commands = [] if args.skip_setup else args.setup_command
+
+    # One sandbox per agent; created lazily when the agent first runs code.
     runtime = E2BRuntime(
-        workspace=workspace,
         template=args.template,
         timeout=args.sandbox_timeout,
         remote_workdir=args.remote_workdir,
         repl_timeout=args.repl_timeout,
         setup_commands=setup_commands,
     )
-    runtime.register_tools(FILE_TOOLS)
+
+    flow = rflow.Flow(
+        rflow.OpenAIClient(model=args.model),
+        llm_clients={"fast": rflow.OpenAIClient(model=args.fast_model)},
+        runtime=runtime,
+        max_depth=args.max_depth,
+        max_iters=args.max_iters,
+    )
     try:
-        run_platformer_task(
-            runtime,
-            model=args.model,
-            fast_model=args.fast_model,
-            max_iterations=args.max_iterations,
-            max_depth=args.max_depth,
-        )
+        print(flow.run(PLATFORMER_QUERY))
     finally:
-        runtime.close()
+        flow.close()
 
 
 if __name__ == "__main__":

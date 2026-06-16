@@ -14,8 +14,8 @@ all through the same clean coding interface.
 
 **recursive-flow** turns that recursive run into a live execution graph. Every
 query, action, observation, child call, wait, resume, and result is a
-typed node you can inspect, step, retrace, resume, fork, and branch into
-new workspaces. It is for people building long-context agents, recursive
+typed node you can inspect, step, retrace, save, load, fork, and branch into
+new run directories. It is for people building long-context agents, recursive
 coding agents, and research loops where the execution trace needs to be
 as controllable as the final answer is useful. Each `start` / `step`
 returns a fresh `Graph` snapshot: a recursive structure where
@@ -55,8 +55,8 @@ this:
 
 ```python
 results = await launch_subagents([
-    {"name": "search", "query": "Find evidence", "context": chunk_a},
-    {"name": "verify", "query": "Check the answer", "context": chunk_b},
+    {"name": "search", "query": "Find evidence", "inputs": {"chunk": chunk_a}},
+    {"name": "verify", "query": "Check the answer", "inputs": {"chunk": chunk_b}},
 ])
 done(combine(results))
 ```
@@ -119,136 +119,118 @@ including `ruff check .`, then installs the package.
 
 ## Quick start
 
-This example is all you need for a simple and interpretable recursive coding agent. see [notebook](./examples/notebooks/coding_agent.ipynb)
+This example builds a simple coding agent with file tools in a local working
+directory. See [`examples/notebooks/coding_agent.ipynb`](./examples/notebooks/coding_agent.ipynb)
+for the notebook version.
 
 ```python
+from pathlib import Path
+
 import rflow
-from rflow.runtime.local import LocalRuntime
 from rflow.tools import FILE_TOOLS
 from rflow.utils.viewer import open_viewer
 
-workspace = rflow.Workspace.create("./myproject")
-runtime = LocalRuntime(workspace=workspace)
-
-# Sandbox agent code inside Docker instead: drop-in replacement,
-# same interface.  Build the image once with `docker build -t recursive-flow:local .`
-# from the repo root; see docs/runtimes.md and docs/security.md.
-#
-# from rflow.runtime.docker import DockerRuntime
-# runtime = DockerRuntime("recursive-flow:local", workspace=workspace)
-
+workdir = Path("examples/_runs/quickstart")
+runtime = rflow.LocalRuntime(working_directory=workdir)
 runtime.register_tools(FILE_TOOLS)
 
-agent = rflow.RecursiveFlow(
-    llm_client=rflow.OpenAIClient("gpt-5"),
+# Sandbox agent code inside Docker instead: drop-in replacement, same interface.
+# Build the image once with `docker build -t recursive-flow:local .`.
+# runtime = rflow.DockerRuntime(
+#     "recursive-flow:local",
+#     working_directory=workdir,
+#     mounts={workdir: "/workspace"},
+#     workdir="/workspace",
+# )
+# runtime.register_tools(FILE_TOOLS)
+
+agent = rflow.Flow(
+    rflow.OpenAIClient(model="gpt-5"),
     runtime=runtime,
-    workspace=workspace,
-    config=rflow.FlowConfig(max_depth=2),
-    llm_clients={ # additional llm clients to be chosen to delegate
-        "fast": {
-            "model": rflow.OpenAIClient("gpt-5-mini"),
-            "description": "Cheap model for smaller subtasks",
-        },
-    },
+    max_depth=2,
+    max_iters=20,
+    child_max_iters=20,
+    llm_clients={"fast": rflow.OpenAIClient(model="gpt-5-mini")},
 )
 
-query = "Build a python text-based adventure game with combat and inventory."
+query = "Build a Python text-based adventure game with combat and inventory."
 graph = agent.start(query)
 while not graph.finished:
     graph = agent.step(graph)
     print(graph.tree())
 
 print(graph.result())
-open_viewer(workspace)
+graph.save(workdir / "graph")
+open_viewer(workdir / "graph")
 ```
 
-By default, root agents are not capped by an iteration count
-(`max_iterations=None`), while delegated children get a smaller cap
-(`child_max_iterations=20`). Set `max_iterations` when you want a total root
-run cap, and set `child_max_iterations` when you want a different default for
-children.
-
-All model calls for a run share one scheduler channel. Normal agent LLM
-turns and `llm_query_batched(...)` both respect the same
-`FlowConfig.llm_max_concurrency` cap, and usage is recorded per request
-rather than read from shared client state. `llm_query_batched(...)` also
-accepts common sampling kwargs: `temperature`, `top_p`, `max_tokens`, and
-`stop`.
+`Flow` is configured directly: `max_depth`, `max_iters`, `child_max_iters`,
+`max_concurrency`, `llm_max_concurrency`, `max_budget`, `max_messages`, and
+`eager_children` are constructor kwargs. Normal agent LLM turns and
+`llm_query_batched(...)` share the same `LLMChannel`, so concurrency and token
+usage accounting are centralized.
 
 To let child agents drain work-conservingly after a parent reaches its
 delegation wait (`await launch_subagents([...])`), enable `eager_children`:
 
 ```python
-agent = RecursiveFlow(
-    llm_client=OpenAIClient("gpt-5"),
+agent = rflow.Flow(
+    rflow.OpenAIClient(model="gpt-5"),
     runtime=runtime,
-    config=FlowConfig(
-        max_depth=2,
-        child_max_iterations=20,
-        max_concurrency=8,
-        llm_max_concurrency=4,
-        eager_children=True,
-    ),
+    max_depth=2,
+    child_max_iters=20,
+    max_concurrency=8,
+    llm_max_concurrency=4,
+    eager_children=True,
 )
 ```
 
-With `eager_children=False`, a fast child that finishes `task_1` waits for
-the rest of that parallel step before it can start `task_2`. With
-`eager_children=True`, the fast child's `task_2` can start while a slow
-sibling is still running `task_1`. See
-[`examples/control/delegation/eager_children.py`](./examples/control/delegation/eager_children.py) for a
-deterministic timestamped demo.
+With `eager_children=False`, a fast child that finishes `task_1` waits for the
+rest of that parallel step before it can start `task_2`. With
+`eager_children=True`, the fast child's `task_2` can start while a slow sibling
+is still running `task_1`. See
+[`examples/control/delegation/eager_children.py`](./examples/control/delegation/eager_children.py)
+for a deterministic timestamped demo.
 
-`Workspace.create("./myproject")` writes a debuggable workspace as it runs:
-`session/<agent-id>/` holds the per-agent node log (`session.jsonl`,
-`agent.json`, `latest.json`) plus `transcript.json` — the exact
-turn-by-turn conversation each agent's LLM saw, with per-message metadata
-(model, token counts, timing) for auditing or replay. `graph.json` is the
-compact graph manifest for the whole run, and `context/<agent-id>/` holds
-payloads exposed as `CONTEXT`.
-
-User-controlled workspace files live beside that engine state. Use
-`workspace.artifacts` for safe, root-relative reads/writes:
-
-```python
-workspace.artifacts.write_text("skills/numpy-linear-algebra/SKILL.md", skill_md)
-workspace.artifacts.read_text("reports/summary.md")
-```
-
-The workspace is the saved run: reopen it later with
-`Workspace.open_path("./myproject").load_graph()` or `open_viewer("./myproject")`.
+A saved run is a directory rooted at `graph.json` plus `agents/` logs. Reopen it
+later with `Graph.load(path)` or `open_viewer(path)`.
 
 ## Drop-in `LLMClient`
 
-`RecursiveFlow` implements `LLMClient`, so it is a drop-in replacement for any LLM.
+`Flow` implements `LLMClient`, so it is a drop-in replacement for any raw LLM.
 
 ```python
-def ask(llm: LLMClient, q: str) -> str:
+def ask(llm: rflow.LLMClient, q: str) -> str:
     return llm.chat([{"role": "user", "content": q}])
 
-ask(OpenAIClient("gpt-4o-mini"), "2+2?")             # one LLM call
-ask(RecursiveFlow(llm_client=..., runtime=...), "2+2?")    # full agent, same return type
+ask(rflow.OpenAIClient(model="gpt-4o-mini"), "2+2?")  # one LLM call
+ask(rflow.Flow(rflow.OpenAIClient(model="gpt-4o-mini")), "2+2?")  # full agent loop
 ```
 
-Nest agents by passing one `RecursiveFlow` as another's `llm_client`.
+Nest agents by passing one `Flow` as another's `llm`. See
+[`examples/drop_in_llm.py`](examples/drop_in_llm.py).
 
 ## Prompt sections and skills
 
 The default system prompt is built from named sections. Sections can be static
-text or callables with the simple signature `section(engine, graph) -> str`.
-That makes project memory or skills ordinary workspace artifacts plus a prompt
-section that decides when to include them:
+text or callables with the signature `section(flow, graph) -> str`. That makes
+project memory or skills ordinary files plus a prompt section that decides when
+to include them:
 
 ```python
-def skills_section(engine, graph):
-    if engine.workspace is None:
-        return ""
-    path = "skills/numpy-linear-algebra/SKILL.md"
-    if not engine.workspace.artifacts.exists(path):
-        return ""
-    return engine.workspace.artifacts.read_text(path)
+from pathlib import Path
 
-prompt = DEFAULT_BUILDER.section(
+from rflow.prompts import DEFAULT_BUILDER
+
+skill_path = Path("skills/numpy-linear-algebra/SKILL.md")
+
+def skills_section(flow, graph):
+    if not skill_path.exists():
+        return ""
+    return skill_path.read_text()
+
+flow = rflow.Flow(rflow.OpenAIClient(model="gpt-4o-mini"))
+flow.prompt_builder = DEFAULT_BUILDER.section(
     "skills",
     skills_section,
     title="Skills",
@@ -256,9 +238,7 @@ prompt = DEFAULT_BUILDER.section(
 )
 ```
 
-See [`examples/basics/skills.py`](examples/basics/skills.py), which uses the checked-in
-workspace [`examples/_runs/example-workspaces/skills-demo`](examples/_runs/example-workspaces/skills-demo)
-and a concrete NumPy linear-algebra `SKILL.md`.
+See [`examples/skills.py`](examples/skills.py) for a runnable version.
 
 ## Step and inspect
 
@@ -341,55 +321,58 @@ nodes. See
 [`docs/injections.md`](docs/injections.md) and
 [`examples/control/controller_injection.py`](examples/control/controller_injection.py).
 
-## Workspace, Branch, Replay
+## Save, Load, Rewind, Branch
 
-When you run with a `Workspace`, the workspace directory is the durable run:
-
-```python
-workspace = Workspace.open_path("./myproject")
-graph = workspace.load_graph()
-agent = RecursiveFlow(llm_client=AnotherModel(), workspace=workspace, ...)
-while not graph.finished:
-    graph = agent.step(graph)
-```
-
-To branch into an isolated workspace with its own session and context:
+`Graph` is the durable run object. Save a run directory with `graph.save(...)`,
+reopen it with `Graph.load(...)`, and keep step snapshots when you want rewind or
+live checkpointing:
 
 ```python
-alt = workspace.fork(new_dir="./runs/repair")
-alt_agent = RecursiveFlow(llm_client=..., workspace=alt, ...)
+history = [agent.start(query)]
+while not history[-1].finished:
+    history.append(agent.step(history[-1]))
+    history[-1].save("runs/deep_research")  # overwrites the latest checkpoint
+
+latest = rflow.Graph.load("runs/deep_research")
 ```
 
-Forks copy only core engine state by default. Pass
-`include_artifacts=True` when the branch should also carry user files such as
-skills, reports, fixtures, or project memory.
+Branch by copying or loading a saved graph and continuing it with a `Flow`:
 
-See [`examples/basics/showcase.py`](examples/basics/showcase.py) for workspace persistence,
-session reads, time travel through `list[Graph]`, and gym-style stepping in one
-file.
+```python
+branch = latest.copy(deep=True)
+while not branch.finished:
+    branch = agent.step(branch)
+branch.save("runs/deep_research_repair")
+```
+
+Controller edits use the same graph surface (`replace_node`, `truncate_after`,
+`inject`, `retrace_steps`) and then continue through `agent.step(graph)`. See
+[`examples/showcase.py`](examples/showcase.py), [`docs/control.md`](docs/control.md),
+and [`docs/injections.md`](docs/injections.md).
 
 ## Rich visualization
 
 See [notebook](./examples/notebooks/viz_walkthrough.ipynb) for a full showcase of vizualization utilities.
 
 Because the run is a typed graph, every visualization is just a render of
-that graph. Normal runs are viewed from their workspace.
+that graph. View either a saved run directory, a single `Graph`, or a list of
+step snapshots.
 
 
 ### Gradio viewer
 
 ![](docs/static/gradio_ui.png)
 
-`open_viewer(workspace)` launches a small browser app for inspecting a
-saved workspace — tree, summary, and raw node JSON side by side:
+`open_viewer(source)` launches a small browser app for inspecting a saved run
+directory, a graph snapshot, or an in-memory trace:
 
 ```python
 from rflow.utils.viewer import open_viewer
 
-open_viewer("./myproject")
+open_viewer("runs/deep_research")
 ```
 
-From the CLI: `recursive-flow view ./myproject --port 7861`.
+From the CLI: `recursive-flow view runs/deep_research --port 7861`.
 
 ### Live terminal tree
 
@@ -497,11 +480,10 @@ Quick start:
 import rflow
 from rflow.utils import save_image, save_steps, save_html, save_gif
 
-workspace = "./myproject"
-graph = rflow.Workspace.open_path(workspace).load_graph()
+graph = rflow.Graph.load("runs/deep_research")
 
-save_image(workspace, "run_final.png")           # latest workspace snapshot
-save_html(workspace, "viewer.html", title="run") # standalone viewer
+save_image(graph, "run_final.png")
+save_html(graph, "viewer.html", title="run")
 
 # If you kept an in-memory history list, playback exports still work:
 save_steps(graphs, "frames/")                    # one PNG per step
@@ -625,26 +607,21 @@ marker size. Override with `--element-mult`, `--marker-mult`, or
 
 ## DSPy Adapter
 
-`RecursiveFlowLM` lets DSPy use an `RecursiveFlow` agent anywhere it expects a
-language model:
+`RecursiveFlowLM` lets DSPy use a `Flow` agent anywhere it expects a language
+model:
 
 ```python
-from pathlib import Path
-
 import dspy
 import rflow
-
 from rflow.integrations.dspy import RecursiveFlowLM
-from rflow.runtime.local import LocalRuntime
 
-workspace = rflow.Workspace.create(Path("examples/_runs/example-workspaces/dspy-workspace"))
-agent = rflow.RecursiveFlow(
-    llm_client=rflow.OpenAIClient("gpt-4o-mini"),
-    runtime=LocalRuntime(workspace=workspace),
-    config=rflow.FlowConfig(max_depth=1, max_iterations=5),
+flow = rflow.Flow(
+    rflow.OpenAIClient(model="gpt-4o-mini"),
+    max_depth=1,
+    max_iters=5,
 )
 
-dspy.configure(lm=RecursiveFlowLM(agent, model="recursive-flow/gpt-4o-mini"))
+dspy.configure(lm=RecursiveFlowLM(flow, model="recursive-flow/gpt-4o-mini"))
 qa = dspy.ChainOfThought("question -> answer")
 print(qa(question="What is 17 * 23?").answer)
 ```
@@ -656,35 +633,36 @@ version.
 ## Examples
 
 Run the offline smoke suite with `python examples/run_examples.py`.
-Add `--include-optional`, `--include-live`, `--include-sandbox`,
-or `--include-manual` as needed. Most live examples share flags like
-`--no-viz`, `--docker-image recursive-flow:local`, `--max-depth`, and
-`--max-iterations`; see [`examples/README.md`](examples/README.md).
+Add `--include-optional`, `--include-live`, `--include-sandbox`, or
+`--include-manual` as needed. Most live examples share flags like `--no-viz`,
+`--docker-image recursive-flow:local`, `--max-depth`, and `--max-iters`; see
+[`examples/README.md`](examples/README.md).
 
 | Example | What it shows |
 |---|---|
-| [`showcase.py`](examples/basics/showcase.py) | `Graph` snapshots, workspace persistence, session reads, time travel, gym-style stepping. |
-| [`structured_output.py`](examples/basics/structured_output.py) | Validate root and delegated child results with Pydantic and JSON Schema output contracts. |
-| [`drop_in_llm.py`](examples/basics/drop_in_llm.py) | `RecursiveFlow` as an `LLMClient`. Nested agents. |
-| [`dspy_drop_in.py`](examples/providers/dspy_drop_in.py) | Use an `RecursiveFlow` agent as the LM behind a DSPy program. |
-| [`mcp_weather.py`](examples/providers/mcp_weather.py) | Start a local MCP weather server backed by Open-Meteo, delegate city forecasts, and combine the packing advice. |
+| [`showcase.py`](examples/showcase.py) | Functional stepping, snapshots, save/load, and live terminal visualization. |
+| [`structured_output.py`](examples/structured_output.py) | Root and child results validated with JSON Schema / Pydantic. |
+| [`drop_in_llm.py`](examples/drop_in_llm.py) | `Flow` as an `LLMClient`, including nested flows. |
+| [`skills.py`](examples/skills.py) | On-disk skill files loaded through a dynamic prompt section. |
+| [`dspy_drop_in.py`](examples/providers/dspy_drop_in.py) | Use a `Flow` agent as the LM behind a DSPy program. |
+| [`mcp_weather.py`](examples/providers/mcp_weather.py) | Start a local MCP weather server, delegate city forecasts, and combine advice. |
 | [`tinker_agent.py`](examples/providers/tinker_agent.py) | Run the live terminal graph view with `TinkerClient` inference. |
-| [`sandboxes/`](examples/sandboxes/) | Build a small web app whose Python code runs inside Modal, E2B, and Daytona sandboxes. |
-| [`use_cases/coding_agent/agent.py`](examples/use_cases/coding_agent/agent.py) | Interactive coding agent that writes and edits files. |
-| [`needle_haystack.py`](examples/use_cases/needle_haystack.py) | Needle-in-a-haystack over a massive in-memory `CONTEXT`, using parallel child chunks. |
-| [`needle_haystack_filesystem.py`](examples/use_cases/needle_haystack_filesystem.py) | Needle-in-a-haystack across many files with custom tools and `runtime_factory`. |
-| [`summarizer.py`](examples/use_cases/summarizer.py) | Recursive map-reduce summarization over a long document — `launch_subagents` fan-out + stateful combine. |
+| [`sandboxes/`](examples/sandboxes/) | Build a small web app while Python code runs inside Modal, E2B, or Daytona. |
+| [`coding/agent.py`](examples/coding/agent.py) | Interactive coding agent that writes and edits files in a working directory. |
+| [`needle/haystack.py`](examples/needle/haystack.py) | Needle-in-a-haystack over a massive in-memory `INPUTS["haystack"]`. |
+| [`needle/filesystem.py`](examples/needle/filesystem.py) | Needle-in-a-haystack across many files with `FILE_TOOLS` and runtime working directories. |
+| [`summarizer.py`](examples/summarizer.py) | Recursive map-reduce summarization over a long document. |
 | [`eager_children.py`](examples/control/delegation/eager_children.py) | `eager_children=True` vs `False` — how child scheduling overlaps. |
-| [`control/injection/`](examples/control/injection/) | Supervisor-injection demo: generate a structured word-search workspace, fork it, replace supervising nodes, sync each edited graph to the branch workspace, and validate the typed result. |
-| [`fork_repair.py`](examples/control/branching/fork_repair.py) | Fork a workspace into independent repair branches and run tests in each. |
-| [`best_of_n.py`](examples/control/branching/best_of_n.py) | Run N independent workspace branches and pick the best result. |
-| [`use_cases/autoresearch/`](examples/use_cases/autoresearch/) | Karpathy-style hill-climbing research loop with custom `@tool`s and delegation. |
+| [`control/injection/`](examples/control/injection/) | Generate a baseline run, edit copies with graph injection/replacement, and continue variants. |
+| [`fork_repair.py`](examples/control/branching/fork_repair.py) | Fork graph/workdir snapshots into independent repair branches and compare results. |
+| [`best_of_n.py`](examples/control/branching/best_of_n.py) | Run N independent branches and pick the best result. |
+| [`autoresearch/`](examples/autoresearch/) | Karpathy-style hill-climbing research loop with custom `@tool`s and delegation. |
 | [`graph/`](examples/graph/) | Offline tour of the `Graph` API: query, navigate, mutate, save/load, timeline retrace, fork, render. |
 | [`run_examples.py`](examples/run_examples.py) | Manifest-driven smoke runner for offline, optional, live, sandbox, and manual examples. |
-| [`view_demo.py`](examples/basics/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
-| [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, and inspect the workspace/viewer. Requires a live LLM. |
-| [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | Every visualization against the saved fixture: inline tree, Plotly graph, HTML stepper, topology renders (mermaid/dot/d2/sequence), step-indexed timeline, per-node detail, cost & reports, run-vs-run comparison, CLI equivalents. |
-| [`notebooks/node_basics.ipynb`](examples/notebooks/node_basics.ipynb) | `Graph` query API tour — `graph[aid]`, `graph.all_nodes`, `graph.all_nodes.find`, `graph.all_nodes.where`, `graph.all_nodes.results`/`errors`, per-agent tokens, `session.load_graph`, node streaming with `tee` / `json_logs`. |
+| [`view_demo.py`](examples/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |
+| [`notebooks/coding_agent.ipynb`](examples/notebooks/coding_agent.ipynb) | Build the agent, run the boids task end-to-end, and inspect the saved run/viewer. |
+| [`notebooks/viz_walkthrough.ipynb`](examples/notebooks/viz_walkthrough.ipynb) | Visualization helpers against a saved fixture. |
+| [`notebooks/node_basics.ipynb`](examples/notebooks/node_basics.ipynb) | `Graph` query API tour. |
 
 ## Benchmarks
 
@@ -731,7 +709,7 @@ scaling / label-normalization flags (`--marker-mult`, `--text-mult`,
 - [~] `ModalRuntime` / `E2BRuntime` / `DaytonaRuntime` — full support: native SDK file transfer, real-sandbox CI, depth>1 delegation, heavier example
 - [~] Depth × breadth sweep (accuracy vs `max_depth`) on an OOLONG/BABILong subset
 - [ ] [RAO library module](docs/research/rao_implementation_plan.md): `rflow.rao` rollout collection, per-node rewards, leave-one-out advantages, depth weighting, trainer export
-- [ ] [DeLM-style coordination](docs/research/delm_vs_rlmflow.md): shared task queue, verified shared context, multi-worker coordinator over `RecursiveFlow` graphs
+- [ ] [DeLM-style coordination](docs/research/delm_vs_rlmflow.md): shared task queue, verified shared context, multi-worker coordinator over `Flow` graphs
 - [ ] OOLONG, LongBench-v2, CodeQA, SWE-bench benchmarks
 
 ## Docs
@@ -741,22 +719,20 @@ in [`docs/internals.md`](docs/internals.md). Research notes live under
 [`docs/research/`](docs/research/).
 
 - [**Internals**](docs/internals.md): deep reference — engine
-  architecture, step lifecycle (`act` → `apply_one`), the REPL `await`
-  protocol, resume semantics, cold-start replay, persistence, and the
-  full `RecursiveFlow` override surface. Start here if you want to subclass
-  the engine.
+  architecture, step lifecycle, REPL `await` protocol, runtime backends,
+  graph persistence, and extension seams. This document is being refreshed
+  after the `Flow`/`Graph` rewrite.
 - [Blog post](docs/blog.md): long-form pitch — why recursive language
   models, why graphs over flat traces, full needle-in-a-haystack
   walkthrough with the same exports the CLI ships.
 - [Positioning](docs/positioning.md): when to use recursive-flow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
-- [Control](docs/control.md): step loop, workspace resume, rewind,
-  forks, `CONTEXT.read()` / slices, `launch_subagents`, inline-first
-  strategy, custom tools.
+- [Control](docs/control.md): step loop, save/load resume, rewind,
+  forks, `INPUTS`, `launch_subagents`, inline-first strategy, custom tools.
 - [Node injection](docs/injections.md): append typed controller events to a
   running graph and commit them through `agent.step(graph)`.
 - [Observability](docs/observability.md): querying the `Graph`,
-  workspace layout, export helpers, live tree, gantt, topology
+  run layout, export helpers, live tree, gantt, topology
   exports, Gradio viewer, CLI.
 - [Runtimes](docs/runtimes.md): `Runtime` protocol, shipped runtimes
   (Local / Docker / Modal / E2B / Daytona), writing your own.

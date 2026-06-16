@@ -1,14 +1,14 @@
-"""Execution pools for running tasks in parallel.
+"""Execution pools for running step tasks in parallel.
 
 A pool has a barrier method, ``execute(tasks) -> results``, and a dynamic
-method, ``run_until_idle(tasks, refill) -> results``. In both cases *tasks*
-is a list of ``(id, callable)`` pairs and *results* is a ``dict[str, Any]``
-mapping IDs to return values.
+method, ``run_until_idle(tasks, refill) -> results``. In both cases *tasks* is a
+list of ``(id, callable)`` pairs and *results* is a ``dict[str, Any]`` mapping
+ids to return values.
 
-Pass a pool to ``RecursiveFlow(pool=...)``. If you pass a plain callable instead
-of a Pool instance, it gets wrapped in ``CallablePool`` automatically.
-If no pool is passed, ``FlowConfig.max_concurrency`` selects
-``ThreadPool``; otherwise the engine uses ``SequentialPool``.
+Pass a pool to ``Flow(pool=...)``. A plain callable is wrapped in
+``CallablePool`` automatically. The work-conserving ``run_until_idle`` is what
+``eager_children`` scheduling rides on: as each task finishes it can enqueue
+newly-runnable descendants without waiting for the whole wave.
 """
 
 from __future__ import annotations
@@ -27,29 +27,35 @@ class Pool(ABC):
 
     @abstractmethod
     def execute(self, tasks: list[Task]) -> dict[str, Any]:
-        """Run callables in parallel, keyed by ID."""
+        """Run callables in parallel, keyed by id."""
 
     def run_until_idle(self, tasks: list[Task], refill: Refill) -> dict[str, Any]:
         """Run tasks and let completions enqueue follow-up tasks.
 
-        The base implementation preserves compatibility with execute-only
-        custom pools by running in barrier batches. Pools with native
-        as-completed support should override this for true work-conserving
-        refill.
+        The base implementation runs in barrier batches so execute-only custom
+        pools still work. Pools with native as-completed support override this
+        for true work-conserving refill.
         """
         results: dict[str, Any] = {}
         pending = list(tasks)
         while pending:
-            batch_results = self.execute(pending)
+            batch = self.execute(pending)
             pending = []
-            for task_id, result in batch_results.items():
+            for task_id, result in batch.items():
                 results[task_id] = result
                 pending.extend(refill(task_id, result, set()))
         return results
 
 
+class SequentialPool(Pool):
+    """Run everything one at a time — useful for testing and debugging."""
+
+    def execute(self, tasks: list[Task]) -> dict[str, Any]:
+        return {task_id: fn() for task_id, fn in tasks}
+
+
 class ThreadPool(Pool):
-    """Run steps concurrently in a ThreadPoolExecutor."""
+    """Run steps concurrently in a long-lived ``ThreadPoolExecutor``."""
 
     def __init__(self, max_concurrency: int = 8) -> None:
         self.max_concurrency = max_concurrency
@@ -68,30 +74,42 @@ class ThreadPool(Pool):
                 result = future.result()
                 results[task_id] = result
                 active_ids = set(futures.values())
-                for new_task_id, fn in refill(task_id, result, active_ids):
-                    futures[self.executor.submit(fn)] = new_task_id
+                for new_id, fn in refill(task_id, result, active_ids):
+                    futures[self.executor.submit(fn)] = new_id
                 break
         return results
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         self.executor.shutdown(wait=False)
 
 
-class SequentialPool(Pool):
-    """Runs everything one at a time — useful for testing and debugging."""
-
-    def execute(self, tasks: list[Task]) -> dict[str, Any]:
-        return {task_id: fn() for task_id, fn in tasks}
-
-
 class CallablePool(Pool):
-    """Wrap a plain function as a pool with .execute()."""
+    """Wrap a plain ``execute``-style function as a pool."""
 
-    def __init__(self, fn) -> None:
+    def __init__(self, fn: Callable[[list[Task]], dict[str, Any]]) -> None:
         self.fn = fn
 
     def execute(self, tasks: list[Task]) -> dict[str, Any]:
         return self.fn(tasks)
 
 
-__all__ = ["CallablePool", "Pool", "Refill", "SequentialPool", "Task", "ThreadPool"]
+def create_pool(pool: Any, *, max_concurrency: int) -> Pool:
+    """Resolve the ``Flow(pool=...)`` argument into a :class:`Pool`."""
+    if pool is None:
+        return ThreadPool(max_concurrency) if max_concurrency > 1 else SequentialPool()
+    if isinstance(pool, Pool):
+        return pool
+    if callable(pool):
+        return CallablePool(pool)
+    raise TypeError("pool must be a Pool, a callable, or None")
+
+
+__all__ = [
+    "CallablePool",
+    "Pool",
+    "Refill",
+    "SequentialPool",
+    "Task",
+    "ThreadPool",
+    "create_pool",
+]

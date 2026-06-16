@@ -1,62 +1,82 @@
 # Runtimes
 
-A `Runtime` executes agent Python. The actual execution and generator
-suspension live in `rflow.runtime.repl.REPL`; a `Runtime` subclass
-only decides how to talk to one.
+A `Runtime` is the user-facing object you pass to `Flow(runtime=...)`. It owns:
+
+- the `working_directory` where agent code runs;
+- tools registered with `register_tool(...)` / `register_tools(...)`;
+- the backend factory that mints one `ReplBackend` per agent.
+
+The old `repl_factory` pattern is gone. The runtime is the factory.
 
 ## Protocol
 
-Two abstract methods:
+Subclass `Runtime` and implement `open(agent)`:
 
 ```python
 class Runtime(ABC):
-    @abstractmethod
-    def send(self, msg: dict) -> None: ...
+    def __init__(self, working_directory: str | Path | None = None): ...
 
     @abstractmethod
-    def recv(self) -> dict: ...
+    def open(self, agent: Graph) -> ReplBackend: ...
 ```
 
-Everything else — `execute`, `start_code`, `resume_code`, `inject`,
-tool proxy loop, workspace chdir — is in the base class. Messages are
-JSON dicts; the wire format is stable.
-
-Commands: `run`, `resume`, `inject`, `inject_proxy`, `inject_object_proxy`.
-Responses: `output`, `suspended`, `proxy`, `value`, `error`.
+A `ReplBackend` supports `start(code)`, `resume(value)`, `close()`, and exposes
+its `namespace` / `env`. `LocalRuntime` returns an in-process `REPL`.
+`DockerRuntime` and sandbox runtimes return `RemoteRepl` backends that speak JSON
+with `python -m rflow.runtime.repl_server`.
 
 ## Shipped runtimes
 
 | Runtime | What it does |
 |---|---|
-| `LocalRuntime` | In-process. `send`/`recv` dispatch straight to an in-process `REPL`. |
-| `DockerRuntime(image, ...)` | Run `python -m rflow.runtime.repl` inside a fresh `docker run -i --rm` container; talk to it over stdio. |
-| `sandbox.ModalRuntime` | Run the REPL inside a Modal container. |
-| `sandbox.E2BRuntime` | Run the REPL inside an E2B Sandbox. |
-| `sandbox.DaytonaRuntime` | Run the REPL inside a Daytona Sandbox. |
+| `LocalRuntime(working_directory=...)` | In-process Python REPL. Defaults to the current process cwd. |
+| `DockerRuntime(image, ...)` | Runs `python -m rflow.runtime.repl_server` in `docker run -i --rm` and talks over stdio. |
+| `ModalRuntime` | Runs the REPL inside a Modal sandbox. |
+| `E2BRuntime` | Runs the REPL inside an E2B sandbox. |
+| `DaytonaRuntime` | Runs the REPL inside a Daytona sandbox. |
 
-Need a non-Docker stdio transport (`ssh`, `kubectl exec`, a pre-existing
-container)? Subclass `Runtime` and provide `send`/`recv` over your own
-pipes — `DockerRuntime` is the reference implementation.
+## Working directory and tools
+
+```python
+runtime = rflow.LocalRuntime(working_directory="./project")
+runtime.register_tools(rflow.FILE_TOOLS)
+
+agent = rflow.Flow(
+    rflow.OpenAIClient(model="gpt-5"),
+    runtime=runtime,
+)
+```
+
+Relative paths in agent code and in `FILE_TOOLS` resolve inside the runtime's
+working directory. The same shape works for Docker and cloud sandboxes.
 
 ## Docker
+
+Build the local image once:
 
 ```bash
 docker build -t recursive-flow:local .
 ```
 
-```python
-import rflow
-from rflow.runtime.docker import DockerRuntime
+Then pass a Docker runtime:
 
-rt = DockerRuntime(
-    image="recursive-flow:local",
-    mounts={"./data": "/workspace"},
-    env={"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]},
+```python
+from pathlib import Path
+
+import rflow
+
+host_project = Path("./project").resolve()
+runtime = rflow.DockerRuntime(
+    "recursive-flow:local",
+    mounts={host_project: "/workspace"},
+    workdir="/workspace",
     network="none",
     cpus=1.0,
     memory="512m",
 )
-agent = rflow.RecursiveFlow(llm_client=llm, runtime=rt, runtime_factory=rt.clone)
+runtime.register_tools(rflow.FILE_TOOLS)
+
+agent = rflow.Flow(rflow.OpenAIClient(model="gpt-5"), runtime=runtime)
 ```
 
 ## Remote sandboxes
@@ -70,46 +90,26 @@ pip install recursive-flow[daytona]
 pip install recursive-flow[sandbox]   # all three
 ```
 
-Each provider runtime lives under `rflow.runtime.sandbox` and keeps the
-same base `Runtime` protocol. Modal, E2B, and Daytona use
-`RemoteFileRuntime`, a public base class that keeps one remote REPL process
-alive and exchanges JSON messages through remote files. That keeps REPL
-variables and suspended launcher state across turns even when
-the provider exposes command execution as one-shot calls.
-
 ```python
 import rflow
 from rflow.runtime.sandbox.e2b import E2BRuntime
 
-rt = E2BRuntime(workspace=workspace)
-agent = rflow.RecursiveFlow(llm_client=llm, runtime=rt, runtime_factory=rt.clone)
+runtime = E2BRuntime(remote_workdir="/workspace")
+runtime.register_tools(rflow.FILE_TOOLS)
+agent = rflow.Flow(rflow.OpenAIClient(model="gpt-5"), runtime=runtime)
 ```
 
-See [`examples/sandboxes/`](../examples/sandboxes/) for real-agent examples
-on Modal, E2B, and Daytona.
+See [`examples/sandboxes/`](../examples/sandboxes/) for real-agent examples on
+Modal, E2B, and Daytona.
 
 ## Writing your own
 
-Implement `send`/`recv` over whatever transport you want. Minimal
-example, given a process you've already started:
+For in-process behavior, subclass `Runtime` and return a custom `ReplBackend`.
+For remote transports, subclass `RemoteRepl` and implement `send(msg)` /
+`recv()`; then wrap it in a `Runtime.open(agent)` method.
 
 ```python
-class MyRuntime(Runtime):
-    def __init__(self, stdin, stdout, workspace="."):
-        super().__init__(workspace=workspace)
-        self.stdin, self.stdout = stdin, stdout
-
-    def send(self, msg):
-        self.stdin.write((json.dumps(msg) + "\n").encode())
-        self.stdin.flush()
-
-    def recv(self):
-        return json.loads(self.stdout.readline())
+class MyRuntime(rflow.Runtime):
+    def open(self, agent: rflow.Graph) -> rflow.ReplBackend:
+        return MyRepl(...)
 ```
-
-Override `inject` only if you can bind values directly, as
-`LocalRuntime` does. Otherwise the base implementation handles
-callables, literals, and method-proxy objects for you.
-
-Override `clone` only if your `__init__` takes arguments beyond
-`workspace`.

@@ -233,7 +233,7 @@ There are three plausible interpretations.
 
 ### Option 1: Add DeLM As An Example
 
-Build a runnable example under `examples/control/` or `examples/use_cases/`
+Build a runnable example under `examples/control/` or at `examples/<name>.py`
 showing several RecursiveFlow workers solving subtasks with a shared notes file.
 
 This is easy, but mostly cosmetic. It would demonstrate the idea but not create
@@ -327,7 +327,7 @@ Needed additions:
 - prompt builders for worker/verifier/finalizer roles
 - shared context rendering and compaction
 - tests for task claiming, admission, worker failure, restart, and replay
-- examples under `examples/control/` or `examples/use_cases/`
+- examples under `examples/control/` or as root scripts / task folders under `examples/`
 
 This is where it becomes a real feature rather than a demo.
 

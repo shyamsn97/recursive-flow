@@ -1,0 +1,585 @@
+"""Phase 4 — remote REPL backends.
+
+Covers the backend seam without requiring Docker/Modal/E2B:
+
+* JSON (de)serialization of the two control objects that cross the wire;
+* ``build_argv`` for the Docker transport;
+* :class:`Flow` backend selection (``make_repl`` / ``Runtime.open``);
+* the full JSON-over-stdio protocol, end to end, via an in-process loopback
+  backend wired to the real :class:`ReplServer` — exercising seeding, the
+  ``done`` / ``flow_delegate`` host proxies, suspension, and resume.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import threading
+from types import SimpleNamespace
+
+import pytest
+
+from rflow import Flow, Graph
+from rflow.graph import ChildHandle, WaitRequest
+from rflow.runtime import (
+    DockerRepl,
+    RemoteRepl,
+    ReplBackend,
+    Runtime,
+    build_argv,
+    deserialize,
+    serialize,
+)
+from rflow.runtime.repl_server import ReplServer
+from rflow.runtime.runtime import parse_response
+from rflow.tools.builtins import ENV_AGENT_ID, ENV_DONE_RESULT, ENV_OUTPUT_SCHEMA
+
+from .fakes.sandbox import FakeE2BSandboxFactory, NoopLLM
+from .helpers import ScriptedLLM, StubLLM, first_user_text, run_to_completion
+
+# ── serde ─────────────────────────────────────────────────────────────
+
+
+def test_child_handle_roundtrip():
+    h = ChildHandle("root.kid")
+    assert h.to_dict() == {"child_handle": "root.kid"}
+    back = ChildHandle.from_dict(h.to_dict())
+    assert isinstance(back, ChildHandle) and back.agent_id == "root.kid"
+
+
+def test_wait_request_roundtrip():
+    w = WaitRequest(["a", "b"])
+    assert w.to_dict() == {"wait_request": ["a", "b"]}
+    back = WaitRequest.from_dict(w.to_dict())
+    assert isinstance(back, WaitRequest) and back.agent_ids == ["a", "b"]
+
+
+def test_serialize_recurses_through_containers():
+    value = {"handles": [ChildHandle("x"), ChildHandle("y")], "n": 1, "s": "str"}
+    wire = serialize(value)
+    assert wire == {
+        "handles": [{"child_handle": "x"}, {"child_handle": "y"}],
+        "n": 1,
+        "s": "str",
+    }
+    # JSON-safe and reversible.
+    back = deserialize(json.loads(json.dumps(wire)))
+    assert [h.agent_id for h in back["handles"]] == ["x", "y"]
+
+
+def test_serialize_passes_through_plain_json():
+    assert serialize([1, "a", {"k": 2}]) == [1, "a", {"k": 2}]
+    assert deserialize({"k": [1, 2]}) == {"k": [1, 2]}
+
+
+def test_parse_response_suspended_and_done():
+    suspended, payload = parse_response(
+        {"suspended": True, "agent_ids": ["a"], "pre_output": "hi"}
+    )
+    assert suspended is True
+    req, pre = payload
+    assert isinstance(req, WaitRequest) and req.agent_ids == ["a"] and pre == "hi"
+
+    suspended, out = parse_response({"suspended": False, "output": "done"})
+    assert suspended is False and out == "done"
+
+
+# ── docker argv ───────────────────────────────────────────────────────
+
+
+def test_build_argv_minimal():
+    argv = build_argv("img")
+    assert argv == [
+        "docker",
+        "run",
+        "-i",
+        "--rm",
+        "img",
+        "python",
+        "-m",
+        "rflow.runtime.repl_server",
+    ]
+
+
+def test_build_argv_full_options():
+    argv = build_argv(
+        "img",
+        mounts={"/host": "/workspace"},
+        env={"OPENAI_API_KEY": "x"},
+        network="none",
+        cpus=2.0,
+        memory="512m",
+        user="1000",
+        workdir="/workspace",
+        extra_args=["--gpus", "all"],
+        docker_bin="podman",
+        entrypoint_argv=["python3", "-m", "rflow.runtime.repl_server"],
+    )
+    assert argv[0] == "podman"
+    assert "--network" in argv and argv[argv.index("--network") + 1] == "none"
+    assert "--cpus" in argv and argv[argv.index("--cpus") + 1] == "2.0"
+    assert "--memory" in argv and argv[argv.index("--memory") + 1] == "512m"
+    assert "--user" in argv and argv[argv.index("--user") + 1] == "1000"
+    assert "--gpus" in argv and "all" in argv
+    assert "-e" in argv and "OPENAI_API_KEY=x" in argv
+    assert argv[-3:] == ["python3", "-m", "rflow.runtime.repl_server"]
+    # the bind mount resolves the host path to an absolute path
+    mount = argv[argv.index("-v") + 1]
+    assert mount.endswith(":/workspace") and mount.startswith("/")
+
+
+def test_docker_repl_is_repl_backend_without_booting():
+    repl = DockerRepl("recursive-flow:local", network="none")
+    assert isinstance(repl, ReplBackend)
+    assert repl.proc is None  # constructing does not boot a container
+    assert repl.argv[:4] == ["docker", "run", "-i", "--rm"]
+
+
+# ── Flow backend selection ────────────────────────────────────────────
+
+
+class _BackendRuntime(Runtime):
+    """A :class:`Runtime` that mints whatever ``factory(agent)`` returns.
+
+    The supported way to plug a custom backend in: subclass ``Runtime`` and
+    implement ``open`` (here over a callable, for terse tests).
+    """
+
+    def __init__(self, factory):
+        super().__init__()
+        self._factory = factory
+
+    def open(self, agent):
+        return self._factory(agent)
+
+
+def test_make_repl_defaults_to_in_process():
+    from rflow.repl import REPL
+
+    flow = Flow(StubLLM(), max_depth=1)
+    agent = flow.start("q")
+    assert isinstance(flow.make_repl(agent), REPL)
+
+
+def test_runtime_open_is_used_by_make_repl():
+    created: list[Graph] = []
+
+    def factory(agent: Graph):
+        created.append(agent)
+        return _LoopbackRepl()
+
+    flow = Flow(StubLLM(), max_depth=1, runtime=_BackendRuntime(factory))
+    agent = flow.start("q")
+    repl = flow.make_repl(agent)
+    assert created == [agent]
+    repl.close()
+
+
+def test_close_tears_down_backends():
+    closed = {"n": 0}
+
+    class _Counting(_LoopbackRepl):
+        def close(self):
+            closed["n"] += 1
+            super().close()
+
+    flow = Flow(StubLLM(), max_depth=1, runtime=_BackendRuntime(lambda agent: _Counting()))
+    run_to_completion(flow, "q")
+    flow.close()
+    assert closed["n"] == 1
+
+
+# ── loopback backend: full protocol, no container ─────────────────────
+
+
+class _LoopbackRepl(RemoteRepl):
+    """A :class:`RemoteRepl` wired to a real :class:`ReplServer` over OS pipes.
+
+    Exercises the exact JSON-over-stdio protocol a container would, in-process:
+    no Docker, no SDKs.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        to_srv_r, to_srv_w = os.pipe()
+        from_srv_r, from_srv_w = os.pipe()
+        self._w = os.fdopen(to_srv_w, "w")
+        self._r = os.fdopen(from_srv_r, "r")
+        server = ReplServer(
+            protocol_in=os.fdopen(to_srv_r, "r"),
+            protocol_out=os.fdopen(from_srv_w, "w"),
+        )
+        self._thread = threading.Thread(target=server.serve, daemon=True)
+        self._thread.start()
+
+    def send(self, msg: dict) -> None:
+        self._w.write(json.dumps(msg) + "\n")
+        self._w.flush()
+
+    def recv(self) -> dict:
+        return json.loads(self._r.readline())
+
+    def close(self) -> None:
+        try:
+            self._w.close()  # EOF ends the server's serve() loop
+        except Exception:
+            pass
+
+
+def _loopback_flow(llm, **kwargs) -> Flow:
+    kwargs.setdefault("max_iters", 5)
+    return Flow(llm, runtime=_BackendRuntime(lambda agent: _LoopbackRepl()), **kwargs)
+
+
+def test_loopback_single_agent_done():
+    flow = _loopback_flow(StubLLM('```repl\ndone("ok")\n```'), max_depth=1)
+    g = run_to_completion(flow, "q")
+    assert g.result() == "ok"
+    flow.close()
+
+
+def test_loopback_inputs_injected_into_remote_repl():
+    flow = _loopback_flow(StubLLM('```repl\ndone(INPUTS["DOC"])\n```'), max_depth=1)
+    g = run_to_completion(flow, "q", {"DOC": "hello-input"})
+    assert g.result() == "hello-input"
+    flow.close()
+
+
+def test_loopback_errored_block_is_recorded_not_fatal():
+    # Two turns: a NameError (errored), then a valid done — the engine should
+    # surface the traceback to the agent and let it recover.
+    replies = iter(["```repl\nprint(missing_name)\n```", '```repl\ndone("recovered")\n```'])
+    flow = _loopback_flow(ScriptedLLM(lambda _m: next(replies)), max_depth=1)
+    g = run_to_completion(flow, "q")
+    assert g.result() == "recovered"
+    assert any(n.type == "error_output" or "NameError" in getattr(n, "output", "") for n in g.nodes)
+    flow.close()
+
+
+def test_loopback_structured_done_validates_on_host():
+    schema = {
+        "type": "object",
+        "properties": {"x": {"type": "integer"}},
+        "required": ["x"],
+    }
+    flow = _loopback_flow(StubLLM('```repl\ndone({"x": 7})\n```'), max_depth=1)
+    g = flow.start("q", output_schema=schema)
+    while not g.finished:
+        flow.step()
+    assert json.loads(g.result()) == {"x": 7}
+    flow.close()
+
+
+def test_loopback_launch_subagents_delegates_and_resumes():
+    def reply_for(messages):
+        task = first_user_text(messages)
+        if "child task" in task:
+            return '```repl\ndone("child-answer")\n```'
+        return (
+            "```repl\n"
+            'rs = await launch_subagents([{"name": "kid", "query": "child task"}])\n'
+            'done("root saw " + rs[0])\n'
+            "```"
+        )
+
+    flow = _loopback_flow(ScriptedLLM(reply_for), max_depth=2)
+    g = run_to_completion(flow, "root")
+    assert g.result() == "root saw child-answer"
+    assert "root.kid" in {n_id for n_id in g.children}
+    flow.close()
+
+
+def test_loopback_launch_subagents_parallel_in_order():
+    def reply_for(messages):
+        task = first_user_text(messages)
+        if "task a" in task:
+            return '```repl\ndone("A")\n```'
+        if "task b" in task:
+            return '```repl\ndone("B")\n```'
+        return (
+            "```repl\n"
+            'rs = await launch_subagents([{"query": "task a"}, {"query": "task b"}])\n'
+            'done("|".join(rs))\n'
+            "```"
+        )
+
+    flow = _loopback_flow(ScriptedLLM(reply_for), max_depth=2)
+    g = run_to_completion(flow, "root")
+    assert g.result() == "A|B"
+    flow.close()
+
+
+# ── E2B / RemoteFileRuntime (fake provider over the file bridge) ───────
+
+
+def _use_fake_e2b(monkeypatch):
+    monkeypatch.setitem(sys.modules, "e2b", SimpleNamespace(Sandbox=FakeE2BSandboxFactory))
+    from rflow.runtime.sandbox.e2b import E2BRepl
+
+    return E2BRepl
+
+
+def test_remote_file_runtime_exports_and_hierarchy():
+    from rflow.runtime import RemoteFileRuntime
+    from rflow.runtime.sandbox.e2b import E2BRepl
+    from rflow.runtime.sandbox.remote import RemoteFileRuntime as Direct
+
+    assert RemoteFileRuntime is Direct
+    assert issubclass(E2BRepl, RemoteFileRuntime)
+    assert issubclass(E2BRepl, RemoteRepl)
+
+
+def test_e2b_executes_repl_protocol_over_bridge(monkeypatch, tmp_path):
+    E2BRepl = _use_fake_e2b(monkeypatch)
+    repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
+    try:
+        suspended, out = repl.start("print('hello from e2b')")
+        assert (suspended, out) == (False, "hello from e2b")
+    finally:
+        repl.close()
+
+
+def test_e2b_seed_routes_tools_by_kind(monkeypatch, tmp_path):
+    E2BRepl = _use_fake_e2b(monkeypatch)
+    flow = Flow(NoopLLM(), max_depth=1)
+    agent = flow.start("q")
+    repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
+    repl.env[ENV_AGENT_ID] = agent.agent_id
+    repl.env[ENV_OUTPUT_SCHEMA] = None
+    try:
+        repl.seed(flow.build_tools(repl.env), {"DOC": "hi"})
+        proxied = set(repl.proxied)
+        # host-bound callables (proxy=True) are function proxies
+        assert {"done", "flow_delegate", "llm_query_batched"} <= proxied
+        # HISTORY is a host object: its public methods are object-proxied
+        assert {"HISTORY.messages", "HISTORY.last", "HISTORY.grep"} <= proxied
+        # launchers are composed in the sandbox, never proxied
+        assert not (proxied & {"flow_wait", "launch_subagents"})
+        # inputs were copied into the remote namespace under INPUTS, not proxied
+        assert repl.start('print(INPUTS["DOC"])') == (False, "hi")
+    finally:
+        repl.close()
+        flow.close()
+
+
+def test_e2b_done_proxies_back_to_host_over_bridge(monkeypatch, tmp_path):
+    E2BRepl = _use_fake_e2b(monkeypatch)
+    flow = Flow(NoopLLM(), max_depth=1)
+    agent = flow.start("q")
+    repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
+    repl.env[ENV_AGENT_ID] = agent.agent_id
+    repl.env[ENV_OUTPUT_SCHEMA] = None
+    try:
+        repl.seed(flow.build_tools(repl.env), {})
+        repl.env.pop(ENV_DONE_RESULT, None)
+        suspended, _ = repl.start('done("answer")')
+        assert suspended is False and not repl.errored
+        # the host-side done() ran (over the wire) and stashed the result
+        assert repl.env[ENV_DONE_RESULT] == "answer"
+    finally:
+        repl.close()
+        flow.close()
+
+
+def test_e2b_history_object_proxies_to_host_over_bridge(monkeypatch, tmp_path):
+    E2BRepl = _use_fake_e2b(monkeypatch)
+    flow = Flow(NoopLLM(), max_depth=1)
+    agent = flow.start("remember this")
+    repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
+    repl.env[ENV_AGENT_ID] = agent.agent_id
+    repl.env[ENV_OUTPUT_SCHEMA] = None
+    try:
+        repl.seed(flow.build_tools(repl.env), {})
+        # HISTORY in the sandbox forwards each call to the host, which slices the
+        # live host graph and ships only the result back over the wire.
+        suspended, out = repl.start(
+            "print(HISTORY.messages()[0]['role']); print(len(HISTORY.last(5)))"
+        )
+        assert suspended is False and not repl.errored
+        assert out.splitlines() == ["user", "1"]
+    finally:
+        repl.close()
+        flow.close()
+
+
+def test_e2b_registered_tool_runs_in_sandbox_not_proxied(monkeypatch, tmp_path):
+    from rflow.tools.filesystem import read_file
+
+    E2BRepl = _use_fake_e2b(monkeypatch)
+    flow = Flow(NoopLLM(), max_depth=1)
+    flow.runtime.register_tools([read_file])
+    agent = flow.start("q")
+    repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
+    repl.env[ENV_AGENT_ID] = agent.agent_id
+    repl.env[ENV_OUTPUT_SCHEMA] = None
+    note = tmp_path / "note.txt"
+    note.write_text("hello\nworld\n")
+    try:
+        repl.seed(flow.build_tools(repl.env), {})
+        # A registered tool is shipped into the sandbox to run there — it is NOT a
+        # host proxy (calling it never crosses the wire).
+        assert "read_file" not in repl.proxied
+        suspended, out = repl.start(f"print(read_file({str(note)!r}))")
+        assert suspended is False and not repl.errored
+        assert "hello" in out and "world" in out
+    finally:
+        repl.close()
+        flow.close()
+
+
+def test_e2b_full_flow_over_bridge(monkeypatch, tmp_path):
+    E2BRepl = _use_fake_e2b(monkeypatch)
+
+    def factory(agent):
+        return E2BRepl(
+            remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5
+        )
+
+    flow = Flow(
+        StubLLM('```repl\ndone("ok")\n```'),
+        max_depth=1,
+        max_iters=5,
+        runtime=_BackendRuntime(factory),
+    )
+    g = run_to_completion(flow, "q")
+    assert g.result() == "ok"
+    flow.close()
+
+
+def test_remote_file_runtime_setup_commands_resolution(monkeypatch, tmp_path):
+    E2BRepl = _use_fake_e2b(monkeypatch)
+    # None → default pip install; explicit [] → run nothing.
+    default = E2BRepl(remote_workdir=str(tmp_path / "a"))
+    assert default.setup_commands == list(E2BRepl.DEFAULT_SETUP_COMMANDS)
+    explicit = E2BRepl(remote_workdir=str(tmp_path / "b"), setup_commands=[])
+    assert explicit.setup_commands == []
+
+
+def test_remote_file_runtime_close_ignores_failing_exec(tmp_path):
+    from rflow.runtime.sandbox.remote import RemoteFileRuntime
+
+    class _GoneRuntime(RemoteFileRuntime):
+        def __init__(self):
+            super().__init__(remote_workdir="/workspace")
+            self._started = True
+            self.closed = False
+
+        def exec(self, command, *, timeout=None):
+            raise RuntimeError("sandbox already shut down")
+
+        def _close_sandbox(self):
+            self.closed = True
+
+    runtime = _GoneRuntime()
+    runtime.close()  # must not raise even though the kill command fails
+    assert runtime.closed and not runtime._started
+
+
+# ── Modal (fake sandbox streams) ───────────────────────────────────────
+
+
+def test_modal_starts_repl_server_as_entrypoint(monkeypatch, tmp_path):
+    class FakeStdin:
+        def __init__(self):
+            self.writes: list[str] = []
+
+        def write(self, data):
+            self.writes.append(data)
+
+        def drain(self):
+            pass
+
+    class FakeSandbox:
+        created_args = None
+        created_kwargs = None
+        instance = None
+
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stdout = iter(())
+            self.stderr = iter(())
+
+        @classmethod
+        def create(cls, *args, **kwargs):
+            cls.created_args = args
+            cls.created_kwargs = kwargs
+            cls.instance = cls()
+            return cls.instance
+
+    class FakeApp:
+        @staticmethod
+        def lookup(name, create_if_missing=False):
+            return {"name": name, "create": create_if_missing}
+
+    monkeypatch.setitem(sys.modules, "modal", SimpleNamespace(App=FakeApp, Sandbox=FakeSandbox))
+    from rflow.runtime.sandbox.modal import ModalRepl
+
+    image = object()
+    repl = ModalRepl(app_name="test-app", remote_workdir="/workspace", image=image)
+    repl.send({"cmd": "ping"})
+
+    assert FakeSandbox.created_args[:2] == ("sh", "-lc")
+    assert "rflow.runtime.repl_server" in FakeSandbox.created_args[2]
+    assert "--workdir /workspace" in FakeSandbox.created_args[2]
+    assert FakeSandbox.created_kwargs["app"] == {"name": "test-app", "create": True}
+    assert FakeSandbox.created_kwargs["image"] is image
+    assert FakeSandbox.instance.stdin.writes == ['{"cmd": "ping"}\n']
+
+
+def test_modal_uses_direct_repl_streams(tmp_path):
+    import queue
+
+    from rflow.runtime.sandbox.modal import ModalRepl
+
+    class FakeStdin:
+        def __init__(self):
+            self.writes: list[str] = []
+            self.drained = False
+
+        def write(self, data):
+            self.writes.append(data)
+
+        def drain(self):
+            self.drained = True
+
+    class FakeSandbox:
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stdout = iter(())
+            self.stderr = iter(())
+
+    repl = ModalRepl()
+    repl.container = FakeSandbox()
+    repl._stdout_queue = queue.Queue()
+    repl._stdout_queue.put('{"ok": true}')
+
+    repl.send({"cmd": "ping"})
+    assert repl.container.stdin.writes == ['{"cmd": "ping"}\n']
+    assert repl.container.stdin.drained
+    assert repl.recv() == {"ok": True}
+
+
+def test_modal_splits_stdout_chunks_into_json_lines():
+    import queue
+
+    from rflow.runtime.sandbox.modal import ModalRepl
+
+    repl = ModalRepl()
+    repl._stdout_queue = queue.Queue()
+    repl._start_reader(
+        iter(['{"ok": true}\n{"suspended": false, "output": ""}\n']),
+        repl._stdout_queue,
+    )
+    assert repl._stdout_queue.get(timeout=1) == '{"ok": true}'
+    assert repl._stdout_queue.get(timeout=1) == '{"suspended": false, "output": ""}'
+
+
+def test_modal_requires_optional_dependency(monkeypatch):
+    # Simulate `modal` not installed: importing it inside _ensure_sandbox fails.
+    monkeypatch.setitem(sys.modules, "modal", None)
+    from rflow.runtime.sandbox.modal import ModalRepl
+
+    repl = ModalRepl()
+    with pytest.raises(ModuleNotFoundError, match="modal"):
+        repl.send({"cmd": "ping"})

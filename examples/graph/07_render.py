@@ -2,10 +2,10 @@
 
 Several read-only renderers ship with recursive-flow:
 
-- ``graph.tree()``           — ASCII tree of agents + states
-- ``graph.session(...)``     — full chat-style transcript across the run
-- ``graph.transcript(aid)``  — one agent's transcript only
-- ``graph.save_html(path)``  — interactive viewer page over the snapshots
+- ``graph.tree()``                 — ASCII tree of agents + states
+- ``graph.session(...)``           — full chat-style transcript across the run
+- ``graph[aid].transcript()``      — one agent's transcript only
+- ``graph.save_html(path)``        — interactive viewer page over the snapshots
 
 This script writes ``examples/graph/out/viewer.html`` (creating
 ``out/`` if needed) and prints the text renderers to stdout.
@@ -82,8 +82,8 @@ def main() -> None:
     banner("graph.tree() — ASCII summary")
     print(g.tree())
 
-    banner("graph.transcript('root.hello') — single-agent transcript")
-    print(g.transcript("root.hello", include_system=False))
+    banner("graph['root.hello'].transcript() — single-agent transcript")
+    print(g["root.hello"].transcript(include_system=False))
 
     banner("graph.session() — full chat-style transcript")
     print(g.session(include_system=False))

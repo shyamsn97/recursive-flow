@@ -1,151 +1,331 @@
-"""The :class:`Graph` data model.
+"""Typed trajectory nodes and the recursive :class:`Graph`.
 
-A :class:`Graph` is **one agent**, mutable. It holds:
+Every trajectory is a strictly alternating chain of *observations*
+(input the system received) and *actions* (work the system did in
+response). Every action is followed by exactly one observation.
 
-* the agent's per-run invariants (``agent_id``, ``depth``, ``query``,
-  ``system_prompt``, ``config``, ``runtime``, ``model``,
-  ``parent_agent_id``, ``parent_node_id``) as flat fields;
-* ``nodes`` — this agent's trajectory of :class:`Node` instances;
-* ``children`` — a ``dict[str, Graph]`` of sub-agents spawned from this one.
+Hierarchy::
 
-Recursion lives in ``children``. Indexing by id (``graph[aid]``) walks the
-tree; ``graph.agents`` is a flat :class:`Mapping` view over every agent in
-the subtree; ``graph.all_nodes`` / ``graph.edges`` are flat views over every
-node / derived edge in the subtree.
+    Node
+    ├── ObservationNode               base — inputs the system received
+    │   ├── UserQuery                   bootstrap input
+    │   ├── LLMOutput                   what the LLM returned
+    │   └── CodeObservation             base — anything from running code
+    │       ├── ExecOutput                normal stdout
+    │       ├── SupervisingOutput        code awaited children; scheduler waits
+    │       ├── ErrorOutput               code errored
+    │       └── DoneOutput                code called done(); terminal
+    └── ActionNode                    base — work the system did
+        ├── LLMAction                   called the LLM
+        ├── ExecAction                  ran the LLM's fresh code
+        └── ResumeAction                supervisor resumed paused code
 
-Per-state payload lives on :class:`Node`. Per-agent invariants live on
-``Graph``. There is no ``AgentMeta`` class — its fields are inlined here.
-There is no stored ``Edge`` list — flow / spawn edges are derived from
-the recursive structure on demand.
+A :class:`Graph` is **one agent**: its per-run invariants, its trajectory
+of nodes, and a dict of child agents. Recursion lives in ``children``.
 """
 
 from __future__ import annotations
 
 import json
-import re
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field, replace
+from copy import deepcopy
+from dataclasses import dataclass, field
+from dataclasses import replace as _dc_replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Annotated, Any, Iterator, Literal, Union
+from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from rflow.graph.node import ActionNode, Node, ObservationNode, parse_node_obj
-from rflow.graph.views import AgentsView, Edge, EdgesView, NodesView
-
-
-class RuntimeRef(BaseModel):
-    """Serializable reference to a durable runtime / REPL session."""
-
-    id: str
+if TYPE_CHECKING:
+    from rflow.graph.views import EdgesView, NodesView
 
 
-class ContextPayload(BaseModel):
-    """Portable per-agent context payload owned by a graph."""
-
-    text: str = ""
-    metadata: dict[str, Any] = Field(default_factory=dict)
+def new_id() -> str:
+    return f"n_{uuid4().hex[:12]}"
 
 
-def _context_payload_from_meta(data: dict[str, Any]) -> ContextPayload:
-    if data.get("context") is not None:
-        return ContextPayload.model_validate(data["context"])
-    # Transitional reader for graph JSON written during the short-lived
-    # named-context experiment. The runtime-facing context has always been singular.
-    contexts = data.get("contexts") or {}
-    if isinstance(contexts, dict) and contexts.get("context") is not None:
-        return ContextPayload.model_validate(contexts["context"])
-    return ContextPayload()
+# ── nodes ─────────────────────────────────────────────────────────────
 
 
-# ── Graph ────────────────────────────────────────────────────────────
+class Node(BaseModel):
+    """One immutable state in an agent's trajectory."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    id: str = Field(default_factory=new_id)
+    agent_id: str = "root"
+    seq: int = 0
+    global_step: int | None = None
+
+    @property
+    def terminal(self) -> bool:
+        return False
+
+    def update(self, **changes: Any) -> Node:
+        return self.model_copy(update=changes)
+
+    def to_dict(self) -> dict:
+        return self.model_dump(mode="json")
+
+
+class ObservationNode(Node):
+    """Base for nodes that record an *input the system received*."""
+
+
+class ActionNode(Node):
+    """Base for nodes that record *work the system did*."""
+
+
+class CodeObservation(ObservationNode):
+    """Base for any observation produced by running code.
+
+    ``output`` is the raw captured stdout; ``content`` is that output
+    rendered for the model's next user turn. ``resumed_from`` is empty for
+    an :class:`ExecAction` result and populated for a :class:`ResumeAction`
+    result.
+    """
+
+    output: str = ""
+    content: str = ""
+    resumed_from: list[str] = Field(default_factory=list)
+
+
+class UserQuery(ObservationNode):
+    """The bootstrap input (root query or child spawn prompt). Always seq=0."""
+
+    type: Literal["user_query"] = "user_query"
+    content: str = ""
+
+
+class LLMOutput(ObservationNode):
+    """What the LLM returned for one turn. ``code`` is the extracted block."""
+
+    type: Literal["llm_output"] = "llm_output"
+    reply: str = ""
+    code: str = ""
+    model: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class ExecOutput(CodeObservation):
+    """Code ran and produced normal stdout."""
+
+    type: Literal["exec_output"] = "exec_output"
+
+
+class SupervisingOutput(CodeObservation):
+    """Code suspended at ``await launch_subagents(...)``.
+
+    The agent's REPL coroutine is paused; the scheduler gates on the
+    children in ``waiting_on``. Once they settle, a :class:`ResumeAction`
+    drives the coroutine forward. ``output`` is anything printed before
+    the await.
+    """
+
+    type: Literal["supervising_output"] = "supervising_output"
+    waiting_on: list[str] = Field(default_factory=list)
+
+
+class ErrorOutput(CodeObservation):
+    """Code execution errored. ``content`` is the retry message shown next."""
+
+    type: Literal["error_output"] = "error_output"
+    error: str = ""
+
+
+class DoneOutput(CodeObservation):
+    """Code called ``done(...)``. Terminal. ``result`` is the answer."""
+
+    type: Literal["done_output"] = "done_output"
+    result: str = ""
+
+    @property
+    def terminal(self) -> bool:
+        return True
+
+
+class LLMAction(ActionNode):
+    """The engine called the LLM. Reply/code live on the paired LLMOutput."""
+
+    type: Literal["llm_action"] = "llm_action"
+    model: str | None = None
+
+
+class ExecAction(ActionNode):
+    """The engine ran the LLM's fresh code."""
+
+    type: Literal["exec_action"] = "exec_action"
+    code: str = ""
+
+
+class ResumeAction(ActionNode):
+    """The supervisor resumed paused code after its children settled."""
+
+    type: Literal["resume_action"] = "resume_action"
+    resumed_from: list[str] = Field(default_factory=list)
+
+
+# ── node predicates + parser ──────────────────────────────────────────
+
+
+def is_observation(node: Node) -> bool:
+    return isinstance(node, ObservationNode)
+
+
+def is_action(node: Node) -> bool:
+    return isinstance(node, ActionNode)
+
+
+def is_code_observation(node: Node) -> bool:
+    return isinstance(node, CodeObservation)
+
+
+def is_user_query(node: Node) -> bool:
+    return isinstance(node, UserQuery)
+
+
+def is_llm_output(node: Node) -> bool:
+    return isinstance(node, LLMOutput)
+
+
+def is_exec_output(node: Node) -> bool:
+    return isinstance(node, ExecOutput)
+
+
+def is_supervising(node: Node) -> bool:
+    return isinstance(node, SupervisingOutput)
+
+
+def is_errored(node: Node) -> bool:
+    return isinstance(node, ErrorOutput)
+
+
+def is_done(node: Node) -> bool:
+    return isinstance(node, DoneOutput)
+
+
+def is_llm_action(node: Node) -> bool:
+    return isinstance(node, LLMAction)
+
+
+def is_exec_action(node: Node) -> bool:
+    return isinstance(node, ExecAction)
+
+
+def is_resume_action(node: Node) -> bool:
+    return isinstance(node, ResumeAction)
+
+
+def is_resumed(node: Node) -> bool:
+    """A :class:`CodeObservation` produced by a resume (``resumed_from`` set)."""
+    return isinstance(node, CodeObservation) and bool(node.resumed_from)
+
+
+# Discriminated union over the concrete leaf nodes, keyed on ``type``. Used to
+# rebuild typed nodes from plain dicts (``Graph.from_dict``). Unknown extra keys
+# in persisted payloads are ignored, so old traces still load.
+NodeUnion = Annotated[
+    Union[
+        UserQuery,
+        LLMOutput,
+        ExecOutput,
+        SupervisingOutput,
+        ErrorOutput,
+        DoneOutput,
+        LLMAction,
+        ExecAction,
+        ResumeAction,
+    ],
+    Field(discriminator="type"),
+]
+
+_NODE_ADAPTER: TypeAdapter[Node] = TypeAdapter(NodeUnion)
+
+
+def parse_node_obj(data: dict) -> Node:
+    """Rebuild the concrete :class:`Node` subtype from a ``to_dict()`` payload."""
+    return _NODE_ADAPTER.validate_python(data)
+
+
+# ── REPL protocol handles (transient; not stored on the graph) ────────
+
+
+class ChildHandle:
+    """Reference returned by delegation, passed to the wait primitive."""
+
+    def __init__(self, agent_id: str) -> None:
+        self.agent_id = agent_id
+
+    def __repr__(self) -> str:
+        return f"ChildHandle({self.agent_id!r})"
+
+    def to_dict(self) -> dict:
+        """JSON-safe form for shipping across the remote-REPL proxy boundary."""
+        return {"child_handle": self.agent_id}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ChildHandle":
+        return cls(data["child_handle"])
+
+
+class WaitRequest:
+    """Awaited to request suspension until the named children finish."""
+
+    def __init__(self, agent_ids: list[str]) -> None:
+        self.agent_ids = agent_ids
+
+    def __repr__(self) -> str:
+        return f"WaitRequest({self.agent_ids!r})"
+
+    def __await__(self):
+        results = yield self
+        return results
+
+    def to_dict(self) -> dict:
+        """JSON-safe form for shipping across the remote-REPL proxy boundary."""
+        return {"wait_request": list(self.agent_ids)}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WaitRequest":
+        return cls(list(data["wait_request"]))
+
+
+# ── Graph ─────────────────────────────────────────────────────────────
+
+
+def append_message(messages: list[dict[str, str]], role: str, content: str) -> None:
+    """Append a chat message, coalescing consecutive same-role blocks.
+
+    Some providers reject two adjacent messages with the same role, so a
+    new block is merged into the previous message when the roles match.
+    """
+    if messages and messages[-1]["role"] == role:
+        messages[-1]["content"] += "\n\n" + content
+    else:
+        messages.append({"role": role, "content": content})
 
 
 @dataclass
 class Graph:
-    """One agent's view of a run, recursive through ``children``.
-
-    Every field is per-agent invariant (set at spawn) or this agent's
-    trajectory. Sub-agents live in ``children``; ``graph[other_aid]``
-    or ``graph.agents[other_aid]`` walks the subtree to find them.
-
-    Graphs are mutable — use the editing helpers (``add_node``,
-    ``update_node``, ``remove_node``, ``add_child``, ``remove_child``,
-    ``update``) or just assign fields directly. ``graph.all_nodes`` /
-    ``graph.children`` are live subtree views, so mutations show up immediately.
-    """
+    """One agent's view of a run, recursive through ``children``."""
 
     agent_id: str
     depth: int = 0
     query: str = ""
     system_prompt: str = ""
-    config: dict[str, Any] = field(default_factory=dict)
-    runtime: RuntimeRef | None = None
+    inputs: dict[str, str] = field(default_factory=dict)
     model: str | None = None
+    max_iters: int | None = None
+    output_schema: dict[str, Any] | None = None
     parent_agent_id: str | None = None
     parent_node_id: str | None = None
-    output_schema: dict[str, Any] | None = None
-    context: ContextPayload = field(default_factory=ContextPayload)
-
     nodes: list[Node] = field(default_factory=list)
-    children: dict[str, Graph] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        # Be forgiving: callers may pass tuples / iterables.
-        if not isinstance(self.nodes, list):
-            self.nodes = list(self.nodes)
-        if not isinstance(self.children, dict):
-            self.children = dict(self.children)
-        if self.context is None:
-            self.context = ContextPayload()
-        elif not isinstance(self.context, ContextPayload):
-            self.context = ContextPayload.model_validate(self.context)
-
-    # ── identity / aliases ───────────────────────────────────────────
-
-    @property
-    def root_agent_id(self) -> str:
-        """Alias for :attr:`agent_id`, reads better at the top level."""
-        return self.agent_id
-
-    @property
-    def parent_id(self) -> str | None:
-        """Alias for :attr:`parent_agent_id`."""
-        return self.parent_agent_id
-
-    @property
-    def model_key(self) -> str:
-        return str(self.config.get("model") or "default")
-
-    @property
-    def model_label(self) -> str:
-        actual = self.model
-        if actual is None:
-            actual = next(
-                (
-                    str(model)
-                    for state in reversed(self.nodes)
-                    if (model := getattr(state, "model", None))
-                ),
-                None,
-            )
-        if actual and actual != self.model_key:
-            return f"{self.model_key}:{actual}"
-        return self.model_key
-
-    # ── current-node accessors ───────────────────────────────────────
+    children: dict[str, "Graph"] = field(default_factory=dict)
 
     def current(self) -> Node | None:
-        """Latest node of this agent (last by insertion)."""
         return self.nodes[-1] if self.nodes else None
-
-    def active_output_schema(self, node: Node | None = None) -> dict[str, Any] | None:
-        """Active structured-output schema for ``node`` or the current path."""
-
-        target = node or self.current()
-        if target is not None and target.output_schema is not None:
-            return target.output_schema
-        return self.output_schema
 
     @property
     def finished(self) -> bool:
@@ -154,636 +334,460 @@ class Graph:
             return False
         return all(child.finished for child in self.children.values())
 
-    def result(self) -> Any:
-        """Semantic terminal result from the deepest terminal leaf, or ``""``."""
-        g: Graph = self
-        while True:
-            cur = g.current()
-            if cur is None:
-                return ""
-            if cur.terminal:
-                if getattr(cur, "output_schema", None) is not None:
-                    structured = getattr(cur, "structured_result", None)
-                    if structured is not None:
-                        return structured
-                    result = getattr(cur, "result", "") or "null"
-                    return json.loads(result)
-                return getattr(cur, "result", "") or ""
-            kids = list(g.children.values())
-            if not kids:
-                return ""
-            g = kids[-1]
+    def result(self) -> str:
+        cur = self.current()
+        if cur is not None and cur.terminal:
+            return getattr(cur, "result", "") or ""
+        return ""
 
-    @property
-    def root(self) -> Node | None:
-        """First node of this agent (the :class:`UserQuery` at ``seq=0``)."""
-        return self.nodes[0] if self.nodes else None
-
-    # ── subtree iteration ────────────────────────────────────────────
-
-    def walk(self) -> Iterator[Graph]:
-        """Yield self plus every descendant sub-:class:`Graph`, depth-first."""
+    def walk(self) -> Iterator["Graph"]:
+        """Yield self plus every descendant agent, depth-first."""
         yield self
         for child in self.children.values():
             yield from child.walk()
 
-    def subtree(self) -> list[Graph]:
-        """List form of :meth:`walk` (self + all descendants)."""
-        return list(self.walk())
-
-    def leaves(self) -> list[Graph]:
-        """Agents with no child agents."""
-        return [g for g in self.walk() if not g.children]
-
-    def unfinished_agents(self) -> list[Graph]:
-        """Agents whose current state is not terminal."""
-        return [g for g in self.walk() if not g.finished]
-
-    def finished_agents(self) -> list[Graph]:
-        """Agents whose current state is terminal."""
-        return [g for g in self.walk() if g.finished]
-
-    def children_of(self, agent_id: str) -> list[Graph]:
-        """Direct children of ``agent_id``."""
-        return list(self[agent_id].children.values())
-
-    def descendants_of(self, agent_id: str) -> list[Graph]:
-        """All descendants of ``agent_id``, excluding that agent."""
-        root = self[agent_id]
-        return [g for g in root.walk() if g.agent_id != root.agent_id]
-
-    def where(self, predicate: Callable[[Graph], bool]) -> list[Graph]:
-        """Agents for which ``predicate(agent)`` is true."""
-        return [g for g in self.walk() if predicate(g)]
-
-    def match(self, pattern: str | re.Pattern[str]) -> list[Graph]:
-        """Agents whose id matches ``pattern``."""
-        compiled = re.compile(pattern) if isinstance(pattern, str) else pattern
-        return [g for g in self.walk() if compiled.search(g.agent_id)]
-
-    # ── flat views over the subtree ──────────────────────────────────
+    @property
+    def agents(self) -> dict[str, "Graph"]:
+        """Flat ``{agent_id: Graph}`` view over the whole subtree."""
+        return {g.agent_id: g for g in self.walk()}
 
     @property
-    def agents(self) -> AgentsView:
-        return AgentsView(self)
+    def all_nodes(self) -> "NodesView":
+        """Flat, queryable view over every node in the subtree."""
+        from rflow.graph.views import NodesView
 
-    @property
-    def all_nodes(self) -> NodesView:
         return NodesView(self)
 
     @property
-    def edges(self) -> EdgesView:
+    def edges(self) -> "EdgesView":
+        """Derived flow + spawn edges across the subtree."""
+        from rflow.graph.views import EdgesView
+
         return EdgesView(self)
 
-    def find(self, node_id: str | Iterable[str]) -> Node | None | list[Node | None]:
-        """Bare :class:`Node` lookup by id across the whole subtree.
-
-        Pass a single id to get a ``Node | None``, or an iterable of ids to
-        get a list of ``Node | None`` aligned to the input order.
-        """
-        if not isinstance(node_id, str):
-            index = {n.id: n for g in self.walk() for n in g.nodes}
-            return [index.get(nid) for nid in node_id]
-        for g in self.walk():
-            for n in g.nodes:
-                if n.id == node_id:
-                    return n
-        return None
-
-    def get_node(self, node_id: str) -> Node:
-        """Strict :meth:`find`: the node with ``node_id`` or raise ``KeyError``."""
-        node = self.find(node_id)
-        if node is None:
-            raise KeyError(node_id)
-        return node
-
-    def get_nodes(self, node_ids: Iterable[str]) -> list[Node]:
-        """Strict bulk lookup: nodes for ``node_ids`` or raise ``KeyError``.
-
-        Returns nodes aligned to ``node_ids`` order; raises ``KeyError`` listing
-        any ids that are missing from the subtree.
-        """
-        index = {n.id: n for g in self.walk() for n in g.nodes}
-        ids = list(node_ids)
-        missing = [nid for nid in ids if nid not in index]
-        if missing:
-            raise KeyError(missing)
-        return [index[nid] for nid in ids]
-
-    def filter(
-        self,
-        predicate: Callable[[Node], bool] | None = None,
-        /,
-        **filters: Any,
-    ) -> list[Node]:
-        """Nodes across the subtree matching ``predicate`` and/or ``filters``.
-
-        ``predicate`` is an arbitrary callable; ``filters`` are exact-match
-        attribute checks. Examples::
-
-            graph.filter(lambda n: n.type == "supervising_output")
-            graph.filter(type="supervising_output")
-            graph.filter(lambda n: n.seq > 2, agent_id="root")
-
-        Thin wrapper over ``graph.all_nodes.where(...)``.
-        """
-        return self.all_nodes.where(predicate, **filters)
-
-    # ── sub-rooting ──────────────────────────────────────────────────
-
-    def __getitem__(self, ident: str) -> Graph:
-        """Sub-:class:`Graph` for an agent id (bare or dotted)."""
-        if ident == self.agent_id:
-            return self
-        if ident in self.children:
-            return self.children[ident]
-        # Dotted-path walk: "root.scanner.deep" descends children stepwise.
-        if ident.startswith(self.agent_id + "."):
-            cur: Graph = self
-            for prefix in _path_prefixes(self.agent_id, ident):
-                if prefix in cur.children:
-                    cur = cur.children[prefix]
-                    if cur.agent_id == ident:
-                        return cur
-                else:
-                    break
-        # Fallback: search the subtree for any descendant with this id.
-        for g in self.walk():
-            if g.agent_id == ident:
-                return g
-        raise KeyError(ident)
-
-    def __contains__(self, ident: object) -> bool:
-        if not isinstance(ident, str):
-            return False
-        try:
-            self[ident]
-        except KeyError:
-            return False
-        return True
-
-    # ── token rollups ────────────────────────────────────────────────
-
-    def tokens(self, *, recursive: bool = True) -> tuple[int, int]:
-        inp = sum(getattr(s, "input_tokens", 0) for s in self.nodes)
-        out = sum(getattr(s, "output_tokens", 0) for s in self.nodes)
-        if recursive:
-            for child in self.children.values():
-                ci, co = child.tokens()
-                inp += ci
-                out += co
-        return inp, out
-
-    def total_tokens(self) -> int:
-        i, o = self.tokens()
-        return i + o
-
-    # ── logical ordering ─────────────────────────────────────────────
+    def copy(self, *, deep: bool = True) -> "Graph":
+        """Return a copy of this subtree (deep by default for safe editing)."""
+        return deepcopy(self) if deep else _dc_replace(self)
 
     def max_global_step(self) -> int | None:
-        """Largest ``Node.global_step`` recorded anywhere in this subtree."""
-
+        """Highest ``global_step`` stamped on any node in the subtree, or ``None``."""
         steps = [
-            node.global_step
-            for graph in self.walk()
-            for node in graph.nodes
-            if node.global_step is not None
+            n.global_step
+            for g in self.walk()
+            for n in g.nodes
+            if n.global_step is not None
         ]
         return max(steps) if steps else None
 
     def next_global_step(self) -> int:
-        """Next logical visualization step for new nodes in this subtree."""
-
+        """The step number a freshly appended node should take."""
         current = self.max_global_step()
         return 0 if current is None else current + 1
 
-    # ── context payloads ─────────────────────────────────────────────
+    def get_runnable_nodes(self) -> list[str]:
+        """Ids of agents that can advance by one action right now.
 
-    def set_context(
-        self,
-        text: str,
-        *,
-        metadata: dict[str, Any] | None = None,
-    ) -> Graph:
-        """Set a graph-owned context payload for this agent."""
+        A leaf is runnable unless it's finished or mid-step; a supervisor
+        (paused at ``await launch_subagents(...)``) is runnable only once all
+        the children it waits on have finished. Otherwise recurse into the
+        unfinished children to surface runnable descendants.
+        """
+        agents = self.agents
+        out: list[str] = []
 
-        self.context = ContextPayload(text=text, metadata=metadata or {})
-        return self
+        def visit(g: "Graph") -> None:
+            if g.finished:
+                return
+            cur = g.current()
+            if cur is None:
+                return
+            if cur.terminal:
+                for child in g.children.values():
+                    if not child.finished:
+                        visit(child)
+                return
+            if isinstance(cur, SupervisingOutput):
+                waiting = [agents.get(aid) for aid in cur.waiting_on]
+                if any(w is None for w in waiting):
+                    return
+                if all(w.finished for w in waiting):
+                    out.append(g.agent_id)
+                    return
+                for w in waiting:
+                    if not w.finished:
+                        visit(w)
+                return
+            out.append(g.agent_id)
 
-    def context_text(self) -> str:
-        """Return this agent's graph-owned context payload text."""
+        visit(self)
+        return out
 
-        return self.context.text
+    def runnable_descendants(self) -> list[str]:
+        """Runnable agents strictly below this one (excludes self).
 
-    def context_info(self) -> dict[str, Any]:
-        """Return size metadata for this agent's graph-owned context payload."""
+        Used by work-conserving (``eager_children``) scheduling to keep the
+        pool busy with a waiting supervisor's descendants.
+        """
+        return [aid for aid in self.get_runnable_nodes() if aid != self.agent_id]
 
-        text = self.context.text
-        return {
-            "key": "context",
-            "agent_id": self.agent_id,
-            "chars": len(text),
-            "approx_tokens": len(text) // 4,
-            "lines": len(text.splitlines()),
-            "metadata": dict(self.context.metadata),
-        }
+    def __getitem__(self, agent_id: str) -> "Graph":
+        for g in self.walk():
+            if g.agent_id == agent_id:
+                return g
+        raise KeyError(agent_id)
 
-    # ── editing helpers (mutate in place) ────────────────────────────
+    def __contains__(self, agent_id: object) -> bool:
+        return any(g.agent_id == agent_id for g in self.walk())
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate agent ids in the subtree (depth-first)."""
+        return (g.agent_id for g in self.walk())
+
+    def __len__(self) -> int:
+        """Number of agents in the subtree (self plus every descendant)."""
+        return sum(1 for _ in self.walk())
+
+    @property
+    def parent_id(self) -> str | None:
+        """Alias for :attr:`parent_agent_id`."""
+        return self.parent_agent_id
+
+    # ── node access helpers ───────────────────────────────────────────
+
+    def node_owner(self, node_id: str) -> "Graph":
+        """Return the sub-:class:`Graph` whose local ``nodes`` hold ``node_id``."""
+        for g in self.walk():
+            if any(n.id == node_id for n in g.nodes):
+                return g
+        raise KeyError(node_id)
 
     def _index_of(self, node_id: str) -> int:
-        for i, s in enumerate(self.nodes):
-            if s.id == node_id:
+        for i, n in enumerate(self.nodes):
+            if n.id == node_id:
                 return i
         raise KeyError(node_id)
 
+    def find(self, node_id: str) -> Node | None:
+        """Return the node with ``node_id`` anywhere in the subtree, or ``None``."""
+        return self.all_nodes.find(node_id)
+
+    def last_action(self, agent_id: str | None = None) -> Node | None:
+        """The latest :class:`ActionNode` of ``agent_id`` (or self)."""
+        g = self if agent_id is None else self[agent_id]
+        for n in reversed(g.nodes):
+            if isinstance(n, ActionNode):
+                return n
+        return None
+
+    def last_observation(self, agent_id: str | None = None) -> Node | None:
+        """The latest :class:`ObservationNode` of ``agent_id`` (or self)."""
+        g = self if agent_id is None else self[agent_id]
+        for n in reversed(g.nodes):
+            if isinstance(n, ObservationNode):
+                return n
+        return None
+
+    # ── in-place mutators (edit a loaded graph offline) ───────────────
+
     def add_node(self, node: Node) -> Node:
-        """Append a node to this agent's trajectory."""
         self.nodes.append(node)
         return node
 
-    def set_node(self, node_id: str, new_node: Node) -> Node:
-        """Swap a node on **this** agent by id. For subtree-wide replacement,
-        use ``graph.all_nodes.replace(id, node)``."""
-        self.nodes[self._index_of(node_id)] = new_node
-        return new_node
-
     def update_node(self, node_id: str, **changes: Any) -> Node:
-        """Replace a node on this agent with a copy carrying ``changes``."""
-        i = self._index_of(node_id)
-        self.nodes[i] = self.nodes[i].update(**changes)
-        return self.nodes[i]
+        """Copy-with-changes the node ``node_id`` in place, anywhere in subtree."""
+        return self.all_nodes.update(node_id, **changes)
+
+    def set_node(self, node_id: str, new_node: Node) -> Node:
+        """Swap the node ``node_id`` for ``new_node`` in place."""
+        return self.all_nodes.replace(node_id, new_node)
 
     def remove_node(self, node_id: str) -> Node:
-        """Drop a node by id and return it."""
-        return self.nodes.pop(self._index_of(node_id))
+        """Drop the node ``node_id`` from the subtree and return it."""
+        return self.all_nodes.remove(node_id)
 
-    def pop_node(self) -> Node:
-        """Drop and return the most recent node of this agent."""
-        return self.nodes.pop()
-
-    def clear_nodes(self) -> Graph:
-        self.nodes.clear()
-        return self
-
-    def add_state(self, node: Node) -> Node:
-        """Deprecated alias for :meth:`add_node`."""
-
-        return self.add_node(node)
-
-    def replace_state(self, node_id: str, new_node: Node) -> Node:
-        """Deprecated alias for :meth:`set_node`."""
-
-        return self.set_node(node_id, new_node)
-
-    def update_state(self, node_id: str, **changes: Any) -> Node:
-        """Deprecated alias for :meth:`update_node`."""
-
-        return self.update_node(node_id, **changes)
-
-    def remove_state(self, node_id: str) -> Node:
-        """Deprecated alias for :meth:`remove_node`."""
-
-        return self.remove_node(node_id)
-
-    def pop_state(self) -> Node:
-        """Deprecated alias for :meth:`pop_node`."""
-
-        return self.pop_node()
-
-    def clear_states(self) -> Graph:
-        """Deprecated alias for :meth:`clear_nodes`."""
-
-        return self.clear_nodes()
-
-    def last_node(self, agent_id: str) -> Node | None:
-        """Latest node for ``agent_id``."""
-
-        return self[agent_id].current()
-
-    def last_action(self, agent_id: str) -> ActionNode | None:
-        """Latest action node for ``agent_id``."""
-
-        for node in reversed(self[agent_id].nodes):
-            if isinstance(node, ActionNode):
-                return node
-        return None
-
-    def last_observation(self, agent_id: str) -> ObservationNode | None:
-        """Latest observation node for ``agent_id``."""
-
-        for node in reversed(self[agent_id].nodes):
-            if isinstance(node, ObservationNode):
-                return node
-        return None
-
-    def node_owner(self, node_id: str) -> Graph:
-        """Agent graph that owns ``node_id``."""
-
-        for graph in self.walk():
-            if any(node.id == node_id for node in graph.nodes):
-                return graph
-        raise KeyError(node_id)
-
-    def replace_node(
-        self,
-        target: str | Node,
-        node: Node,
-        *,
-        truncate: str = "descendants",
-        branch_id: str | None = None,
-        output_schema: dict[str, Any] | None = None,
-        inherit_output_schema: bool = True,
-    ) -> Graph:
-        """Return a copy with ``target`` replaced by ``node``.
-
-        ``target`` may be a node id or a :class:`Node` (its ``id`` is used).
-
-        ``truncate`` defaults to ``"descendants"``. Valid values are:
-        - ``"none"``: replace only the node;
-        - ``"after"``: drop later states in the same agent;
-        - ``"descendants"``: also prune children whose spawn node disappeared,
-          and children that were only reachable through a replaced supervisor's
-          ``waiting_on`` list.
-        """
-
-        from rflow.graph.replace import replace_node
-
-        return replace_node(
-            self,
-            target,
-            node,
-            truncate=truncate,
-            branch_id=branch_id,
-            output_schema=output_schema,
-            inherit_output_schema=inherit_output_schema,
-        )
-
-    def replace_last_action(
-        self,
-        agent_id: str,
-        node: ActionNode,
-        *,
-        truncate: str = "descendants",
-        branch_id: str | None = None,
-        output_schema: dict[str, Any] | None = None,
-        inherit_output_schema: bool = True,
-    ) -> Graph:
-        """Return a copy replacing ``agent_id``'s latest action node."""
-
-        from rflow.graph.replace import replace_last_action
-
-        return replace_last_action(
-            self,
-            agent_id,
-            node,
-            truncate=truncate,
-            branch_id=branch_id,
-            output_schema=output_schema,
-            inherit_output_schema=inherit_output_schema,
-        )
-
-    def replace_last_observation(
-        self,
-        agent_id: str,
-        node: ObservationNode,
-        *,
-        truncate: str = "descendants",
-        branch_id: str | None = None,
-        output_schema: dict[str, Any] | None = None,
-        inherit_output_schema: bool = True,
-    ) -> Graph:
-        """Return a copy replacing ``agent_id``'s latest observation node."""
-
-        from rflow.graph.replace import replace_last_observation
-
-        return replace_last_observation(
-            self,
-            agent_id,
-            node,
-            truncate=truncate,
-            branch_id=branch_id,
-            output_schema=output_schema,
-            inherit_output_schema=inherit_output_schema,
-        )
-
-    def truncate_after(self, node_id: str, *, descendants: bool = True) -> Graph:
-        """Return a copy with states after ``node_id`` removed."""
-
-        from rflow.graph.truncation import truncate_after
-
-        return truncate_after(self, node_id, descendants=descendants)
-
-    def truncate_agent(self, agent_id: str, *, after_seq: int) -> Graph:
-        """Return a copy with ``agent_id`` states after ``after_seq`` removed."""
-
-        from rflow.graph.truncation import truncate_agent
-
-        return truncate_agent(self, agent_id, after_seq=after_seq)
-
-    def prune_descendants_spawned_after(self, agent_id: str, seq: int) -> Graph:
-        """Return a copy pruning children spawned after ``agent_id`` ``seq``."""
-
-        from rflow.graph.truncation import prune_descendants_spawned_after
-
-        return prune_descendants_spawned_after(self, agent_id, seq)
-
-    def add_child(self, child: Graph) -> Graph:
-        """Attach (or replace) a sub-agent under this graph."""
-        self.children[child.agent_id] = child
+    def add_child(self, child: "Graph") -> "Graph":
+        """Attach ``child`` under the agent named by its ``parent_agent_id``."""
+        parent = self[child.parent_agent_id] if child.parent_agent_id else self
+        parent.children[child.agent_id] = child
         return child
 
-    def remove_child(self, agent_id: str) -> Graph:
-        """Drop a sub-agent and return it."""
-        return self.children.pop(agent_id)
+    def remove_child(self, agent_id: str) -> "Graph":
+        """Detach the agent ``agent_id`` from wherever it hangs in the subtree."""
+        for g in self.walk():
+            if agent_id in g.children:
+                return g.children.pop(agent_id)
+        raise KeyError(agent_id)
 
-    def update(self, **fields: Any) -> Graph:
-        """Bulk-assign top-level fields (``query``, ``config``, ``model``, …)."""
+    def update(self, **fields: Any) -> "Graph":
+        """Bulk-set top-level graph fields (``query``, ``model``, ``inputs`` …)."""
         for key, value in fields.items():
             if not hasattr(self, key):
                 raise AttributeError(f"Graph has no field {key!r}")
             setattr(self, key, value)
         return self
 
-    def copy(self, *, deep: bool = True) -> Graph:
-        """Return a copy of this graph. ``deep`` copies nodes + subtree."""
-        from copy import deepcopy
+    # ── token rollups ─────────────────────────────────────────────────
 
-        return deepcopy(self) if deep else replace(self)
+    def tokens(self, *, recursive: bool = True) -> tuple[int, int]:
+        """Return ``(input_tokens, output_tokens)`` summed over LLM outputs."""
+        graphs = self.walk() if recursive else (self,)
+        inp = out = 0
+        for g in graphs:
+            for n in g.nodes:
+                if isinstance(n, LLMOutput):
+                    inp += n.input_tokens
+                    out += n.output_tokens
+        return inp, out
 
-    def inject(
-        self,
-        *,
-        target: str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]],
-        node: Node,
-        mode: str = "append",
-        branch_id: str | None = None,
-        output_schema: dict[str, Any] | None = None,
-        inherit_output_schema: bool = True,
-    ) -> Graph:
-        """Return a new graph with ``node`` injected at ``target``.
+    def total_tokens(self, *, recursive: bool = True) -> int:
+        """Total input + output tokens over the subtree (or just self)."""
+        inp, out = self.tokens(recursive=recursive)
+        return inp + out
 
-        ``target`` may be an exact agent id, a regex/pattern over agent ids,
-        or a callable returning agent ids / subgraphs. Only append mode is
-        supported for now.
+    # ── persistence ───────────────────────────────────────────────────
+
+    def save(self, path: str | Path = ".") -> Path:
+        """Persist this run to disk.
+
+        A **directory** path writes the run layout (manifest ``graph.json``
+        plus per-agent ``agent.json`` / ``session.jsonl`` / ``latest.json``).
+        A **``.json`` file** path writes one nested monolithic snapshot instead.
+
+        See ``docs/internal/run-layout.md``.
         """
+        from rflow.graph.run_layout import save_run, save_snapshot
+
+        p = Path(path)
+        if p.suffix == ".json" and not p.is_dir():
+            return save_snapshot(self, p)
+        run_root = p if p.is_dir() or not p.suffix else p.parent
+        return save_run(self, run_root)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "Graph":
+        """Rebuild a :class:`Graph` from a run directory or ``.json`` snapshot."""
+        from rflow.graph.run_layout import (
+            is_graph_snapshot,
+            is_run_manifest,
+            load_run,
+            load_snapshot,
+        )
+
+        p = Path(path)
+        if p.is_dir():
+            graph_json = p / "graph.json"
+            if not graph_json.is_file():
+                raise ValueError(f"{p} has no graph.json")
+            data = json.loads(graph_json.read_text(encoding="utf-8"))
+            if is_run_manifest(data):
+                return load_run(p)
+            if is_graph_snapshot(data):
+                return cls.from_dict(data)
+            raise ValueError(f"{graph_json} is not a run manifest or graph snapshot")
+        if p.suffix == ".json":
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if is_run_manifest(data):
+                return load_run(p.parent)
+            return cls.from_dict(data)
+        return load_snapshot(p)
+
+    # ── out-of-band trajectory editing (pure: copy → edit → return) ───
+
+    def replace_node(
+        self, target: "str | Node", node: Node, *, truncate: str = "descendants"
+    ) -> "Graph":
+        from rflow.graph.replace import replace_node
+
+        return replace_node(self, target, node, truncate=truncate)
+
+    def replace_last_action(
+        self, agent_id: str, node: Node, *, truncate: str = "descendants"
+    ) -> "Graph":
+        from rflow.graph.replace import replace_last_action
+
+        return replace_last_action(self, agent_id, node, truncate=truncate)
+
+    def replace_last_observation(
+        self, agent_id: str, node: Node, *, truncate: str = "descendants"
+    ) -> "Graph":
+        from rflow.graph.replace import replace_last_observation
+
+        return replace_last_observation(self, agent_id, node, truncate=truncate)
+
+    def truncate_after(self, node_id: str, *, descendants: bool = True) -> "Graph":
+        from rflow.graph.truncation import truncate_after
+
+        return truncate_after(self, node_id, descendants=descendants)
+
+    def truncate_agent(self, agent_id: str, *, after_seq: int) -> "Graph":
+        from rflow.graph.truncation import truncate_agent
+
+        return truncate_agent(self, agent_id, after_seq=after_seq)
+
+    def prune_descendants_spawned_after(self, agent_id: str, seq: int) -> "Graph":
+        from rflow.graph.truncation import prune_descendants_spawned_after
+
+        return prune_descendants_spawned_after(self, agent_id, seq)
+
+    def inject(self, *, target: Any, node: Node, mode: str = "append") -> "Graph":
         from rflow.graph.injection import inject
 
-        return inject(
-            self,
-            target=target,
-            node=node,
-            mode=mode,
-            branch_id=branch_id,
-            output_schema=output_schema,
-            inherit_output_schema=inherit_output_schema,
-        )
+        return inject(self, target=target, node=node, mode=mode)
 
     def inject_output(
-        self,
-        *,
-        target: str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]],
-        output: str,
-        content: str | None = None,
-        branch_id: str | None = None,
-    ) -> Graph:
+        self, *, target: Any, output: str, content: str | None = None
+    ) -> "Graph":
         from rflow.graph.injection import inject_output
 
-        return inject_output(
-            self,
-            target=target,
-            output=output,
-            content=content,
-            branch_id=branch_id,
-        )
+        return inject_output(self, target=target, output=output, content=content)
 
-    def _resolve_injection_targets(
-        self, target: str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]]
-    ) -> list[Graph]:
-        from rflow.graph.injection import resolve_injection_targets
+    def retrace_steps(self) -> "list[Graph]":
+        """Reconstruct per-tick snapshots of this run (see :mod:`rflow.graph.timeline`)."""
+        from rflow.graph.timeline import retrace_steps
 
-        return resolve_injection_targets(self, target)
+        return retrace_steps(self)
 
-    # ── rendering ────────────────────────────────────────────────────
+    def trace(self) -> "Any":
+        """Build a :class:`~rflow.utils.trace.Trace` of per-tick snapshots.
+
+        The viz/viewer layer consumes a ``Trace``; this expands the single final
+        graph into a stepped timeline (via :meth:`retrace_steps`) so a graph you
+        only kept the final state of still renders a real stepper.
+        """
+        from rflow.utils.trace import Trace
+
+        return Trace.from_graph(self)
+
+    # ── rendering conveniences (delegate to rflow.utils.viewer) ───────
+
+    @property
+    def model_label(self) -> str:
+        """Best-effort model name for this agent (for display)."""
+        from rflow.utils.viewer import _model_label
+
+        return _model_label(self)
 
     def tree(self) -> str:
+        """Render the subtree as a nested text tree."""
         from rflow.utils.viewer import graph_tree
 
         return graph_tree(self)
 
+    def transcript(self, *, include_system: bool = True) -> str:
+        """Render this agent's trajectory as a chat-log transcript."""
+        from rflow.utils.viewer import agent_transcript
+
+        return agent_transcript(self, include_system=include_system)
+
     def session(self, *, include_system: bool = False) -> str:
+        """Render every agent's trajectory in graph order (flat chat log)."""
         from rflow.utils.viewer import graph_session
 
         return graph_session(self, include_system=include_system)
 
-    def transcript(
-        self, agent_id: str | None = None, *, include_system: bool = True
-    ) -> str:
-        from rflow.utils.viewer import agent_transcript
-
-        target = self[agent_id] if agent_id else self
-        return agent_transcript(target, include_system=include_system)
-
-    def plot(self, kind: str = "graph", **kwargs: Any) -> Any:
-        from rflow.utils.viewer import graph_plot
-
-        return graph_plot(self, kind, **kwargs)
-
-    def save_image(self, path: str | Path, **kwargs: Any) -> Path:
-        from rflow.utils.viewer import save_image
-
-        return save_image(self, path, **kwargs)
-
     def save_html(self, path: str | Path, **kwargs: Any) -> Path:
+        """Write an interactive HTML view of this graph to ``path``."""
         from rflow.utils.viewer import save_html
 
-        return save_html([self], path, **kwargs)
+        return save_html(self, path, **kwargs)
 
-    # ── persistence ──────────────────────────────────────────────────
+    def messages(self, system_prompt: str | None = None) -> list[dict[str, str]]:
+        """Render this agent's trajectory as a chat-message list.
 
-    def meta_dict(self) -> dict[str, Any]:
-        """Flat per-agent invariants — what gets persisted to ``agent.json``."""
+        Observations the model should react to become ``user`` turns and the
+        model's own replies become ``assistant`` turns; consecutive same-role
+        messages are coalesced. This is exactly what the LLM saw, minus any
+        engine-added nudge. Pass ``system_prompt`` to override the stored one
+        (or pass ``""`` to omit the system message).
+        """
+        system = system_prompt if system_prompt is not None else self.system_prompt
+        msgs: list[dict[str, str]] = []
+        if system:
+            msgs.append({"role": "system", "content": system})
+        for node in self.nodes:
+            if isinstance(node, UserQuery):
+                append_message(msgs, "user", node.content)
+            elif isinstance(node, LLMOutput):
+                append_message(msgs, "assistant", node.reply)
+            elif (
+                isinstance(node, CodeObservation) and not node.terminal and node.content
+            ):
+                append_message(msgs, "user", node.content)
+        return msgs
+
+    def to_dict(self) -> dict:
         return {
             "agent_id": self.agent_id,
             "depth": self.depth,
             "query": self.query,
             "system_prompt": self.system_prompt,
-            "config": dict(self.config),
-            "runtime": (self.runtime.model_dump(mode="json") if self.runtime else None),
+            "inputs": dict(self.inputs),
             "model": self.model,
+            "max_iters": self.max_iters,
+            "output_schema": self.output_schema,
             "parent_agent_id": self.parent_agent_id,
             "parent_node_id": self.parent_node_id,
-            "output_schema": self.output_schema,
-            "context": self.context.model_dump(mode="json"),
+            "nodes": [n.to_dict() for n in self.nodes],
+            "children": {aid: c.to_dict() for aid, c in self.children.items()},
         }
+
+    _FIELDS = frozenset(
+        {
+            "agent_id",
+            "depth",
+            "query",
+            "system_prompt",
+            "inputs",
+            "model",
+            "max_iters",
+            "output_schema",
+            "parent_agent_id",
+            "parent_node_id",
+        }
+    )
 
     @classmethod
     def from_meta_dict(
         cls,
-        data: dict[str, Any],
+        meta: dict[str, Any],
         *,
-        nodes: Iterable[Node] = (),
-        children: dict[str, Graph] | None = None,
-    ) -> Graph:
-        """Build a :class:`Graph` from a flat agent dict + nodes + children."""
+        nodes: "list[Node] | None" = None,
+        children: "dict[str, Graph] | None" = None,
+    ) -> "Graph":
+        """Build a :class:`Graph` from a metadata dict plus nodes/children.
+
+        Convenience for hand-constructing graphs (examples, tests): ``meta``
+        carries the scalar fields (``agent_id``, ``depth``, ``query`` …) and
+        unknown keys are ignored.
+        """
+        known = {k: v for k, v in meta.items() if k in cls._FIELDS}
+        return cls(**known, nodes=list(nodes or []), children=dict(children or {}))
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Graph":
+        """Rebuild a :class:`Graph` (and its subtree) from :meth:`to_dict`.
+
+        Tolerant on read: a legacy ``"states"`` key is accepted in place of
+        ``"nodes"``, and unknown extra fields are ignored, so older traces load.
+        """
+        raw_nodes = data.get("nodes", data.get("states", []))
         return cls(
             agent_id=data["agent_id"],
             depth=data.get("depth", 0),
             query=data.get("query", ""),
             system_prompt=data.get("system_prompt", ""),
-            config=dict(data.get("config") or {}),
-            runtime=(
-                RuntimeRef.model_validate(data["runtime"])
-                if data.get("runtime")
-                else None
-            ),
+            inputs=dict(data.get("inputs") or {}),
             model=data.get("model"),
+            max_iters=data.get("max_iters"),
+            output_schema=data.get("output_schema"),
             parent_agent_id=data.get("parent_agent_id"),
             parent_node_id=data.get("parent_node_id"),
-            output_schema=data.get("output_schema"),
-            context=_context_payload_from_meta(data),
-            nodes=list(nodes),
-            children=dict(children or {}),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Recursive JSON dump of the whole subtree."""
-        return {
-            **self.meta_dict(),
-            "nodes": [s.to_dict() for s in self.nodes],
-            "children": {aid: c.to_dict() for aid, c in self.children.items()},
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Graph:
-        raw_nodes = data.get("nodes", data.get("states", []))
-        return cls.from_meta_dict(
-            data,
-            nodes=[parse_node_obj(s) for s in raw_nodes],
+            nodes=[parse_node_obj(n) for n in raw_nodes],
             children={
                 aid: cls.from_dict(child)
                 for aid, child in (data.get("children") or {}).items()
             },
         )
-
-    def save(self, path: str | Path) -> Path:
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
-        return p
-
-    @classmethod
-    def load(cls, path: str | Path) -> Graph:
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
-
-    # ── dunder ───────────────────────────────────────────────────────
-
-    def __iter__(self) -> Iterator[str]:
-        """Iterate agent ids in the subtree (insertion order)."""
-        for g in self.walk():
-            yield g.agent_id
-
-    def __len__(self) -> int:
-        return sum(1 for _ in self.walk())
 
     def __repr__(self) -> str:
         return (
@@ -792,26 +796,37 @@ class Graph:
         )
 
 
-def _path_prefixes(start: str, full: str) -> Iterator[str]:
-    """Yield intermediate dotted prefixes between ``start`` and ``full``.
-
-    For ``start="root"`` and ``full="root.a.b.c"`` yields
-    ``"root.a"``, ``"root.a.b"``, ``"root.a.b.c"``.
-    """
-    if not full.startswith(start + "."):
-        return
-    rest = full[len(start) + 1 :].split(".")
-    cur = start
-    for piece in rest:
-        cur = f"{cur}.{piece}"
-        yield cur
-
-
 __all__ = [
-    "AgentsView",
-    "Edge",
-    "EdgesView",
+    "ActionNode",
+    "ChildHandle",
+    "append_message",
+    "CodeObservation",
+    "DoneOutput",
+    "ErrorOutput",
+    "ExecAction",
+    "ExecOutput",
     "Graph",
-    "NodesView",
-    "RuntimeRef",
+    "LLMAction",
+    "LLMOutput",
+    "Node",
+    "ObservationNode",
+    "ResumeAction",
+    "SupervisingOutput",
+    "UserQuery",
+    "WaitRequest",
+    "new_id",
+    "parse_node_obj",
+    "is_observation",
+    "is_action",
+    "is_code_observation",
+    "is_user_query",
+    "is_llm_output",
+    "is_exec_output",
+    "is_supervising",
+    "is_errored",
+    "is_done",
+    "is_llm_action",
+    "is_exec_action",
+    "is_resume_action",
+    "is_resumed",
 ]

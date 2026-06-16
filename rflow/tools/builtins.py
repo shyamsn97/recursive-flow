@@ -1,72 +1,69 @@
-"""Engine-bound built-in tools and delegation launchers.
+"""Core REPL tools, assembled once per agent by :meth:`rflow.flow.Flow.build_tools`.
 
-Each tool is a Python closure created per-runtime and bound to a specific
-``runtime.env`` dict (and, for ``flow_delegate``, a ``spawn_child`` callable
-that creates new sub-agents). They are registered through the normal
-:meth:`Runtime.register_tool` path — ``LocalRuntime`` injects them
-straight into the REPL namespace; remote runtimes expose proxy stubs that
-round-trip back to the host closure.
-
-The ``env`` dict captured here is the same object the engine reads back
-via ``runtime.env`` after each execution to discover ``DONE_RESULT``.
+Each ``make_*`` factory returns a closure bound to the live ``Flow`` and the
+agent's REPL ``env`` dict — *not* its ``Graph``. The per-agent context the tools
+need (``ENV_AGENT_ID``, ``ENV_OUTPUT_SCHEMA``) is seeded into ``env`` by
+``repl_for`` and read at call time, so a single build serves the agent for its
+whole life. They raise the existing :class:`rflow.repl.DoneSignal` and are
+``@tool``-decorated so the prompt's tool list can describe them. ``History`` is
+the read-only ``HISTORY`` object an agent uses to re-read its own past turns when
+the model's context has been windowed (it does wrap the ``Graph``, since it is a
+trajectory view rather than a control tool).
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from typing import Any
+import re
+from typing import TYPE_CHECKING, Any
 
 from rflow.graph import ChildHandle, WaitRequest
-from rflow.runtime.env import (
-    AGENT_ID,
-    DONE_OUTPUT_SCHEMA,
-    DONE_RESULT,
-    PARENT_NODE_ID,
-    replay_queue,
-)
-from rflow.tools import tool
+from rflow.repl import DoneSignal
+from rflow.tools import get_tool_metadata, tool
+from rflow.tools.registry import HIDDEN_REPL_TOOL_NAMES
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from rflow.flow import Flow
+    from rflow.graph import Graph
+
+#: Keys the engine seeds into each agent's REPL ``env`` so the tool closures can
+#: read their per-agent context at call time (instead of capturing the Graph).
+#: ``env`` is the REPL's hidden execution dict — never shown to the model — and
+#: is the same object the engine reads ``ENV_DONE_RESULT`` back from.
+ENV_AGENT_ID = "__agent_id__"
+ENV_OUTPUT_SCHEMA = "__output_schema__"
+ENV_DONE_RESULT = "DONE_RESULT"
 
 
-class DoneSignal(BaseException):
-    """Internal control-flow signal raised by ``done()`` to stop execution.
+def make_done(flow: Flow, env: dict[str, Any]):
+    """Build ``done(answer)``; enforces the schema stashed in ``env``.
 
-    This intentionally inherits from ``BaseException`` so agent code with a
-    broad ``except Exception`` repair block cannot accidentally swallow a
-    successful ``done(...)`` call and keep executing.
+    Reads ``env[ENV_OUTPUT_SCHEMA]`` (set per-agent by ``repl_for``) so the same
+    factory works for any agent — no Graph captured.
     """
 
-
-def make_done(env: dict[str, Any], output_parser: Callable[[str, Any], Any]):
-    """Closure that records the final answer and stops the current block."""
-
-    @tool("Return this agent's final answer.")
-    def done(answer: Any) -> str:
-        if env.get(DONE_RESULT) is None:
-            schema = env.get(DONE_OUTPUT_SCHEMA)
-            if schema is None:
-                env[DONE_RESULT] = str(answer).strip()
-            else:
-                content = json.dumps(answer, separators=(",", ":"), ensure_ascii=False)
-                parsed = output_parser(content, schema)
-                structured = (
-                    parsed.model_dump(mode="json")
-                    if hasattr(parsed, "model_dump")
-                    else parsed
-                )
-                env[DONE_RESULT] = json.dumps(
-                    structured,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                )
-            print(f"[done] {env[DONE_RESULT]}")
-        raise DoneSignal(env[DONE_RESULT])
+    @tool("Finish and return this agent's final answer.", proxy=True)
+    def done(answer: Any) -> None:
+        schema = env.get(ENV_OUTPUT_SCHEMA)
+        if schema is not None:
+            content = answer if isinstance(answer, str) else json.dumps(answer)
+            # Validate against the schema; a mismatch raises StructuredOutputError
+            # whose message is the recovery hint, recorded as a retryable error.
+            flow.output_parser(content, schema)
+            result = content
+        else:
+            result = str(answer).strip()
+        env[ENV_DONE_RESULT] = result
+        print(f"[done] {result}")
+        raise DoneSignal()
 
     return done
 
 
 def make_wait():
-    """Closure that packages :class:`ChildHandle`s into a :class:`WaitRequest`."""
+    """Build ``flow_wait(*handles)`` with an actionable error on refusals."""
 
     @tool("Wait for delegated children. Must be called with `await`.")
     def flow_wait(*handles: ChildHandle) -> WaitRequest:
@@ -78,154 +75,186 @@ def make_wait():
                 f"handles[{i}] is {type(h).__name__}: {h!r}" for i, h in bad
             )
             raise TypeError(
-                f"flow_wait() got non-handle arguments — `flow_delegate()` likely "
-                f"refused those calls and returned a refusal string instead of a "
-                f"ChildHandle. Read the string(s), fix the cause (e.g. unknown "
-                f"`model=` key, max depth reached), and retry. {details}"
+                "flow_wait() got non-handle arguments — flow_delegate() likely "
+                "refused those calls and returned a refusal string instead of a "
+                "ChildHandle. Read the string(s), fix the cause (unknown `model=` "
+                f"key, max depth reached), and retry. {details}"
             )
-        return WaitRequest(agent_ids=[h.agent_id for h in handles])
+        return WaitRequest([h.agent_id for h in handles])
 
     return flow_wait
 
 
-@tool("Show current public REPL variable names and their type names.")
-def SHOW_VARS() -> dict[str, str]:
-    """Installed specially by Runtime so it can inspect the live REPL namespace."""
+def make_delegate(flow: Flow, env: dict[str, Any]):
+    """Build the hidden ``flow_delegate(...)`` primitive for ``env``'s agent.
 
-    raise RuntimeError("SHOW_VARS must be installed by the runtime")
-
-
-def make_delegate(
-    spawn_child: Callable[..., "ChildHandle | str"],
-    env: dict[str, Any],
-):
-    """Closure that calls ``spawn_child(...)`` and tracks the new id.
-
-    ``spawn_child`` is the engine's child-spawning seam (typically
-    :meth:`RecursiveFlow.spawn_child` bound to a specific engine instance).
-    Passing the callable instead of the whole engine keeps this
-    module decoupled from :class:`RecursiveFlow`.
-
-    In *replay mode* (``env[REPLAY_QUEUE]`` is a list), ``flow_delegate``
-    does not spawn a new child — it pops the next expected agent id
-    off the queue and returns a :class:`ChildHandle` to it. This lets
-    the engine re-execute action code after a fork or cold start to
-    re-create the suspended generator without duplicating children
-    that already exist in the graph.
+    Reads ``env[ENV_AGENT_ID]`` at call time to know which agent is spawning, so
+    the same factory works for any agent — no Graph captured.
     """
 
     @tool(
-        "Delegate one independent unit of work to a named child agent. "
-        "Use for multi-file/component/chunk/trial fanout; the parent should "
-        "pass shared requirements/data in context, then integrate and verify "
-        "child results. Set output_schema to a JSON Schema dict when the child "
-        "must return a validated JSON-compatible value."
+        "Delegate one unit of work to a named child agent. Pass shared "
+        "requirements/data via inputs (a dict of str -> str bound as the "
+        "child's own top-level variables); set output_schema to a JSON Schema "
+        "dict when the child must return a validated value.",
+        proxy=True,
     )
     def flow_delegate(
         *,
-        name: str,
+        name: str = "subagent",
         query: str,
-        context: str | list[str],
+        inputs: dict[str, str] | None = None,
         model: str = "default",
         output_schema: Any | None = None,
     ) -> ChildHandle | str:
-        queue = replay_queue(env)
-        if queue is not None:
-            if not queue:
-                return (
-                    f"[replay error: no expected child for flow_delegate({name!r}). "
-                    "Recorded trajectory diverges from the action code.]"
-                )
-            return ChildHandle(queue.pop(0))
-        context_text = "\n".join(context) if isinstance(context, list) else context
-        return spawn_child(
-            env[AGENT_ID],
-            env[PARENT_NODE_ID],
-            name,
-            query,
-            context_text,
-            model=model,
-            output_schema=output_schema,
+        return flow.spawn_child(
+            env[ENV_AGENT_ID], name, query, inputs, model, output_schema
         )
 
     return flow_delegate
 
 
-def make_launch_subagents(
-    flow_delegate: Callable[..., object],
-    flow_wait: Callable[..., Any],
-):
-    """Build the public multi-child launcher from bound primitives."""
+def make_launch_subagents(flow_delegate, flow_wait):
+    """Build the public ``launch_subagents(specs)`` launcher from primitives."""
 
     @tool(
-        "Launch sub-agents in parallel and wait for all. Must be awaited. "
-        "Each spec may include output_schema as a JSON Schema dict for that "
-        "child's done(value)."
+        "Launch one or many sub-agents in parallel and wait for all. Must be "
+        "awaited at the top level. specs is a list of dicts; each requires "
+        "'query' and may set 'name', 'model', 'inputs', and 'output_schema'. "
+        "Returns child results in spec order."
     )
     async def launch_subagents(specs):
-        """Launch sub-agents in parallel and wait for all. Must be awaited.
-
-        ``specs`` is a list of dicts; each dict may set ``query`` (required),
-        ``context``, ``name``, ``model``, and ``output_schema``.
-        Returns child results in the same order as ``specs``. Children with
-        ``output_schema`` return validated JSON-compatible values.
-        """
         if not isinstance(specs, list):
-            raise TypeError("launch_subagents(...) requires a list of dict specs")
-        _results = [None] * len(specs)
-        _handles = []
-        _positions = []
-        for _i, _spec in enumerate(specs):
-            if not isinstance(_spec, dict):
+            raise TypeError("launch_subagents(...) takes a list of dict specs")
+        results: list = [None] * len(specs)
+        handles, positions = [], []
+        for i, spec in enumerate(specs):
+            if not isinstance(spec, dict):
                 raise TypeError(
                     "launch_subagents(...) requires every spec to be a dict"
                 )
-            if "query" not in _spec:
+            if "query" not in spec:
                 raise KeyError("launch_subagents(...) spec missing required 'query'")
-            _handle = flow_delegate(
-                name=_spec.get("name", "subagent"),
-                query=_spec["query"],
-                context=_spec.get("context", ""),
-                model=_spec.get("model", "default"),
-                output_schema=_spec.get("output_schema"),
+            handle = flow_delegate(
+                name=spec.get("name", "subagent"),
+                query=spec["query"],
+                inputs=spec.get("inputs"),
+                model=spec.get("model", "default"),
+                output_schema=spec.get("output_schema"),
             )
-            if isinstance(_handle, str):
-                _results[_i] = _handle
+            if isinstance(handle, str):
+                results[i] = handle
             else:
-                _handles.append(_handle)
-                _positions.append(_i)
-        if _handles:
-            _waited = await flow_wait(*_handles)
-            for _pos, _result in zip(_positions, _waited):
-                _results[_pos] = _result
-        return _results
+                handles.append(handle)
+                positions.append(i)
+        if handles:
+            waited = await flow_wait(*handles)
+            for pos, result in zip(positions, waited):
+                results[pos] = result
+        return results
 
     return launch_subagents
 
 
-def make_launcher(
-    name: str,
-    flow_delegate: Callable[..., object],
-    flow_wait: Callable[..., Any],
-):
-    """Build a public launcher tool by registered name."""
+def make_show_vars(namespace: dict[str, Any]):
+    """Build ``SHOW_VARS()`` over the live REPL ``namespace`` (off by default)."""
 
-    factories = {
-        "launch_subagents": make_launch_subagents,
-    }
-    try:
-        factory = factories[name]
-    except KeyError as exc:
-        raise KeyError(f"unknown launcher: {name}") from exc
-    return factory(flow_delegate, flow_wait)
+    @tool("Show current public REPL variable names and their type names.")
+    def SHOW_VARS() -> dict[str, str]:
+        out: dict[str, str] = {}
+        for name, value in namespace.items():
+            if name.startswith("_") or name in HIDDEN_REPL_TOOL_NAMES:
+                continue
+            if name == "SHOW_VARS" or get_tool_metadata(value) is not None:
+                continue
+            out[name] = type(value).__name__
+        return out
+
+    return SHOW_VARS
+
+
+def make_history(flow: Flow, env: dict[str, Any]) -> "History":
+    """Build this agent's ``HISTORY`` view, mirroring ``make_done(flow, env)``.
+
+    The view resolves the agent's *live* graph by id at call time (never captures
+    a ``Graph``), so it stays correct across deep-copy-on-adopt, ``inject``, and
+    ``truncate`` — and ships nothing until a method is actually called. ``HISTORY``
+    is host-bound: a remote runtime object-proxies it so the slice computed over
+    the full host trajectory is all that crosses the wire.
+    """
+    return History(lambda: flow.graph.agents.get(env[ENV_AGENT_ID]))
+
+
+class History:
+    """Read-only view of THIS agent's own message trajectory (untruncated).
+
+    ``build_messages`` may window or truncate what the model sees each turn;
+    ``HISTORY`` always exposes the full user/assistant projection so code can
+    recover earlier turns. It holds a *resolver* (not a ``Graph``) and reads the
+    live trajectory on every call, so it reflects everything recorded so far —
+    even after the run's graph has been copied or edited.
+    """
+
+    __slots__ = ("_resolve",)
+
+    def __init__(self, resolve: "Callable[[], Graph | None]") -> None:
+        self._resolve = resolve
+
+    def messages(self) -> list[dict[str, str]]:
+        """The full chat projection of this agent's turns (no system message)."""
+        agent = self._resolve()
+        return agent.messages("") if agent is not None else []
+
+    def count(self) -> int:
+        """Number of projected messages (so ``len`` works over the wire too)."""
+        return len(self.messages())
+
+    def __len__(self) -> int:
+        return self.count()
+
+    def __repr__(self) -> str:
+        return f"HISTORY({self.count()} messages)"
+
+    def read(self, i: int) -> dict[str, str]:
+        """One message by index (negative indexes count from the end)."""
+        return self.messages()[i]
+
+    def last(self, n: int = 5) -> list[dict[str, str]]:
+        """The most recent ``n`` messages."""
+        if n <= 0:
+            return []
+        return self.messages()[-n:]
+
+    def text(self, *, roles: tuple[str, ...] = ("user", "assistant")) -> str:
+        """The selected turns flattened to ``[role] content`` blocks."""
+        return "\n\n".join(
+            f"[{m['role']}] {m['content']}"
+            for m in self.messages()
+            if m["role"] in roles
+        )
+
+    def grep(self, pattern: str, *, max_results: int = 50) -> list[str]:
+        """Lines across all turns matching ``pattern`` (``idx[role]: line``)."""
+        regex = re.compile(pattern)
+        out: list[str] = []
+        for idx, message in enumerate(self.messages()):
+            for line in message["content"].splitlines():
+                if regex.search(line):
+                    out.append(f"{idx}[{message['role']}]: {line}")
+                    if len(out) >= max_results:
+                        return out
+        return out
 
 
 __all__ = [
-    "DoneSignal",
-    "SHOW_VARS",
+    "ENV_AGENT_ID",
+    "ENV_DONE_RESULT",
+    "ENV_OUTPUT_SCHEMA",
+    "History",
     "make_delegate",
     "make_done",
-    "make_launcher",
+    "make_history",
     "make_launch_subagents",
+    "make_show_vars",
     "make_wait",
 ]

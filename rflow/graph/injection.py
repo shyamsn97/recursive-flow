@@ -1,29 +1,34 @@
-"""Immutable graph injection helpers."""
+"""Immutable graph injection (copy → append → return).
+
+Append a node onto one or more agents' trajectories out of band — e.g. feed an
+:class:`ExecOutput` to steer a paused run, or fan an edit across every agent
+matching a regex / predicate. Append mode only; the engine still owns live
+appends via ``Flow._append``.
+"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from rflow.graph.node import ActionNode, ExecOutput, Node
+from rflow.graph.graph import ActionNode, ExecOutput, Node
 from rflow.graph.node_state import stamp_node_for_position
+
+if TYPE_CHECKING:
+    from rflow.graph.graph import Graph
 
 
 def inject(
-    graph: Any,
+    graph: "Graph",
     *,
-    target: str | re.Pattern[str] | Callable[[Any], Iterable[str | Any]],
+    target: "str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]]",
     node: Node,
     mode: str = "append",
-    branch_id: str | None = None,
-    output_schema: dict[str, Any] | None = None,
-    inherit_output_schema: bool = True,
-) -> Any:
-    """Return a new graph with ``node`` injected at ``target``."""
-
+) -> "Graph":
+    """Return a new graph with ``node`` appended at every matched ``target``."""
     if mode != "append":
-        raise NotImplementedError("Graph.inject currently supports append mode only")
+        raise NotImplementedError("inject currently supports append mode only")
     out = graph.copy(deep=True)
     targets = resolve_injection_targets(out, target)
     if not targets:
@@ -31,14 +36,7 @@ def inject(
     global_step = out.next_global_step()
     for sub in targets:
         cur = sub.current()
-        fixed = node_for_injection(
-            sub,
-            node,
-            global_step=global_step,
-            branch_id=branch_id,
-            output_schema=output_schema,
-            inherit_output_schema=inherit_output_schema,
-        )
+        fixed = node_for_injection(sub, node, global_step=global_step)
         if cur is not None and cur.terminal:
             raise ValueError(f"cannot inject into finished agent {sub.agent_id!r}")
         if cur is not None and is_action_like(cur) and is_action_like(fixed):
@@ -50,32 +48,28 @@ def inject(
 
 
 def inject_output(
-    graph: Any,
+    graph: "Graph",
     *,
-    target: str | re.Pattern[str] | Callable[[Any], Iterable[str | Any]],
+    target: "str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]]",
     output: str,
     content: str | None = None,
-    branch_id: str | None = None,
-) -> Any:
+) -> "Graph":
+    """Inject an :class:`ExecOutput` (convenience wrapper over :func:`inject`)."""
     return inject(
-        graph,
-        target=target,
-        node=ExecOutput(output=output, content=content or output),
-        branch_id=branch_id,
+        graph, target=target, node=ExecOutput(output=output, content=content or output)
     )
 
 
 def resolve_injection_targets(
-    graph: Any,
-    target: str | re.Pattern[str] | Callable[[Any], Iterable[str | Any]],
-) -> list[Any]:
+    graph: "Graph",
+    target: "str | re.Pattern[str] | Callable[[Graph], Iterable[str | Graph]]",
+) -> "list[Graph]":
     if callable(target):
-        from rflow.graph.graph import Graph
+        from rflow.graph.graph import Graph as _Graph
 
-        raw = list(target(graph))
-        out = []
-        for item in raw:
-            out.append(item if isinstance(item, Graph) else graph[item])
+        out: list[Any] = []
+        for item in list(target(graph)):
+            out.append(item if isinstance(item, _Graph) else graph[item])
         return out
     if isinstance(target, str) and target in graph.agents:
         return [graph[target]]
@@ -88,32 +82,7 @@ def is_action_like(node: Node) -> bool:
 
 
 def node_for_injection(
-    sub: Any,
-    node: Node,
-    *,
-    global_step: int | None = None,
-    branch_id: str | None = None,
-    output_schema: dict[str, Any] | None = None,
-    inherit_output_schema: bool = True,
-) -> Node:
-    return _node_for_injection(
-        sub,
-        node,
-        global_step=global_step,
-        branch_id=branch_id,
-        output_schema=output_schema,
-        inherit_output_schema=inherit_output_schema,
-    )
-
-
-def _node_for_injection(
-    sub: Any,
-    node: Node,
-    *,
-    global_step: int | None,
-    branch_id: str | None,
-    output_schema: dict[str, Any] | None,
-    inherit_output_schema: bool,
+    sub: "Graph", node: Node, *, global_step: int | None = None
 ) -> Node:
     source = sub.current()
     next_seq = (sub.nodes[-1].seq + 1) if sub.nodes else 0
@@ -123,10 +92,6 @@ def _node_for_injection(
         agent_id=sub.agent_id,
         seq=next_seq,
         global_step=global_step if global_step is not None else sub.next_global_step(),
-        branch_id=branch_id,
-        graph_output_schema=getattr(sub, "output_schema", None),
-        output_schema=output_schema,
-        inherit_output_schema=inherit_output_schema,
     )
 
 

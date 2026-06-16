@@ -1,7 +1,7 @@
-"""Compare repair branches with the current node-first API.
+"""Compare repair branches with the Graph-centric API.
 
-Each repair attempt is a separate workspace/context branch, and the resulting
-node graphs are directly comparable.
+Each repair attempt is a separate ``flow.start(...)`` run in its own working
+directory; the resulting graphs are directly comparable.
 
 Usage:
     python examples/control/branching/fork_repair.py
@@ -81,12 +81,12 @@ class RepairLLM(rflow.LLMClient):
         )
 
 
-def setup_project(workspace: rflow.Workspace) -> None:
-    workspace.path("tests").mkdir(parents=True, exist_ok=True)
-    workspace.path("slugify.py").write_text(
+def setup_project(workdir: Path) -> None:
+    (workdir / "tests").mkdir(parents=True, exist_ok=True)
+    (workdir / "slugify.py").write_text(
         "def slugify(text: str) -> str:\n    raise NotImplementedError\n"
     )
-    workspace.path("tests", "test_slugify.py").write_text(TESTS)
+    (workdir / "tests" / "test_slugify.py").write_text(TESTS)
 
 
 def run_tests(files_dir: Path) -> tuple[bool, str]:
@@ -103,27 +103,27 @@ def run_tests(files_dir: Path) -> tuple[bool, str]:
 
 
 def run_branch(root: Path, name: str, implementation: str, label: str):
-    workspace = rflow.Workspace.create(root / name)
-    setup_project(workspace)
-    engine = rflow.RecursiveFlow(
-        llm_client=RepairLLM(implementation, label),
-        workspace=workspace,
-        config=rflow.FlowConfig(max_depth=0, max_iterations=3),
+    workdir = root / name
+    setup_project(workdir)
+    # File tools run inside this branch's own working directory.
+    runtime = rflow.LocalRuntime(working_directory=workdir)
+    runtime.register_tools(FILE_TOOLS)
+    flow = rflow.Flow(
+        RepairLLM(implementation, label), runtime=runtime, max_depth=0, max_iters=3
     )
-    engine.runtime.register_tools(FILE_TOOLS)
-    graph = engine.start(TASK)
+    graph = flow.start(TASK)
     while not graph.finished:
-        graph = engine.step(graph)
-    passed, output = run_tests(workspace.path())
-    return workspace, graph, passed, output
+        graph = flow.step(graph)
+    passed, output = run_tests(workdir)
+    return workdir, graph, passed, output
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare repair branches")
     parser.add_argument(
         "--root-dir",
-        default=str(Path(__file__).resolve().parents[1] / "runs" / "fork_repair"),
-        help="where to drop per-branch workspaces (default: examples/runs/fork_repair/)",
+        default=str(Path(__file__).resolve().parents[2] / "_runs" / "fork-repair"),
+        help="where to drop per-branch working dirs (default: examples/_runs/fork-repair/)",
     )
     args = parser.parse_args()
 
@@ -139,14 +139,14 @@ def main() -> None:
 
     results = []
     for name, implementation, label in branches:
-        workspace, graph, passed, output = run_branch(root, name, implementation, label)
-        results.append((passed, workspace, graph, output))
+        workdir, graph, passed, output = run_branch(root, name, implementation, label)
+        results.append((passed, workdir, graph, output))
         print(f"{name}: tests={'PASS' if passed else 'FAIL'} result={graph.result()!r}")
         print("  " + brief_test_output(output).replace("\n", "\n  "))
 
     winner = next((item for item in results if item[0]), results[0])
-    _passed, workspace, _graph, _output = winner
-    print(f"\n[best] {workspace.root.name} workspace={workspace.root}")
+    _passed, workdir, _graph, _output = winner
+    print(f"\n[best] {workdir.name} dir={workdir}")
 
 
 def brief_test_output(output: str) -> str:

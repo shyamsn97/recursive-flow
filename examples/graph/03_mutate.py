@@ -60,7 +60,7 @@ def main() -> None:
 
     banner("graph.copy(deep=True) — clone before mutating")
     twin = g.copy(deep=True)
-    twin.update(model="gpt-5", config={"temperature": 0.0})
+    twin.update(model="gpt-5", inputs={"temperature": "0.0"})
     print(f"original: {summary(g)}")
     print(f"twin    : {summary(twin)}")
 
@@ -103,8 +103,8 @@ def main() -> None:
     print(f"after remove    : {list(g.agents)}")
 
     banner("graph.update — bulk top-level field edit")
-    g.update(query="hello (updated)", config={"max_depth": 2})
-    print(f"query={g.query!r} config={g.config}")
+    g.update(query="hello (updated)", model="gpt-5-mini")
+    print(f"query={g.query!r} model={g.model!r}")
 
 
 if __name__ == "__main__":

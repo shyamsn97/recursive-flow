@@ -1,82 +1,70 @@
 # Control
 
-`step(graph) -> graph'` is the core transition. Each call returns a fresh
-`Graph` snapshot, so stepping, rewind, and forking are explicit
-graph/workspace operations.
+`Graph` is the control surface. `Flow.start(...)` creates a graph, and every
+`Flow.step(graph)` returns a fresh advanced snapshot. Save/load, rewind, branch,
+inject, and resume are all graph operations.
 
-## Step loop
+## Step Loop
 
 ```python
+agent = rflow.Flow(rflow.OpenAIClient(model="gpt-5"), max_depth=2)
 graph = agent.start(query)
 while not graph.finished:
     graph = agent.step(graph)
 ```
 
-`agent.run(query)` does the same thing and returns `graph.result()`.
-`agent.chat(messages)` is the `LLMClient` interface — same loop, last
-user message becomes the query.
+`agent.run(query)` drives the same loop and returns `graph.result()`.
+`agent.chat(messages)` is the `LLMClient` interface; the latest user message
+becomes the query and the recursive loop runs under the hood.
 
-Each `step(graph)` advances **one observation-to-observation
-transition** for every agent that is ready to move. A single
-"reasoning turn" of an agent (call the LLM, then run the code it
-emitted) is therefore two `step()` rounds: an LLM half
-(`obs → LLMAction → LLMOutput`) and an exec half
-(`LLMOutput → ExecAction → CodeObservation`). This is the
-finest-grained reproducible step the engine exposes. See
-[`node_model.md`](node_model.md) for the typed node flow.
+Each `step(graph)` advances one observation-to-observation transition for every
+agent that is ready to move. A model turn is usually two steps: LLM call
+(`obs -> LLMAction -> LLMOutput`) and code execution
+(`LLMOutput -> ExecAction -> CodeObservation`). See [`node_model.md`](node_model.md)
+for the typed node flow.
 
 ## Eager Children
 
-By default, children advance in synchronized `step(...)` batches. If child A's
-current step takes 10 seconds and child B's current step takes 2 seconds,
-child B's next step waits until child A's current step finishes.
+By default, children advance in synchronized batches. If child A's current step
+takes 10 seconds and child B's current step takes 2 seconds, child B waits for
+that batch before starting its next step.
 
-Set `eager_children=True` when you want a work-conserving drain after a parent
-awaits a launcher (`await launch_subagents([...])`):
+Set `eager_children=True` for a work-conserving drain after a parent awaits a
+launcher:
 
 ```python
-agent = RecursiveFlow(
-    llm_client=...,
-    runtime=...,
-    config=FlowConfig(
-        max_depth=2,
-        child_max_iterations=20,
-        max_concurrency=8,
-        eager_children=True,
-    ),
+agent = rflow.Flow(
+    rflow.OpenAIClient(model="gpt-5"),
+    max_depth=2,
+    child_max_iters=20,
+    max_concurrency=8,
+    eager_children=True,
 )
 ```
 
-With that flag, children still do not run before the parent reaches the
-awaited launcher. Once the parent is supervising, runnable children use
-the configured pool's `run_until_idle(...)` behavior:
+Children still do not run before the parent reaches
+`await launch_subagents([...])`. Once the parent is supervising, runnable
+children refill the worker pool until all waited-on descendants finish.
 
-```text
-childa.task_1 starts  # slow, 10s
-childb.task_1 starts  # fast, 2s
-childb.task_1 finishes
-childb.task_2 starts  # starts before childa.task_1 finishes
-childa.task_1 finishes
-parent resumes when all waited-on children are done
-```
+See [`examples/control/delegation/eager_children.py`](../examples/control/delegation/eager_children.py)
+for a deterministic offline demo.
 
-See [`examples/control/delegation/eager_children.py`](../examples/control/delegation/eager_children.py) for a
-deterministic offline demo that prints both modes side by side.
+## Save And Resume
 
-## Workspace Resume
+A saved graph directory is the durable run:
 
 ```python
-import rflow
+graph.save("runs/deep_research")
 
-workspace = rflow.Workspace.open_path("runs/deep_research")
-graph = workspace.load_graph()
-while not graph.finished:
-    graph = agent.step(graph)
+resumed = rflow.Graph.load("runs/deep_research")
+while not resumed.finished:
+    resumed = agent.step(resumed)
 ```
 
-The workspace session is the saved run log.
+For live checkpointing, save after every step. The same path is overwritten with
+the latest complete graph/run layout.
 
-## Rewind
+## Rewind And Branch
 
 Keep every `Graph` snapshot in a list and resume any one of them:
 
@@ -90,6 +78,15 @@ while not graph.finished:
     graph = agent.step(graph)
 ```
 
+Branch by copying or loading a graph and saving the result somewhere else:
+
+```python
+branch = history[-5].copy(deep=True)
+while not branch.finished:
+    branch = agent.step(branch)
+branch.save("runs/repair-branch")
+```
+
 ## Node Injection
 
 Controllers can append typed nodes to a graph and commit them through the normal
@@ -97,8 +94,6 @@ step loop. This is useful for budget nudges, human feedback, and forced
 finalization:
 
 ```python
-import rflow
-
 graph = graph.inject(
     target="root.worker",
     node=rflow.ExecOutput(
@@ -110,152 +105,13 @@ graph = agent.step(graph)
 
 graph = graph.inject(
     target="root.worker",
-    node=ExecAction(code='done("best available answer")'),
+    node=rflow.ExecAction(code='done("best available answer")'),
 )
 graph = agent.step(graph)
 ```
 
-See [`injections.md`](injections.md) for the concise guide and
-[`examples/control/controller_injection.py`](../examples/control/controller_injection.py) for a runnable offline demo.
-
-## Workspace copies
-
-Use `Workspace.fork(...)` when a run needs isolated files, session,
-and context stores:
-
-```python
-copy = workspace.fork(new_dir="./repair-workspace")
-```
-
-## Replay
-
-A persisted workspace can be rehydrated into a `Graph` and resumed:
-
-```python
-graph = workspace.session.load_graph()
-while not graph.finished:
-    graph = agent.step(graph)
-```
-
-The engine reads from `graph.nodes`, appends new nodes through the
-session, and produces a fresh snapshot on every `step`. There is no
-in-memory node graph to keep in sync with disk.
-
-For the runtime contract around awaited launchers and `ResumeAction`,
-the full REPL/await protocol, persistence layout, and engine
-extension surface, see [`internals.md`](internals.md).
-
-## Custom runtime
-
-Subclass `Runtime` and implement two methods:
-
-```python
-class MyRuntime(Runtime):
-    def send(self, msg: dict) -> None: ...
-    def recv(self) -> dict: ...
-```
-
-See [`runtimes.md`](runtimes.md).
-
-## Custom tools
-
-```python
-@runtime.tool("Search files for a regex.")
-def search(pattern: str, path: str = ".") -> str:
-    ...
-```
-
-Or pass a list to `runtime.register_tools([...])`.
-
-## Custom prompt
-
-For a fuller guide, see [`prompt_customization.md`](prompt_customization.md).
-
-```python
-from rflow.prompts.default import DEFAULT_BUILDER
-
-GUARDRAILS = """
-- Verify before `done()`. Empty/zero/surprising results → one sanity check first.
-- Ask children for structured output (JSON / list / count), parsed mechanically.
-"""
-
-agent = RecursiveFlow(..., prompt_builder=(
-    DEFAULT_BUILDER
-    .section("role", "You are a security auditor.", title="Role")
-    .section("guardrails", GUARDRAILS, title="Guardrails", after="builtins")
-))
-```
-
-Or subclass `RecursiveFlow` and override `build_system_prompt`,
-`build_messages`, `extract_code`, or `step` (which is the public
-`act + apply_one` entry point).
-
-## Session, Context, And Artifacts
-
-`Workspace.session` stores the per-agent node log and the graph manifest.
-The convenience `workspace.load_graph()` is the normal way to reopen the
-current snapshot:
-
-```python
-graph = workspace.load_graph()
-sub = graph["root.boid_js"]
-print(sub.transcript())
-```
-
-On disk, the workspace keeps per-agent session logs under
-`session/<agent-id>/` and a compact graph manifest at `graph.json`:
-
-```text
-workspace/
-  graph.json                  # agent list + spawns edges
-  session/root/agent.json
-  session/root/session.jsonl
-  session/root/latest.json
-```
-
-`Workspace.context` stores optional payloads exposed inside the REPL as
-`CONTEXT`. The root agent's payload is keyword-only and optional:
-
-```python
-graph = agent.start("answer from the payload", context=large_text)
-```
-
-Payloads live beside the session views under `context/<agent-id>/`:
-
-```text
-workspace/
-  context/root/context.txt
-  context/root/context_metadata.json
-```
-
-Inside the REPL, agents see `CONTEXT` (read-only payload), `SESSION`
-(read-only view of every other agent in the run), and the standard
-filesystem tools. Sample, slice, or pass the full payload explicitly:
-
-```python
-CONTEXT.info()                  # {"chars": int, "lines": int}
-sample  = CONTEXT.read(0, 2000) # char slice as str
-window  = CONTEXT.lines(0, 50)  # line slice as list[str]
-hits    = CONTEXT.grep(r"TODO") # lineno:line rows
-full    = CONTEXT.read()        # full payload for handoff to a child
-```
-
-`Workspace.artifacts` is the user-controlled file surface for the workspace.
-It is a safe, root-relative API over ordinary workspace files; it does not force
-an `artifacts/` directory. Engine-owned paths like `session/`, `context/`, and
-`graph.json` are reserved.
-
-```python
-workspace.artifacts.write_text("skills/numpy-linear-algebra/SKILL.md", skill_md)
-workspace.artifacts.write_json("reports/run.json", {"ok": True})
-
-skill = workspace.artifacts.read_text("skills/numpy-linear-algebra/SKILL.md")
-reports = workspace.artifacts.list("reports")
-```
-
-Use artifacts for durable files that are part of the project or run but are not
-the agent's live `CONTEXT`: skill files, project memory, generated reports,
-saved plans, fixtures, or other user-chosen workspace paths.
+See [`injections.md`](injections.md) and
+[`examples/control/controller_injection.py`](../examples/control/controller_injection.py).
 
 ## Delegation
 
@@ -264,44 +120,81 @@ Agents delegate through one launcher, which must be awaited:
 ```python
 # One child — still pass a one-item list of dict specs, and unpack the result.
 [answer] = await launch_subagents([
-    {"name": "single", "query": query, "context": data},
+    {"name": "single", "query": query, "inputs": {"data": data}},
 ])
 
-# Many children in parallel — returns finish strings in spec order.
+# Many children in parallel — returns answers in spec order.
 results = await launch_subagents([
-    {"name": "a", "query": "...", "context": chunk_a},
-    {"name": "b", "query": "...", "context": chunk_b},
+    {"name": "a", "query": "...", "inputs": {"chunk": chunk_a}},
+    {"name": "b", "query": "...", "inputs": {"chunk": chunk_b}},
 ])
 ```
 
-- **Sequential** dependent steps: chain one-item `await launch_subagents([...])`
-  calls, feeding each result into the next child's `context`.
-- **Parallel** independent work: pass every spec to `launch_subagents([...])`
-  in one call so the engine schedules them on its pool concurrently.
-- Put child-specific data in each spec's `context` whenever the child needs
-  task payload, files, chunks, or parent-derived evidence. Use `context=""`
-  only for truly query-only work.
-- Pass a `CONTEXT.lines(...)` / `CONTEXT.read(...)` slice when each
-  child reasons over a different chunk of the parent's payload
-  (chunk-and-aggregate). A `list[str]` from `CONTEXT.lines(...)` is stored as
-  newline-separated child context.
-- Pass `CONTEXT.read()` only when the child genuinely needs the
-  parent's full view (reviewers, auditors, deterministic retry).
+- **Sequential dependent steps:** chain one-item `await launch_subagents([...])`
+  calls, feeding each result into the next child's `inputs`.
+- **Parallel independent work:** pass every spec in one call so the engine
+  schedules them concurrently.
+- **Child data:** put payloads in each spec's `inputs` dict. The child sees only
+  its query and its own `INPUTS`.
 
-Agents should use `launch_subagents(...)` for delegation;
+## Custom Runtime
 
-The default prompt biases toward a supervisor workflow for large context,
-parallel reasoning, and split artifacts. Inline work is still fine for small,
-tightly coupled tasks where delegation adds no useful ownership boundary.
+Subclass `Runtime` and implement `open(agent)` to mint a backend:
+
+```python
+class MyRuntime(rflow.Runtime):
+    def open(self, agent: rflow.Graph) -> rflow.ReplBackend:
+        return MyBackend(...)
+```
+
+Most users should pass `LocalRuntime`, `DockerRuntime`, or a sandbox runtime.
+See [`runtimes.md`](runtimes.md).
+
+## Custom Tools
+
+Register tools on the runtime before constructing or stepping the flow:
+
+```python
+@rflow.tool("Search files for a regex.")
+def search(pattern: str, path: str = ".") -> str:
+    ...
+
+runtime = rflow.LocalRuntime(working_directory=".")
+runtime.register_tool(search)
+runtime.register_tools(rflow.FILE_TOOLS)
+agent = rflow.Flow(rflow.OpenAIClient(model="gpt-5"), runtime=runtime)
+```
+
+## Custom Prompt
+
+For a fuller guide, see [`prompt_customization.md`](prompt_customization.md).
+
+```python
+from rflow.prompts import DEFAULT_BUILDER
+
+GUARDRAILS = """
+- Verify before `done()`. Empty/zero/surprising results -> one sanity check first.
+- Ask children for structured output when shape matters.
+"""
+
+agent = rflow.Flow(rflow.OpenAIClient(model="gpt-5"))
+agent.prompt_builder = (
+    DEFAULT_BUILDER
+    .section("role", "You are a security auditor.", title="Role")
+    .section("guardrails", GUARDRAILS, title="Guardrails", after="strategy")
+)
+```
+
+You can also subclass `Flow` and override `build_system_prompt`,
+`build_messages`, `format_exec_output`, `first_prompt`, or `step`.
 
 ## Walkthroughs
 
-- [`examples/basics/showcase.py`](../examples/basics/showcase.py) — runnable
-  walkthrough of stepping, workspace persistence, session reads, time travel,
-  and gym-style stepping.
+- [`examples/showcase.py`](../examples/showcase.py) — stepping, snapshots,
+  save/load, and live terminal visualization.
 - [`examples/notebooks/coding_agent.ipynb`](../examples/notebooks/coding_agent.ipynb)
-  — live LLM run that produces a real workspace.
+  — live LLM run that writes files and saves the run.
 - [`examples/notebooks/node_basics.ipynb`](../examples/notebooks/node_basics.ipynb)
-  — querying the `Graph` API on the deterministic fixture.
+  — querying the `Graph` API.
 - [`examples/notebooks/viz_walkthrough.ipynb`](../examples/notebooks/viz_walkthrough.ipynb)
-  — every visualization helper against the same fixture.
+  — visualization helpers against a saved fixture.

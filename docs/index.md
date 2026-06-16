@@ -7,25 +7,29 @@ Pick the doc that matches what you're trying to do.
 - [Blog post](blog.md) — long-form pitch. Why recursive language
   models, why graphs over flat traces, full needle-in-a-haystack
   walkthrough with the same exports the CLI ships.
+- [Minimal](minimal.md) — recursive-flow stripped to its ~90-line core,
+  plus an honest accounting of which subsystems are essential vs. the
+  price of parallelism and durability. **Start here if the codebase
+  feels too complicated.**
 - [Positioning](positioning.md) — when to use recursive-flow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 
 ## Use recursive-flow
 
-- [Control](control.md) — step loop, workspace resume, rewind,
-  forks, `CONTEXT.read()` / slices, delegation via
-  `launch_subagents`, inline-first strategy, custom tools.
+- [Control](control.md) — step loop, save/load resume, rewind,
+  forks, `INPUTS`, delegation via `launch_subagents`,
+  inline-first strategy, custom tools.
 - [Node injection](injections.md) — append typed controller events to a
   running graph, then commit them through `agent.step(graph)`.
 - [Observability](observability.md) — querying the `Graph`,
-  workspace layout, export helpers, live tree, gantt, topology
+  run layout, export helpers, live tree, gantt, topology
   exports, Gradio viewer, CLI.
 - [Node model](node_model.md) — typed graph state taxonomy, action /
   observation alternation, delegation wait/resume flow.
 - [Runtimes](runtimes.md) — `Runtime` protocol, shipped runtimes
   (Local / Docker / Modal / E2B / Daytona), writing your own.
 - [Prompt customization](prompt_customization.md) — `PromptBuilder`
-  sections, callable dynamic sections, workspace-backed skills/memory,
+  sections, callable dynamic sections, file-backed skills/memory,
   deriving from the default prompt, full replacement.
 - [Security](security.md) — trust model, Docker isolation knobs,
   engine-level caps, proxied tools, approval gates.
@@ -34,16 +38,14 @@ Pick the doc that matches what you're trying to do.
 
 ## Extend recursive-flow
 
-- [**Internals**](internals.md) — engine architecture, step
-  lifecycle (`act` → `apply_one`), the REPL `yield` protocol,
-  resume semantics, cold-start replay, persistence, and the full
-  `RecursiveFlow` override surface. **Start here if you want to subclass
-  the engine.**
+- [**Internals**](internals.md) — engine architecture, step lifecycle, REPL await protocol,
+  runtime backends, graph persistence, and extension seams. **This deep dive
+  is being refreshed after the `Flow`/`Graph` rewrite.**
 
 ## Research Notes
 
 - [RAO implementation plan](research/rao_implementation_plan.md) — how to
   implement Recursive Agent Optimization as a first-class `rflow.rao` module
-  over `RecursiveFlow` rollouts.
-- [DeLM vs. RecursiveFlow](research/delm_vs_rlmflow.md) — how DeLM-style
+  over `Flow` rollouts.
+- [DeLM vs. recursive-flow](research/delm_vs_rlmflow.md) — how DeLM-style
   coordination could sit on top of recursive execution graphs.

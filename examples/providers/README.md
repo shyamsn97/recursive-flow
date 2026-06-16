@@ -1,12 +1,12 @@
 # Providers
 
-Examples that connect RecursiveFlow to another model, tool, or inference provider.
+Examples that connect `Flow` to another model, tool, or inference provider.
 
 Run commands below from the repository root after installing the matching extra.
 
 ## DSPy
 
-Use RecursiveFlow as the LM behind a DSPy program.
+Use a `Flow` agent as the LM behind a DSPy program.
 
 ```bash
 export OPENAI_API_KEY=...
@@ -17,7 +17,7 @@ python examples/providers/dspy_drop_in.py
 ## MCP Weather
 
 Starts a local FastMCP weather server backed by the real Open-Meteo API, registers
-its tools with RecursiveFlow, delegates Seattle/Austin forecasts to child agents, and
+its tools on a `Flow` subclass, delegates Seattle/Austin forecasts to child agents, and
 combines the packing advice.
 
 ```bash
@@ -45,15 +45,15 @@ Useful flags:
 
 ```bash
 python examples/providers/mcp_weather.py --model gpt-5-mini
-python examples/providers/mcp_weather.py --workspace /tmp/mcp-weather-run --no-viz
+python examples/providers/mcp_weather.py --out-dir /tmp/mcp-weather-run --no-viz
 ```
 
-The run calls Open-Meteo over the network and saves a workspace at
-`examples/_runs/example-workspaces/mcp-weather` by default.
+The run calls Open-Meteo over the network. Pass `--out-dir` to save the final
+`graph.json`.
 
 ## Tinker
 
-Run RecursiveFlow with Tinker inference and the live terminal graph view.
+Run `Flow` with Tinker inference and the live terminal graph view.
 
 ```bash
 export TINKER_API_KEY=...

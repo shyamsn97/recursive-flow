@@ -71,7 +71,7 @@ from scoring import (  # noqa: E402
     template_from_question,
 )
 
-from rflow.llm import AnthropicClient, LLMClient, LLMUsage, OpenAIClient  # noqa: E402
+from rflow.clients.llm import AnthropicClient, LLMClient, LLMUsage, OpenAIClient  # noqa: E402
 from rflow.graph import Node  # noqa: E402
 from rflow.flow import FlowConfig, RecursiveFlow  # noqa: E402
 from rflow.runtime.docker import DockerRuntime  # noqa: E402

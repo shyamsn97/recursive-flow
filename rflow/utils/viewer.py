@@ -8,11 +8,10 @@ pixel-for-pixel.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
 from html import escape as _esc_html
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from rflow.graph import (
     Graph,
@@ -26,7 +25,27 @@ from rflow.graph import (
     is_user_query,
 )
 from rflow.utils.export import _kind as _display_kind  # re-use one mapping
-from rflow.workspace import BaseWorkspace, Workspace
+
+if TYPE_CHECKING:
+    from rflow.utils.trace import Trace
+
+
+def _model_label(agent: Graph) -> str:
+    """Best-effort model name for an agent column.
+
+    The new model drops the old ``config``/``model_label`` machinery: an agent
+    stores ``model`` directly (``None`` ⇒ engine default). Fall back to the most
+    recent ``LLMAction``/``LLMOutput`` that recorded a concrete model, else
+    ``"default"``.
+    """
+    if agent.model:
+        return agent.model
+    for node in reversed(agent.nodes):
+        model = getattr(node, "model", None)
+        if model:
+            return model
+    return "default"
+
 
 # ``gradio`` is intentionally NOT imported at module load. It's a heavy
 # dependency (~3s import on CPython) that's only needed by ``open_viewer``,
@@ -93,55 +112,11 @@ def is_bookkeeping(state: Node, successor: Node | None) -> bool:
     return successor.type in paired
 
 
-ViewSource: TypeAlias = BaseWorkspace | str | Path | Graph | Iterable[Graph]
-
-
-def _looks_like_graph_dump(data: Any) -> bool:
-    return (
-        isinstance(data, dict)
-        and "agent_id" in data
-        and ("nodes" in data or "states" in data)
-    )
-
-
-def _load_graphs_from_path(path: str | Path) -> list[Graph]:
-    p = Path(path)
-    if p.is_dir():
-        if Workspace.check_path(p):
-            return Workspace.open_path(p).load_steps()
-
-        graph_json = p / "graph.json"
-        if not graph_json.exists():
-            raise ValueError(
-                f"{p} is not a workspace or graph directory (missing graph.json)"
-            )
-
-        try:
-            data = json.loads(graph_json.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{graph_json} is not valid JSON: {exc}") from exc
-
-        if _looks_like_graph_dump(data):
-            return [Graph.from_dict(data)]
-
-        raise ValueError(
-            f"{p} has graph.json, but it is not a workspace manifest "
-            "or standalone Graph dump"
-        )
-
-    if not p.is_file():
-        raise ValueError(f"no such file or directory: {p}")
-
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{p} is not valid JSON: {exc}") from exc
-
-    if _looks_like_graph_dump(data):
-        return [Graph.from_dict(data)]
-    if isinstance(data, list) and all(_looks_like_graph_dump(item) for item in data):
-        return [Graph.from_dict(item) for item in data]
-    raise ValueError(f"{p} does not look like a workspace or graph dump")
+#: Anything the viewer/exporters accept. A :class:`~rflow.utils.trace.Trace` is
+#: the canonical form; everything else is coerced via ``Trace.of`` (a single
+#: ``Graph`` becomes a one-frame trace — use ``graph.trace()`` to expand it into
+#: per-tick steps).
+ViewSource: TypeAlias = "str | Path | Graph | Iterable[Graph] | Trace"
 
 
 def _visible_signature(graph: Graph) -> tuple:
@@ -184,33 +159,25 @@ def _dedupe_by_visible_signature(graphs: list[Graph]) -> list[Graph]:
 def resolve_graphs(source: ViewSource) -> list[Graph]:
     """Resolve a viewer/export source into graph snapshots.
 
-    ``source`` can be a workspace, workspace path, standalone graph, graph list,
-    or standalone graph JSON path.
+    ``source`` can be a :class:`~rflow.utils.trace.Trace`, a standalone graph, a
+    graph list, or a ``trace.json`` / ``graph.json`` path (or a directory holding
+    one). A single ``Graph`` resolves to one frame; pass ``graph.trace()`` (or a
+    ``Trace.from_graph(...)``) to step through a reconstructed timeline.
     """
-    if isinstance(source, BaseWorkspace):
-        return source.load_steps()
-    if isinstance(source, Graph):
-        return [source]
-    if isinstance(source, (str, Path)):
-        return _load_graphs_from_path(source)
-    graphs = list(source)
-    if not all(isinstance(graph, Graph) for graph in graphs):
-        raise TypeError("expected a Graph, Workspace, path, or iterable of Graphs")
-    return graphs
+    from rflow.utils.trace import Trace
+
+    return Trace.of(source).graphs
 
 
 def slice_graphs_at_branch(graphs: list[Graph], branch_id: str) -> list[Graph]:
-    """Return snapshots starting where ``branch_id`` first appears.
+    """Trim snapshots to where ``branch_id`` first appears (Phase 5).
 
-    Ordering (baseline finishes before the edit plays forward) is handled in
-    :func:`rflow.graph.timeline.retrace_steps`, so this just trims to the first
-    snapshot that contains the edit.
+    Deferred: nodes don't carry ``branch_id`` until trajectory editing
+    (Phase 5) lands, and ordering needs ``timeline.retrace_steps``.
     """
-
-    for index, graph in enumerate(graphs):
-        if any(node.branch_id == branch_id for node in graph.all_nodes):
-            return graphs[index:]
-    raise ValueError(f"branch id {branch_id!r} was not found in the render snapshots")
+    raise NotImplementedError(
+        "branch slicing requires Phase 5 (node branch_id + timeline.retrace_steps)"
+    )
 
 
 def _resolve_latest_graph(source: ViewSource) -> Graph:
@@ -331,7 +298,7 @@ def graph_tree(source: ViewSource) -> str:
     lines: list[str] = []
 
     def walk(g: Graph, indent: str) -> None:
-        head = f"{indent}● {g.agent_id} ({g.model_label})"
+        head = f"{indent}● {g.agent_id} ({_model_label(g)})"
         if g.query:
             head += f" — {_short(g.query, 60)}"
         lines.append(head)
@@ -403,11 +370,9 @@ def _state_hover_text(state: Node, agent: Graph) -> str:
         f"<b>{_esc_html(agent.agent_id or 'root')}</b>",
         f"<i>{_display_kind(state)}</i> · depth {agent.depth} · seq {state.seq}",
     ]
-    if agent.model_label:
-        rows.append(f"model: {_esc_html(agent.model_label)}")
-    inp, out = agent.tokens()
-    if inp or out:
-        rows.append(f"agent tokens: {inp + out:,} (in {inp:,} / out {out:,})")
+    model = _model_label(agent)
+    if model:
+        rows.append(f"model: {_esc_html(model)}")
     return "<br>".join(rows)
 
 
@@ -757,7 +722,7 @@ def _build_graph_figure(
         label = _agent_display_label(graph.agents[node.agent_id], limit=label_limit)
         # Dense runs can have dozens of sibling agents on the same row. Keep
         # labels where they fit, and rely on hover text for omitted agent names.
-        if dense_labels and node.agent_id != graph.root_agent_id:
+        if dense_labels and node.agent_id != graph.agent_id:
             row = round(y, 3)
             half_width = max(0.25, min(1.0, len(label) * 0.06))
             bounds = (x - half_width, x + half_width)
@@ -1010,7 +975,7 @@ def graph_plot(
 
         return to_d2(graph, include_results=include_results)
     if fmt in {"tree", "ascii"}:
-        return graph.tree()
+        return graph_tree(graph)
     if fmt not in {"graph", "plotly", "viewer"}:
         raise ValueError(
             f"Unknown plot kind {kind!r}. Supported: "
@@ -1021,7 +986,7 @@ def graph_plot(
         graph,
         height=height,
         title=title
-        or f"{graph.root_agent_id} · {graph.current().type if graph.current() else 'empty'}",
+        or f"{graph.agent_id} · {graph.current().type if graph.current() else 'empty'}",
         fixed_positions=_fixed_positions,
         axis_ranges=_axis_ranges,
     )
@@ -1170,7 +1135,7 @@ def save_steps(
         title = title_template.format(
             i=i,
             total=total,
-            agent_id=graph.root_agent_id,
+            agent_id=graph.agent_id,
             type=current.type if current else "empty",
         )
         save_image(
@@ -1392,9 +1357,7 @@ def render_html(
             _axis_ranges=axis_ranges,
         )
         current = graph.current()
-        head_title = (
-            f"{graph.root_agent_id} \u00b7 {current.type if current else 'empty'}"
-        )
+        head_title = f"{graph.agent_id} \u00b7 {current.type if current else 'empty'}"
         slide_body = (
             f'<section class="slide{active}" data-step="{idx}">'
             '<div class="slide-head">'
@@ -1404,8 +1367,8 @@ def render_html(
             '<div class="viewer-grid">'
             f'<div class="graph-card">{graph_html}</div>'
             '<aside class="detail-card">'
-            f"<h3>Transcript: <code>{_esc_html(graph.root_agent_id)}</code></h3>"
-            f"<pre>{_esc_html(graph.transcript(include_system=False))}</pre>"
+            f"<h3>Transcript: <code>{_esc_html(graph.agent_id)}</code></h3>"
+            f"<pre>{_esc_html(agent_transcript(graph, include_system=False))}</pre>"
             "<h3>States</h3>"
             "<table>"
             "<thead><tr><th>Agent</th><th>Type</th><th>Detail</th></tr></thead>"
@@ -1505,7 +1468,7 @@ def save_gif(
         title = title_template.format(
             i=i,
             total=total,
-            agent_id=graph.root_agent_id,
+            agent_id=graph.agent_id,
             type=current.type if current else "empty",
         )
         fig = graph_plot(
@@ -1915,7 +1878,6 @@ def _state_detail_html(state: Node, graph: Graph) -> str:
     parts: list[str] = []
     kind = _display_kind(state)
     pill = f'<span class="pill type-{_esc_html(kind)}">{_esc_html(kind)}</span>'
-    inp, out = agent.tokens()
     parts.append(
         f"""
 <div class="header">
@@ -1924,10 +1886,9 @@ def _state_detail_html(state: Node, graph: Graph) -> str:
     <div>
       <span class="pill">type {_esc_html(state.type)}</span>
       <span class="pill">id {_esc_html(state.id)}</span>
-      <span class="pill">model {_esc_html(agent.model_label)}</span>
+      <span class="pill">model {_esc_html(_model_label(agent))}</span>
       <span class="pill">depth {agent.depth}</span>
       <span class="pill">seq {state.seq}</span>
-      <span class="pill">agent tokens {inp + out:,}</span>
       {'<span class="pill" style="color:#7ee787;border-color:#7ee787">terminal</span>' if state.terminal else ''}
     </div>
   </div>
@@ -1948,10 +1909,14 @@ def _state_detail_html(state: Node, graph: Graph) -> str:
 
 
 __all__ = [
+    "HIDDEN_ACTION_PAIRS",
+    "ViewSource",
     "agent_transcript",
     "graph_plot",
     "graph_plot_html",
     "graph_session",
+    "graph_tree",
+    "is_bookkeeping",
     "open_viewer",
     "render_html",
     "resolve_graphs",

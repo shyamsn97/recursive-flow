@@ -19,9 +19,6 @@ Run:
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
 import rflow
 
 ROOT_SPLIT = (
@@ -60,54 +57,50 @@ def current_type(subgraph) -> str:
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        workspace = rflow.Workspace.create(Path(tmp).resolve() / "ws")
-        engine = rflow.RecursiveFlow(
-            llm_client=ScriptedLLM(),
-            workspace=workspace,
-            config=rflow.FlowConfig(max_depth=1, max_iterations=5, max_concurrency=2),
+    flow = rflow.Flow(
+        ScriptedLLM(), max_depth=1, max_iters=5, max_concurrency=2
+    )
+
+    banner("running the engine - one tick per step()")
+    graph = flow.start("split into A and B")
+    tick = 0
+    while not graph.finished:
+        tick += 1
+        graph = flow.step(graph)
+        print(
+            f"step {tick}: agents="
+            + ", ".join(
+                f"{aid}:{current_type(sub)}" for aid, sub in graph.agents.items()
+            )
         )
+    print(f"\nfinal result: {graph.result()!r}")
 
-        banner("running the engine - one tick per step()")
-        graph = engine.start("split into A and B")
-        tick = 0
-        while not graph.finished:
-            tick += 1
-            graph = engine.step(graph)
-            print(
-                f"step {tick}: agents="
-                + ", ".join(
-                    f"{aid}:{current_type(sub)}" for aid, sub in graph.agents.items()
-                )
-            )
-        print(f"\nfinal result: {graph.result()!r}")
+    banner("final node log")
+    for n in graph.all_nodes:
+        tag = (
+            getattr(n, "result", None)
+            or getattr(n, "content", None)
+            or getattr(n, "reply", None)
+            or ""
+        )
+        preview = tag.splitlines()[0][:50] if tag else ""
+        print(f"  {n.agent_id:<7} seq={n.seq:<2} {n.type:<18} {preview!r}")
 
-        banner("final persisted node log")
-        for n in graph.all_nodes:
-            tag = (
-                getattr(n, "result", None)
-                or getattr(n, "content", None)
-                or getattr(n, "reply", None)
-                or ""
-            )
-            preview = tag.splitlines()[0][:50] if tag else ""
-            print(f"  {n.agent_id:<7} seq={n.seq:<2} {n.type:<18} {preview!r}")
+    banner("retrace_steps(graph) - one snapshot per stable transition")
+    snapshots = rflow.retrace_steps(graph)
+    print(f"{len(snapshots)} snapshots reconstructed from {tick} engine ticks\n")
+    for i, snap in enumerate(snapshots, start=1):
+        agents = ", ".join(
+            f"{aid}:{current_type(sub)}" for aid, sub in snap.agents.items()
+        )
+        print(f"snapshot {i}  nodes={len(snap.all_nodes)}  ({agents})")
 
-        banner("retrace_steps(graph) - one snapshot per stable transition")
-        snapshots = rflow.retrace_steps(graph)
-        print(f"{len(snapshots)} snapshots reconstructed from {tick} engine ticks\n")
-        for i, snap in enumerate(snapshots, start=1):
-            agents = ", ".join(
-                f"{aid}:{current_type(sub)}" for aid, sub in snap.agents.items()
-            )
-            print(f"snapshot {i}  nodes={len(snap.all_nodes)}  ({agents})")
-
-        banner("the parallel snapshot - both children advance together")
-        for snap in snapshots:
-            kids = [s for aid, s in snap.agents.items() if aid != "root"]
-            if kids and all(k.finished for k in kids):
-                print(snap.tree())
-                break
+    banner("the parallel snapshot - both children advance together")
+    for snap in snapshots:
+        kids = [s for aid, s in snap.agents.items() if aid != "root"]
+        if kids and all(k.finished for k in kids):
+            print(snap.tree())
+            break
 
 
 if __name__ == "__main__":

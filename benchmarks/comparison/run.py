@@ -31,7 +31,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from rflow.graph import Graph  # noqa: E402
-from rflow.llm import AnthropicClient, LLMClient, OpenAIClient  # noqa: E402
+from rflow.clients.llm import AnthropicClient, LLMClient, OpenAIClient  # noqa: E402
 from rflow.flow import FlowConfig, RecursiveFlow  # noqa: E402
 from rflow.runtime.local import LocalRuntime  # noqa: E402
 from rflow.workspace import Workspace  # noqa: E402

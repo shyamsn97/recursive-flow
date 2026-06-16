@@ -1,4 +1,7 @@
-"""Run a platformer-building RecursiveFlow task inside a Modal Sandbox.
+"""Run a platformer-building Flow task inside a Modal Sandbox.
+
+Each agent's code runs remotely in a Modal Sandbox (via a :class:`ModalRuntime`);
+files are written with plain Python inside the sandbox working directory.
 
 Setup:
     pip install -e ".[openai,modal]"
@@ -23,14 +26,14 @@ if str(REPO_ROOT) not in sys.path:
 
 import rflow  # noqa: E402
 from rflow.runtime.sandbox.modal import ModalRuntime  # noqa: E402
-from rflow.tools import FILE_TOOLS  # noqa: E402
 from rflow.utils.viz import live  # noqa: E402
 
 REMOTE_REPO = "/opt/recursive-flow"
 
 PLATFORMER_QUERY = """\
 Build a simple 2D side-scrolling platformer in plain HTML/CSS/JS under output/.
-No build tools, no libraries, no ES modules.
+No build tools, no libraries, no ES modules. Write files with plain Python
+(e.g. `open(path, "w").write(...)`) in the sandbox.
 
 Files:
 - output/index.html
@@ -48,14 +51,14 @@ def log(message: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run RecursiveFlow inside Modal.")
+    parser = argparse.ArgumentParser(description="Run Flow inside Modal.")
     parser.add_argument("--model", default="gpt-5")
     parser.add_argument(
         "--fast-model",
         default="gpt-5-mini",
         help="Cheaper model exposed to delegates as `model='fast'`.",
     )
-    parser.add_argument("--max-iterations", type=int, default=5)
+    parser.add_argument("--max-iters", type=int, default=5)
     parser.add_argument(
         "--max-depth",
         type=int,
@@ -72,16 +75,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repl-timeout", type=float, default=30)
     parser.add_argument("--remote-workdir", default="/workspace")
     parser.add_argument(
-        "--quiet-runtime",
-        action="store_true",
-        help="Disable ModalRuntime lifecycle logs.",
-    )
-    parser.add_argument(
-        "--trace-runtime",
-        action="store_true",
-        help="Print low-level Modal exec and REPL transport logs.",
-    )
-    parser.add_argument(
         "--no-live",
         action="store_true",
         help="Disable the live terminal graph view.",
@@ -89,44 +82,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_turn(agent: rflow.RecursiveFlow, query: str, *, use_live: bool) -> str:
-    graph = agent.start(query)
+def run_turn(flow: rflow.Flow, query: str, *, use_live: bool) -> str:
+    graph = flow.start(query)
     if use_live:
-        graphs = live(agent, graph)
-        return graphs[-1].result()
+        return live(flow, graph)[-1].result()
     while not graph.finished:
-        graph = agent.step(graph)
+        graph = flow.step(graph)
     return graph.result()
-
-
-def run_platformer_task(
-    runtime: ModalRuntime,
-    *,
-    model: str,
-    fast_model: str,
-    max_iterations: int,
-    max_depth: int,
-    use_live: bool,
-) -> None:
-    log(
-        "creating RecursiveFlow agent with "
-        f"model={model}, fast_model={fast_model}, "
-        f"max_iterations={max_iterations}, max_depth={max_depth}"
-    )
-    agent = rflow.RecursiveFlow(
-        llm_client=rflow.OpenAIClient(model=model),
-        runtime=runtime,
-        runtime_factory=runtime.clone,
-        config=rflow.FlowConfig(max_iterations=max_iterations, max_depth=max_depth),
-        llm_clients={
-            "fast": {
-                "model": rflow.OpenAIClient(model=fast_model),
-                "description": f"cheaper/faster model ({fast_model}); prefer for delegated subtasks.",
-            },
-        },
-    )
-    log("running platformer task; first run may build/start Modal sandbox")
-    print(run_turn(agent, PLATFORMER_QUERY, use_live=use_live))
 
 
 def local_recursive_flow_image() -> modal.Image:
@@ -145,8 +107,7 @@ def local_recursive_flow_image() -> modal.Image:
                 ".ruff_cache",
                 "media",
                 "docs",
-                "examples/_runs/example-workspaces",
-                "examples/_runs/notebooks",
+                "examples/_runs",
             ],
         )
         .run_commands(f"python -m pip install -e {REMOTE_REPO}")
@@ -155,34 +116,34 @@ def local_recursive_flow_image() -> modal.Image:
 
 def main() -> None:
     args = parse_args()
-    workspace = rflow.Workspace.create(
-        REPO_ROOT / "examples" / "_runs" / "example-workspaces" / "sandbox-modal"
-    )
-    log(f"workspace: {workspace.root}")
+    image = local_recursive_flow_image()
+
+    # One sandbox per agent; created lazily when the agent first runs code.
     runtime = ModalRuntime(
         app_name=args.app_name,
-        workspace=workspace,
         remote_workdir=args.remote_workdir,
-        image=local_recursive_flow_image(),
+        image=image,
         timeout=args.sandbox_timeout,
         repl_timeout=args.repl_timeout,
-        verbose=not args.quiet_runtime,
-        trace=args.trace_runtime,
     )
-    runtime.register_tools(FILE_TOOLS)
-    log("Modal runtime configured; sandbox starts on first agent/runtime call")
+
+    log(
+        f"creating Flow with model={args.model}, fast_model={args.fast_model}, "
+        f"max_iters={args.max_iters}, max_depth={args.max_depth}"
+    )
+    flow = rflow.Flow(
+        rflow.OpenAIClient(model=args.model),
+        llm_clients={"fast": rflow.OpenAIClient(model=args.fast_model)},
+        runtime=runtime,
+        max_depth=args.max_depth,
+        max_iters=args.max_iters,
+    )
+    log("running platformer task; first run may build/start Modal sandbox")
     try:
-        run_platformer_task(
-            runtime,
-            model=args.model,
-            fast_model=args.fast_model,
-            max_iterations=args.max_iterations,
-            max_depth=args.max_depth,
-            use_live=not args.no_live,
-        )
+        print(run_turn(flow, PLATFORMER_QUERY, use_live=not args.no_live))
     finally:
-        log("closing Modal runtime")
-        runtime.close()
+        log("closing Flow")
+        flow.close()
 
 
 if __name__ == "__main__":
