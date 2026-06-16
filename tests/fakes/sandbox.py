@@ -1,78 +1,100 @@
-"""Fake sandbox providers and fast in-process REPL transport for tests."""
+"""Fake sandbox providers + an in-process file-bridge for runtime tests.
+
+Adapted from the original ``tests/fakes/sandbox.py`` to the minimal stack: the
+remote REPL now speaks :mod:`rflow.runtime.repl_server` over the file bridge in
+:class:`rflow.runtime.sandbox.remote.RemoteFileRuntime`.
+
+A fake provider's ``commands.run(command)`` is routed through :func:`run_local`,
+which:
+
+* intercepts the persistent REPL start command and, instead of launching
+  ``tail -f in.jsonl | python -m rflow.runtime.repl_server``, starts a real
+  :class:`ReplServer` in a daemon thread whose ``stdin`` *tails* ``in.jsonl`` and
+  whose ``stdout`` appends to ``out.jsonl`` — faithfully reproducing the bridge,
+  including mid-execution host proxies (``done`` / ``flow_delegate``);
+* runs everything else (the transport's pure-stdlib ``python -c`` append/poll
+  snippets, ``mkdir``, ``rm``) as a real subprocess. They only touch files, so
+  they share state with the in-thread server via the filesystem and — crucially
+  — never swap the process-global ``sys.stdout`` the server's capture relies on.
+"""
 
 from __future__ import annotations
 
-import contextlib
-import io
-import json
-import os
 import re
-import shlex
 import subprocess
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from rflow.llm import LLMClient
-from rflow.runtime.sandbox.remote import RemoteFileRuntime
+from rflow.clients.llm import LLMClient
+from rflow.runtime.repl_server import ReplServer
 
-
-_REPL_DETECT = "from rflow.runtime.repl import main"
+_REPL_DETECT = "from rflow.runtime.repl_server import main"
 _REMOTE_DIR_RE = re.compile(r"mkdir -p (/[^\s]*recursive-flow-[a-f0-9]+)\s+(\S+)")
 _KILL_PID_RE = re.compile(r"kill \$\(cat ([^)]+)/pid\)")
 
-_inproc_sessions: dict[str, "_InProcessReplSession"] = {}
+_sessions: dict[str, "_BridgeSession"] = {}
 
 
-class _InProcessReplSession:
-    """Hold a REPL instance and process queued input synchronously."""
+class _TailReader:
+    """A line stream over a growing file (like ``tail -f``), with a stop signal."""
+
+    def __init__(self, path: Path, stop: threading.Event) -> None:
+        self._path = path
+        self._stop = stop
+        self._offset = 0
+
+    def readline(self) -> str:
+        while not self._stop.is_set():
+            text = self._path.read_text() if self._path.exists() else ""
+            idx = text.find("\n", self._offset)
+            if idx >= 0:
+                line = text[self._offset : idx + 1]
+                self._offset = idx + 1
+                return line
+            time.sleep(0.005)
+        return ""  # EOF → ReplServer.serve() loop ends
+
+
+class _AppendWriter:
+    """A minimal write/flush sink that appends to ``out.jsonl``."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    def write(self, data: str) -> int:
+        with self._path.open("a") as f:
+            f.write(data)
+        return len(data)
+
+    def flush(self) -> None:  # pragma: no cover - trivial
+        pass
+
+
+class _BridgeSession:
+    """A persistent ReplServer wired to in/out files in a daemon thread."""
 
     def __init__(self, remote_dir: str, workdir: str | None = None) -> None:
-        from rflow.runtime.repl import REPL
-
         self.remote_dir = Path(remote_dir)
-        self.workdir = Path(workdir) if workdir else None
         self.input_path = self.remote_dir / "in.jsonl"
         self.output_path = self.remote_dir / "out.jsonl"
-        self.stderr_path = self.remote_dir / "stderr.log"
         self.remote_dir.mkdir(parents=True, exist_ok=True)
-        if self.workdir is not None:
-            self.workdir.mkdir(parents=True, exist_ok=True)
-        for path in (self.input_path, self.output_path, self.stderr_path):
+        if workdir:
+            Path(workdir).mkdir(parents=True, exist_ok=True)
+        for path in (self.input_path, self.output_path, self.remote_dir / "stderr.log"):
             path.write_text("")
         (self.remote_dir / "pid").write_text("0")
-        self.repl = REPL()
-        self.offset = 0
+        self._stop = threading.Event()
+        server = ReplServer(
+            protocol_in=_TailReader(self.input_path, self._stop),
+            protocol_out=_AppendWriter(self.output_path),
+        )
+        self._thread = threading.Thread(target=server.serve, daemon=True)
+        self._thread.start()
 
-    def process_pending(self) -> None:
-        if not self.input_path.exists():
-            return
-        text = self.input_path.read_text()
-
-        prev_cwd = os.getcwd() if self.workdir is not None else None
-        try:
-            if self.workdir is not None:
-                os.chdir(self.workdir)
-            while True:
-                nl = text.find("\n", self.offset)
-                if nl < 0:
-                    return
-                line = text[self.offset : nl]
-                self.offset = nl + 1
-                try:
-                    msg = json.loads(line)
-                    resp = self.repl.handle(msg)
-                except Exception as exc:  # noqa: BLE001 - mirror REPL error semantics.
-                    resp = {"error": f"{type(exc).__name__}: {exc}"}
-                with self.output_path.open("a") as f:
-                    f.write(json.dumps(resp) + "\n")
-        finally:
-            if prev_cwd is not None:
-                os.chdir(prev_cwd)
-
-
-def _drain_all_sessions() -> None:
-    for session in _inproc_sessions.values():
-        session.process_pending()
+    def stop(self) -> None:
+        self._stop.set()
 
 
 def _maybe_handle_repl_lifecycle(command: str) -> tuple[int, str, str] | None:
@@ -80,76 +102,33 @@ def _maybe_handle_repl_lifecycle(command: str) -> tuple[int, str, str] | None:
         match = _REMOTE_DIR_RE.search(command)
         if match is None:
             return None
-        remote_dir = match.group(1)
-        remote_workdir = match.group(2)
-        if remote_dir not in _inproc_sessions:
-            _inproc_sessions[remote_dir] = _InProcessReplSession(
-                remote_dir,
-                workdir=remote_workdir,
-            )
+        remote_dir, workdir = match.group(1), match.group(2)
+        if remote_dir not in _sessions:
+            _sessions[remote_dir] = _BridgeSession(remote_dir, workdir=workdir)
         return 0, "", ""
     match = _KILL_PID_RE.search(command)
     if match is not None:
-        _inproc_sessions.pop(match.group(1), None)
+        session = _sessions.pop(match.group(1), None)
+        if session is not None:
+            session.stop()
         return 0, "", ""
     return None
 
 
-def _maybe_eval_python_dash_c(command: str) -> tuple[int, str, str] | None:
-    """Run remote transport `python -c` snippets in-process when possible."""
-
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return None
-    if len(parts) < 3 or parts[0] not in ("python", "python3"):
-        return None
-    if "-c" not in parts:
-        return None
-    c_idx = parts.index("-c")
-    if c_idx + 1 >= len(parts):
-        return None
-    script = parts[c_idx + 1]
-    stdout, stderr = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        try:
-            exec(compile(script, "<fake-sandbox>", "exec"), {"__name__": "__main__"})
-        except SystemExit as exc:
-            code = (
-                int(exc.code)
-                if isinstance(exc.code, int)
-                else 0
-                if exc.code is None
-                else 1
-            )
-            if exc.code and not isinstance(exc.code, int):
-                stderr.write(str(exc.code))
-            return code, stdout.getvalue(), stderr.getvalue()
-        except BaseException:  # noqa: BLE001 - mirror subprocess semantics.
-            import traceback
-
-            traceback.print_exc(file=stderr)
-            return 1, stdout.getvalue(), stderr.getvalue()
-    return 0, stdout.getvalue(), stderr.getvalue()
-
-
 def run_local(command: str, *, timeout: float | None = None) -> tuple[int, str, str]:
-    repl_lifecycle = _maybe_handle_repl_lifecycle(command)
-    if repl_lifecycle is not None:
-        return repl_lifecycle
-    fast = _maybe_eval_python_dash_c(command)
-    if fast is not None:
-        _drain_all_sessions()
-        return fast
+    lifecycle = _maybe_handle_repl_lifecycle(command)
+    if lifecycle is not None:
+        return lifecycle
+    # The transport's append/poll snippets are pure stdlib (pathlib/sys/time):
+    # run them for real so they read/write the same files the in-thread server
+    # uses, without touching the host process's sys.stdout.
     proc = subprocess.run(
-        command,
-        shell=True,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
+        command, shell=True, text=True, capture_output=True, timeout=timeout, check=False
     )
     return proc.returncode, proc.stdout, proc.stderr
+
+
+# ── fake E2B provider ─────────────────────────────────────────────────
 
 
 class FakeE2BCommands:
@@ -177,64 +156,14 @@ class FakeE2BSandboxFactory:
         return sandbox
 
 
-class FakeDaytonaProcess:
-    def exec(self, command: str, env=None, timeout: int | None = None):
-        code, stdout, stderr = run_local(command, timeout=timeout)
-        return SimpleNamespace(
-            exit_code=code,
-            artifacts=SimpleNamespace(stdout=stdout),
-            stderr=stderr,
-        )
-
-
-class FakeDaytonaSandbox:
-    def __init__(self):
-        self.process = FakeDaytonaProcess()
-        self.deleted = False
-
-    def delete(self):
-        self.deleted = True
-
-
-class FakeDaytonaClient:
-    def __init__(self):
-        self.created: list[FakeDaytonaSandbox] = []
-
-    def create(self, *args, **kwargs):
-        sandbox = FakeDaytonaSandbox()
-        self.created.append(sandbox)
-        return sandbox
-
-
 class NoopLLM(LLMClient):
     def chat(self, messages, *args, **kwargs) -> str:
         return '```repl\ndone("ok")\n```'
 
 
-class NoStartRemoteRuntime(RemoteFileRuntime):
-    def __init__(self, workspace):
-        super().__init__(workspace=workspace, remote_workdir="/workspace")
-        self.touched_remote = False
-
-    def send(self, msg: dict) -> None:
-        self.touched_remote = True
-        raise AssertionError("runtime should not start during child spawn")
-
-    def recv(self) -> dict:
-        self.touched_remote = True
-        raise AssertionError("runtime should not start during child spawn")
-
-    def exec(self, command: str, *, timeout: float | None = None) -> str:
-        self.touched_remote = True
-        raise AssertionError("runtime should not exec during child spawn")
-
-    def list_files(self, remote_root: str) -> list[str]:
-        return []
-
-
 __all__ = [
-    "FakeDaytonaClient",
+    "FakeE2BSandbox",
     "FakeE2BSandboxFactory",
     "NoopLLM",
-    "NoStartRemoteRuntime",
+    "run_local",
 ]

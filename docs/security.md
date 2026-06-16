@@ -41,16 +41,18 @@ call any tool you injected.
 Independent of the runtime:
 
 - `max_depth` — recursion limit.
-- `max_iterations` — LLM calls per agent.
+- `max_iters` — LLM calls per agent.
 - `max_budget` — total tokens across the subtree.
 - `max_output_length` — truncate oversized stdout.
 - `max_concurrency` — opt into threaded parallel children when set.
 
 ## Proxied tools
 
-`runtime.inject(name, fn)` and `runtime.register_tool(fn)` route calls
-from inside the REPL back to the host. The host runs the callable
-with its CWD set to `self.workspace`.
+`runtime.register_tool(fn)` and `runtime.register_tools([...])` expose
+callables to the agent REPL. Tools marked `@tool(proxy=True)` execute on the
+host when called from a remote sandbox; local tools are shipped into the sandbox
+when possible. Working-directory-aware tools run relative to
+`runtime.working_directory`.
 
 Tools you register are part of the trust boundary. The container can
 be sealed off, but any injected tool runs on the host with host
@@ -58,24 +60,20 @@ privileges. Keep that surface small and validate arguments.
 
 ## Overrides for approval gates
 
-Override `_run_code(view, code)` to gate, classify, or rewrite code
-before it touches the runtime. The hook returns
-`(suspended: bool, raw: object)` — the same tuple the runtime
-ordinarily yields — so you can short-circuit execution with a
-rejection string and the engine will record it as the action's
-observation:
+Override `Flow.run_exec(agent, repl, code)` to gate, classify, or rewrite code
+before it touches the runtime. Return the same `(suspended, payload)` shape as
+the backend to short-circuit execution with a rejection string:
 
 ```python
 import rflow
 
-class ReviewingFlow(rflow.RecursiveFlow):
-    def _run_code(self, view, code: str):
+class ReviewingFlow(rflow.Flow):
+    def run_exec(self, agent, repl, code: str):
         if "rm -rf" in code and input(f"run? {code}\n> ") != "y":
             return False, "rejected by reviewer"
-        return super()._run_code(view, code)
+        return super().run_exec(agent, repl, code)
 ```
 
-Wrap the runtime itself if you want approval at the transport layer.
-Subclass `Runtime` and override `execute`, `start_code`, or
-`resume_code` to call a classifier, diff tool, or manual approval
-step before delegating to the underlying runtime.
+Wrap the runtime or backend if you want approval at the transport layer.
+Subclass `Runtime.open(...)` to return a backend that gates `start(...)` and
+`resume(...)` before delegating to the underlying backend.

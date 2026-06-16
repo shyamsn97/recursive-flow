@@ -1,4 +1,4 @@
-"""Use RecursiveFlow with a real MCP weather server.
+"""Use Flow with a real MCP weather server.
 
 Requires MCP and a live LLM client:
 
@@ -20,8 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import rflow
-from rflow.runtime.local import LocalRuntime
-from rflow.tools import tool
+from rflow.tools import get_tool_metadata, tool
 from rflow.utils.viz import live_view
 
 DEFAULT_QUERY = """I will be in Seattle today, Austin 3 days after that, and San Francisco 5 days after that. Check the weather and tell me what to pack for each city.
@@ -241,9 +240,13 @@ def make_mcp_tool(client: MCPStdioClient, spec: Any):
     return mcp_tool
 
 
-def register_mcp_tools(runtime: LocalRuntime, client: MCPStdioClient) -> None:
+def mcp_tools(client: MCPStdioClient) -> dict[str, Any]:
+    """Build a name -> callable dict of the MCP server's tools."""
+    tools = {}
     for spec in client.list_tools():
-        runtime.register_tool(make_mcp_tool(client, spec))
+        fn = make_mcp_tool(client, spec)
+        tools[get_tool_metadata(fn).name] = fn
+    return tools
 
 
 def build_llm(model: str):
@@ -254,63 +257,62 @@ def build_llm(model: str):
     )
 
 
-def run_until_done(agent: rflow.RecursiveFlow, graph, *, show_live: bool):
+def run_until_done(flow: rflow.Flow, graph, *, show_live: bool):
     if show_live:
         with live_view() as view:
             view(graph)
             while not graph.finished:
-                graph = agent.step(graph)
+                graph = flow.step(graph)
                 view(graph)
         return graph
 
     while not graph.finished:
-        graph = agent.step(graph)
+        graph = flow.step(graph)
         print(graph.tree())
     return graph
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RecursiveFlow + MCP weather example")
+    parser = argparse.ArgumentParser(description="Flow + MCP weather example")
     parser.add_argument("--model", default="gpt-5-mini")
     parser.add_argument("--max-depth", type=int, default=1)
-    parser.add_argument("--max-iterations", type=int, default=8)
+    parser.add_argument("--max-iters", type=int, default=8)
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument("--query", default=DEFAULT_QUERY)
-    parser.add_argument("--workspace", default=None)
-    args = parser.parse_args()
-
-    examples_root = Path(__file__).resolve().parents[1]
-    workspace_path = (
-        Path(args.workspace)
-        if args.workspace
-        else examples_root / "_runs" / "example-workspaces" / "mcp-weather"
+    parser.add_argument(
+        "--out-dir",
+        default=str(Path(__file__).resolve().parents[1] / "_runs" / "mcp-weather"),
+        help="Save the final run here (default: examples/_runs/mcp-weather/).",
     )
-    workspace = rflow.Workspace.create(workspace_path)
+    args = parser.parse_args()
 
     server_script = Path(__file__).with_name("mcp_weather_server.py")
     mcp_client = MCPStdioClient(sys.executable, [str(server_script)]).start()
 
-    def make_runtime() -> LocalRuntime:
-        runtime = LocalRuntime(workspace=workspace)
-        register_mcp_tools(runtime, mcp_client)
-        return runtime
-
     try:
-        agent = rflow.RecursiveFlow(
-            llm_client=build_llm(args.model),
-            runtime=make_runtime(),
-            runtime_factory=make_runtime,
-            workspace=workspace,
-            config=rflow.FlowConfig(
-                max_depth=args.max_depth, max_iterations=args.max_iterations
-            ),
+        # Expose the MCP-backed tools to every agent by registering them on the
+        # runtime (each is already named by its MCP spec).
+        runtime = rflow.LocalRuntime()
+        for name, fn in mcp_tools(mcp_client).items():
+            runtime.register_tool(fn, name=name)
+
+        flow = rflow.Flow(
+            build_llm(args.model),
+            runtime=runtime,
+            max_depth=args.max_depth,
+            max_iters=args.max_iters,
         )
-        graph = agent.start(args.query)
-        graph = run_until_done(agent, graph, show_live=not args.no_viz)
+        graph = flow.start(args.query)
+        graph = run_until_done(flow, graph, show_live=not args.no_viz)
 
         print(f"\n{'=' * 60}\nWEATHER PACKING RECOMMENDATION\n{'=' * 60}")
         print(graph.result())
-        print(f"\nWorkspace saved to {workspace_path}")
+
+        if args.out_dir:
+            path = graph.save(Path(args.out_dir))
+            print(f"\nGraph saved to {path}")
+
+        flow.close()
     finally:
         mcp_client.close()
 

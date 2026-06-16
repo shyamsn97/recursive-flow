@@ -108,7 +108,7 @@ Agents delegate with:
 
 ```python
 results = await launch_subagents([
-    {"name": "search", "query": "Find the evidence", "context": chunk},
+    {"name": "search", "query": "Find the evidence", "inputs": {"chunk": chunk}},
 ])
 ```
 
@@ -157,11 +157,11 @@ The pure scheduling logic decides which agents are runnable:
 
 ## Persistence
 
-Node sequence numbers are assigned by the session append path. Callers populate
+Node sequence numbers are assigned when nodes are appended. Callers populate
 payload fields; the engine assigns `agent_id`, `seq`, and `id`.
 
-Workspaces persist the per-agent trajectory in `session/<agent-id>/`, while the
-recursive graph manifest links agents through `Graph.children`. Cross-agent
+Saved run directories persist the per-agent trajectory under `agents/<agent-id>/`,
+while the recursive graph manifest links agents through `Graph.children`. Cross-agent
 edges are derived from the recursive graph structure and `SupervisingOutput`
 wait sets; there is no separate edge object to maintain by hand.
 

@@ -1,37 +1,24 @@
-"""Docker runtime — run agent code inside a fresh container each session.
+"""Docker REPL backend — run an agent's code inside a fresh container.
 
-Each :class:`DockerRuntime` instance spawns one ``docker run -i --rm ...``
-subprocess; the container must have ``recursive-flow`` installed so it can run
-``python -m rflow.runtime.repl``.  All REPL I/O happens over stdin/stdout
-of the container.
+Each :class:`DockerRepl` owns one ``docker run -i --rm <image> python -m
+rflow.runtime.repl_server`` subprocess and speaks the JSON-line protocol over its
+stdin/stdout. The image must have ``recursive-flow`` installed.
 
 Example::
 
-    from rflow.runtime.docker import DockerRuntime
-
     runtime = DockerRuntime(
-        image="myorg/recursive-flow-sandbox:latest",
-        mounts={"./data": "/workspace"},
-        env={"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]},
-        network="none",       # air-gap the container
-        cpus=1.0,
-        memory="512m",
+        image="recursive-flow:local",
+        working_directory="./myproject",  # bind-mounted to /workspace
+        network="none",                   # air-gap the container
+        cpus=1.0, memory="512m",
     )
-    agent = RecursiveFlow(llm_client=llm, runtime=runtime, runtime_factory=runtime.clone)
+    flow = Flow(llm, runtime=runtime)
 
-Prerequisites:
-
-1. ``docker`` is on ``PATH``.
-2. The image has Python + ``recursive-flow`` installed.  The repo ships a ready
-   ``Dockerfile`` at its root — build it once with::
-
-       docker build -t recursive-flow:local .
-
-   and pass ``image="recursive-flow:local"``.  Any image whose ``CMD`` (or your
-   ``entrypoint_argv``) runs ``python -m rflow.runtime.repl`` works.
-
-If you need to run the server under a different interpreter or path, set
-``entrypoint_argv`` (defaults to ``["python", "-m", "rflow.runtime.repl"]``).
+Build a ready image once with ``docker build -t recursive-flow:local .`` (any
+image whose entrypoint can run ``python -m rflow.runtime.repl_server`` works).
+:class:`DockerRepl` (the per-agent backend :class:`DockerRuntime` mints) stays
+decoupled from any workspace abstraction: pass ``mounts`` / ``workdir`` / ``cwd``
+directly if you want full control.
 """
 
 from __future__ import annotations
@@ -39,57 +26,143 @@ from __future__ import annotations
 import json
 import subprocess as sp
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from rflow.runtime.runtime import Runtime, workspace_path
-from rflow.workspace import BaseWorkspace
+from rflow.runtime.runtime import RemoteRepl, ReplBackend, Runtime
+
+if TYPE_CHECKING:
+    from rflow.graph import Graph
+
+
+class DockerRepl(RemoteRepl):
+    """A :class:`RemoteRepl` whose transport is a ``docker run`` subprocess."""
+
+    def __init__(
+        self,
+        image: str,
+        *,
+        mounts: dict[str, str] | None = None,
+        env: dict[str, str] | None = None,
+        network: str | None = None,
+        cpus: float | None = None,
+        memory: str | None = None,
+        user: str | None = None,
+        workdir: str | None = None,
+        cwd: str | Path | None = None,
+        extra_args: list[str] | None = None,
+        docker_bin: str = "docker",
+        entrypoint_argv: list[str] | None = None,
+    ) -> None:
+        super().__init__()
+        self.image = image
+        self.cwd = cwd
+        self.argv = build_argv(
+            image,
+            mounts=mounts,
+            env=env,
+            network=network,
+            cpus=cpus,
+            memory=memory,
+            user=user,
+            workdir=workdir,
+            extra_args=extra_args,
+            docker_bin=docker_bin,
+            entrypoint_argv=entrypoint_argv,
+        )
+        self.proc: sp.Popen | None = None
+
+    def _ensure_proc(self) -> sp.Popen:
+        if self.proc is None:
+            self.proc = sp.Popen(
+                self.argv,
+                stdin=sp.PIPE,
+                stdout=sp.PIPE,
+                stderr=sp.PIPE,
+                cwd=str(self.cwd) if self.cwd is not None else None,
+                bufsize=0,
+            )
+        return self.proc
+
+    def send(self, msg: dict) -> None:
+        proc = self._ensure_proc()
+        assert proc.stdin is not None
+        proc.stdin.write((json.dumps(msg) + "\n").encode())
+        proc.stdin.flush()
+
+    def recv(self) -> dict:
+        assert self.proc is not None and self.proc.stdout is not None
+        line = self.proc.stdout.readline()
+        if not line:
+            err = b""
+            if self.proc.stderr is not None:
+                try:
+                    err = self.proc.stderr.read() or b""
+                except Exception:  # noqa: BLE001
+                    pass
+            raise RuntimeError(
+                f"REPL subprocess {self.argv!r} exited unexpectedly. "
+                f"stderr: {err.decode(errors='replace')}"
+            )
+        return json.loads(line)
+
+    def close(self) -> None:
+        """Tear down the container subprocess and release its pipe FDs.
+
+        Closing stdin sends EOF, which ends the server's ``serve()`` loop and
+        (with ``--rm``) wipes the container. Escalate to terminate/kill only if
+        it's still alive, then close pipes and reap so FDs aren't leaked.
+        """
+        proc, self.proc = self.proc, None
+        if proc is None:
+            return
+        try:
+            if proc.stdin is not None and not proc.stdin.closed:
+                proc.stdin.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            proc.wait(timeout=2)
+        except sp.TimeoutExpired:
+            for action in (proc.terminate, proc.kill):
+                try:
+                    action()
+                    proc.wait(timeout=2)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+        except Exception:  # noqa: BLE001
+            pass
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                if stream is not None and not stream.closed:
+                    stream.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 class DockerRuntime(Runtime):
-    """Run the REPL server inside an isolated Docker container.
+    """Run each agent's code inside a fresh Docker container.
 
-    Talks to a long-running ``docker run -i --rm <image> python -m
-    rflow.runtime.repl`` subprocess over its stdin/stdout pipes using
-    the JSON-line protocol from :mod:`rflow.runtime.repl`.
+    The user-facing object you hand to ``Flow(runtime=...)``. :meth:`open` mints
+    one :class:`DockerRepl` per agent from the stored container options.
 
-    Parameters
-    ----------
-    image : str
-        Docker image to run.  Must have ``recursive-flow`` installed.
-    workspace : str
-        Host-side workspace path (affects the engine's CWD handling, not
-        the container's).  The container's CWD is controlled by the
-        image's ``WORKDIR`` or the ``workdir`` argument.
-    mounts : dict[str, str] | None
-        ``{host_path: container_path}`` bind mounts.  Host paths are
-        resolved to absolute paths.
-    env : dict[str, str] | None
-        Environment variables to set inside the container.
-    network : str | None
-        Docker network mode (``"none"``, ``"host"``, a network name, ...).
-        When unset, Docker's default bridge network is used.
-    cpus : float | None
-        CPU quota (``--cpus`` flag).
-    memory : str | None
-        Memory limit (``--memory`` flag, e.g. ``"512m"``, ``"2g"``).
-    user : str | None
-        User to run as (``--user`` flag).
-    workdir : str | None
-        Working directory inside the container (``--workdir`` flag).
-    extra_args : list[str] | None
-        Raw arguments spliced into ``docker run`` before the image.
-    docker_bin : str
-        Path to the docker binary (default ``"docker"``).  Use this to
-        point at ``podman``, ``nerdctl``, or a full path.
-    entrypoint_argv : list[str] | None
-        Command to run inside the container.  Defaults to
-        ``["python", "-m", "rflow.runtime.repl"]``.
+    ``working_directory`` is the **host** directory the agent's files live in. By
+    default it is bind-mounted to ``/workspace`` in the container and used as the
+    container ``--workdir`` (override with ``mounts`` / ``workdir``). All other
+    keyword arguments are passed straight through to :class:`DockerRepl`.
+
+    Example::
+
+        runtime = DockerRuntime("recursive-flow:local",
+                                working_directory="./myproject", network="none")
+        flow = Flow(llm, runtime=runtime)
     """
 
     def __init__(
         self,
         image: str,
         *,
-        workspace: BaseWorkspace | str | Path = ".",
+        working_directory: str | Path | None = None,
         mounts: dict[str, str] | None = None,
         env: dict[str, str] | None = None,
         network: str | None = None,
@@ -101,15 +174,16 @@ class DockerRuntime(Runtime):
         docker_bin: str = "docker",
         entrypoint_argv: list[str] | None = None,
     ) -> None:
-        super().__init__(workspace=workspace)
-        runtime_workspace = workspace_path(workspace)
-        is_workspace = isinstance(workspace, BaseWorkspace)
-        if mounts is None and is_workspace:
-            mounts = {str(runtime_workspace): "/workspace"}
-        if workdir is None and is_workspace:
-            workdir = "/workspace"
-
+        super().__init__(working_directory=working_directory)
         self.image = image
+        # When a working directory is given but no explicit mount/workdir, share
+        # it with the container at /workspace and run there — the friendly default.
+        if self.working_directory is not None:
+            host = str(self.working_directory.resolve())
+            if mounts is None:
+                mounts = {host: "/workspace"}
+            if workdir is None:
+                workdir = "/workspace"
         self.options = dict(
             mounts=mounts,
             env=env,
@@ -122,103 +196,10 @@ class DockerRuntime(Runtime):
             docker_bin=docker_bin,
             entrypoint_argv=entrypoint_argv,
         )
-        # Remember the caller-supplied workspace form so ``clone()`` can replay
-        # it. The base ``Runtime`` always wraps non-``BaseWorkspace`` inputs
-        # into a ``Workspace`` object, which would otherwise cause clones to
-        # re-trigger the auto-mount / auto-workdir branches above and diverge
-        # from the original argv.
-        self._workspace_arg = workspace
-        self.argv = build_argv(image, **self.options)
-        self.proc: sp.Popen | None = None
 
-    # ── REPL stdio transport ───────────────────────────────────────────
-
-    def send(self, msg: dict) -> None:
-        if self.proc is None:
-            self.proc = sp.Popen(
-                self.argv,
-                stdin=sp.PIPE,
-                stdout=sp.PIPE,
-                stderr=sp.PIPE,
-                cwd=self.workspace,
-                bufsize=0,
-            )
-        assert self.proc.stdin is not None
-        self.proc.stdin.write((json.dumps(msg) + "\n").encode())
-        self.proc.stdin.flush()
-
-    def recv(self) -> dict:
-        assert self.proc is not None and self.proc.stdout is not None
-        line = self.proc.stdout.readline()
-        if not line:
-            err = b""
-            if self.proc.stderr is not None:
-                try:
-                    err = self.proc.stderr.read() or b""
-                except Exception:
-                    pass
-            raise RuntimeError(
-                f"REPL subprocess {self.argv!r} exited unexpectedly. "
-                f"stderr: {err.decode(errors='replace')}"
-            )
-        return json.loads(line)
-
-    def close(self) -> None:
-        """Tear down the container subprocess and release its pipe FDs.
-
-        Closes ``stdin`` first — the ``serve()`` loop in ``rflow.runtime.repl``
-        reads until EOF, so that's enough for a graceful shutdown in the
-        common case (the REPL exits, the container's ``--rm`` flag wipes
-        it). We only escalate to ``terminate()``/``kill()`` if the child
-        is still alive after a short wait, then close the remaining
-        pipes and reap the process so its FDs aren't left behind for
-        the GC to clean up at some unspecified later time.
-        """
-        proc, self.proc = self.proc, None
-        if proc is None:
-            return
-
-        try:
-            if proc.stdin is not None and not proc.stdin.closed:
-                proc.stdin.close()
-        except Exception:
-            pass
-
-        try:
-            proc.wait(timeout=2)
-        except sp.TimeoutExpired:
-            for action in (proc.terminate, proc.kill):
-                try:
-                    action()
-                    proc.wait(timeout=2)
-                    break
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        for stream in (proc.stdout, proc.stderr):
-            try:
-                if stream is not None and not stream.closed:
-                    stream.close()
-            except Exception:
-                pass
-
-    def clone(
-        self, workspace: BaseWorkspace | str | Path | None = None
-    ) -> DockerRuntime:
-        new = self.__class__(
-            self.image,
-            workspace=workspace if workspace is not None else self._workspace_arg,
-            **self.options,
-        )
-        for name, td in self.tools.items():
-            if td.core:
-                continue
-            new.tools[name] = td
-            if td.fn is not None:
-                new.inject(name, td.fn)
-        return new
+    def open(self, agent: Graph) -> ReplBackend:
+        cwd = str(self.working_directory) if self.working_directory else None
+        return DockerRepl(self.image, cwd=cwd, **self.options)
 
 
 def build_argv(
@@ -235,12 +216,12 @@ def build_argv(
     docker_bin: str = "docker",
     entrypoint_argv: list[str] | None = None,
 ) -> list[str]:
-    """Build the ``docker run ...`` argv for :class:`DockerRuntime`."""
+    """Build the ``docker run ...`` argv for :class:`DockerRepl`."""
     argv: list[str] = [docker_bin, "run", "-i", "--rm"]
     for host, container in (mounts or {}).items():
         argv += ["-v", f"{Path(host).resolve()}:{container}"]
-    for k, v in (env or {}).items():
-        argv += ["-e", f"{k}={v}"]
+    for key, value in (env or {}).items():
+        argv += ["-e", f"{key}={value}"]
     if network is not None:
         argv += ["--network", network]
     if cpus is not None:
@@ -253,5 +234,8 @@ def build_argv(
         argv += ["--workdir", workdir]
     argv += list(extra_args or [])
     argv += [image]
-    argv += list(entrypoint_argv or ["python", "-m", "rflow.runtime.repl"])
+    argv += list(entrypoint_argv or ["python", "-m", "rflow.runtime.repl_server"])
     return argv
+
+
+__all__ = ["DockerRepl", "DockerRuntime", "build_argv"]

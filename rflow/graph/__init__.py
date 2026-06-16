@@ -1,36 +1,15 @@
-"""RecursiveFlow's data model — one recursive class.
+"""RecursiveFlow graph data model — nodes, the :class:`Graph`, views, actions."""
 
-* :class:`Graph` — one agent, mutable, with per-agent invariants as flat
-  fields, ``nodes`` as its trajectory, and ``children`` for sub-agents.
-  Recursion lives in ``children``; cross-agent navigation goes through
-  ``graph[other_aid]`` or ``graph.agents``.
-* :class:`AgentsView`, :class:`NodesView`, :class:`EdgesView` — flat
-  query / mutation views over the subtree (``graph.agents``,
-  ``graph.all_nodes``, ``graph.edges``).
-* :class:`Node` and its subclasses — one immutable per-state payload.
-  See :mod:`rflow.graph.node` and ``docs/node_model.md``.
-* :class:`RuntimeRef` — serializable handle to a durable REPL session.
-* :class:`ChildHandle`, :class:`WaitRequest` — REPL protocol handles
-  the engine inspects for delegation / suspension.
-"""
-
+from rflow.graph.actions import Action, ActionPlan, CallLLM, Exec, Resume
 from rflow.graph.graph import (
-    AgentsView,
-    ContextPayload,
-    Edge,
-    EdgesView,
-    Graph,
-    NodesView,
-    RuntimeRef,
-)
-from rflow.graph.handles import ChildHandle, WaitRequest
-from rflow.graph.node import (
     ActionNode,
+    ChildHandle,
     CodeObservation,
     DoneOutput,
     ErrorOutput,
     ExecAction,
     ExecOutput,
+    Graph,
     LLMAction,
     LLMOutput,
     Node,
@@ -38,6 +17,8 @@ from rflow.graph.node import (
     ResumeAction,
     SupervisingOutput,
     UserQuery,
+    WaitRequest,
+    append_message,
     is_action,
     is_code_observation,
     is_done,
@@ -54,45 +35,83 @@ from rflow.graph.node import (
     new_id,
     parse_node_obj,
 )
+from rflow.graph.injection import (
+    inject,
+    inject_output,
+    is_action_like,
+    resolve_injection_targets,
+)
+from rflow.graph.replace import (
+    replace_last_action,
+    replace_last_observation,
+    replace_node,
+)
 from rflow.graph.timeline import retrace_steps
+from rflow.graph.truncation import (
+    prune_descendants_spawned_after,
+    truncate_after,
+    truncate_agent,
+)
+from rflow.graph.views import Edge, EdgesView, NodesView
 
 __all__ = [
-    "ActionNode",
-    "AgentsView",
+    # actions
+    "Action",
+    "ActionPlan",
+    "CallLLM",
+    "Exec",
+    "Resume",
+    # handles
     "ChildHandle",
-    "CodeObservation",
-    "ContextPayload",
-    "DoneOutput",
-    "Edge",
-    "EdgesView",
-    "ErrorOutput",
-    "ExecAction",
-    "ExecOutput",
-    "Graph",
-    "LLMAction",
-    "LLMOutput",
-    "Node",
-    "NodesView",
-    "ObservationNode",
-    "ResumeAction",
-    "RuntimeRef",
-    "SupervisingOutput",
-    "UserQuery",
     "WaitRequest",
+    # graph + helpers
+    "Graph",
+    "append_message",
+    "new_id",
+    # node bases
+    "Node",
+    "ObservationNode",
+    "ActionNode",
+    "CodeObservation",
+    # leaf nodes
+    "UserQuery",
+    "LLMOutput",
+    "ExecOutput",
+    "SupervisingOutput",
+    "ErrorOutput",
+    "DoneOutput",
+    "LLMAction",
+    "ExecAction",
+    "ResumeAction",
+    # predicates + parser
+    "is_observation",
     "is_action",
     "is_code_observation",
-    "is_done",
-    "is_errored",
-    "is_exec_action",
-    "is_exec_output",
-    "is_llm_action",
+    "is_user_query",
     "is_llm_output",
-    "is_observation",
+    "is_exec_output",
+    "is_supervising",
+    "is_errored",
+    "is_done",
+    "is_llm_action",
+    "is_exec_action",
     "is_resume_action",
     "is_resumed",
-    "is_supervising",
-    "is_user_query",
-    "new_id",
     "parse_node_obj",
+    # views
+    "Edge",
+    "NodesView",
+    "EdgesView",
+    # trajectory editing (pure)
+    "inject",
+    "inject_output",
+    "is_action_like",
+    "resolve_injection_targets",
+    "replace_node",
+    "replace_last_action",
+    "replace_last_observation",
+    "truncate_after",
+    "truncate_agent",
+    "prune_descendants_spawned_after",
     "retrace_steps",
 ]

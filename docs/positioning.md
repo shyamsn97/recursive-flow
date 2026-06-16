@@ -32,10 +32,10 @@ It gives an LLM a REPL and recursive delegation tools, then persists every query
 
 **Choose recursive-flow** when you need:
 - Step-level control (pause, inspect, resume)
-- Typed graph state with workspace persistence, fork, and time-travel
+- Typed graph state with save/load persistence, fork, and time-travel
 - Parallel child execution with a thread pool
-- `session/` persistence for the agent / state log
-- `context/` payloads exposed as `CONTEXT`
+- `agents/` persistence for per-agent state logs
+- `INPUTS` payloads for per-agent task data
 - Interactive visualization (Gradio viewer)
 - Token tracking and budgets
 - Multiple LLM backends and model routing
@@ -105,12 +105,12 @@ These are task-specific harnesses for coding agents with Docker sandboxes and be
 
 - **Not a product** — it's a library. You bring your own LLM keys, runtime, and UI.
 - **Not a sandbox** — `LocalRuntime` runs code in your process. Use `ModalRuntime` or a custom `Runtime` for isolation.
-- **Not an integration platform** — we don't ship 100 tool connectors. Register your own tools via `@runtime.tool` or use the built-in filesystem tools.
+- **Not an integration platform** — we don't ship 100 tool connectors. Register your own tools with `@tool` + `runtime.register_tool(...)`, or use the built-in filesystem tools.
 - **Not a prompt optimizer** — we provide sensible defaults, but prompt tuning is your job (or pair with DSPy).
 
 ## Who should use recursive-flow
 
 - **Researchers** studying recursive/hierarchical agent architectures who want inspectable, replayable execution traces.
 - **Engineers** building agents that naturally decompose work (code gen, search, summarization) and want step-level control.
-- **Teams** that need workspace persistence, fork, and replay for debugging complex multi-agent runs.
+- **Teams** that need save/load persistence, fork, and replay for debugging complex multi-agent runs.
 - **RL practitioners** who want a gym-style `step()` loop over agent execution.

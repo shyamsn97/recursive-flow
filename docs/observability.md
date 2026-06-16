@@ -84,58 +84,45 @@ graph.edges.spawns()                           # list[Edge] — cross-agent dele
 graph.edges.flows_to()                         # list[Edge] — same-agent continuity
 ```
 
-## Workspace persistence
+## Run persistence
 
-A workspace is the durable run. It separates per-agent node logs,
-the graph manifest, task payloads, and user-controlled artifact files:
+`Graph.save(path)` writes a self-contained run directory. The manifest is
+`graph.json`; per-agent logs live under `agents/`; ordinary files produced by
+agent tools live beside the saved graph when your runtime working directory is
+the same directory.
 
 ```text
-workspace/
-  graph.json                  # workspace manifest: root + agent list
-  session/
+run/
+  graph.json
+  agents/
     root/
-      agent.json              # per-agent invariants written once
-      session.jsonl           # one Node per line, in seq order
-      latest.json             # cached summary of the latest node
-      transcript.json         # exact LLM conversation + per-message metadata
-    root.child/
       agent.json
       session.jsonl
       latest.json
-      transcript.json
-  context/
-    root/context.txt          # CONTEXT payload + metadata
-    root.child/context.txt
-  skills/
-    numpy-linear-algebra/SKILL.md  # user artifact, via workspace.artifacts
-  reports/
-    summary.md                      # user artifact, via workspace.artifacts
+      child_a/
+        agent.json
+        session.jsonl
+        latest.json
 ```
 
-`transcript.json` is the ground-truth record of what each agent's LLM
-actually saw: `messages` is the flat `[{role, content}, ...]`
-conversation across every turn, and `metadata` is a parallel list with
-one dict per message (per-assistant entries carry `model`, token counts,
-`elapsed_s`, and the node/seq the turn was appended after). Useful for
-debugging prompt issues, replaying a turn under a different model, or
-auditing context growth. Read it via the `Session` API
-(`session.read_transcript(agent_id)`).
-
-`Workspace.open_path(...).load_graph()` rehydrates the persisted node log
-as the same `Graph` shape the engine emits — `flows_to` edges are
-derived from node order, `spawns` edges come straight from
-`graph.json`. See [`internals.md`](internals.md#persistence) for the
-full session/transcript/context layout.
-
-`workspace.artifacts` is the safe API for ordinary user-controlled workspace
-files. It uses the paths you choose, rejects absolute paths and `..`, and hides
-engine-owned paths like `session/`, `context/`, and `graph.json`:
+`Graph.load(path)` rehydrates the same recursive `Graph` shape the engine emits:
 
 ```python
-workspace.artifacts.write_text("skills/review/SKILL.md", skill_text)
-workspace.artifacts.read_text("reports/summary.md")
-workspace.artifacts.list("skills")
+graph.save("runs/deep_research")
+latest = rflow.Graph.load("runs/deep_research")
 ```
+
+For live checkpointing, save after every step:
+
+```python
+graph = agent.start(query)
+while not graph.finished:
+    graph = agent.step(graph)
+    graph.save("runs/deep_research")
+```
+
+Use `rflow.utils.trace.save_trace(graphs, path)` when you want every snapshot,
+not just the latest graph.
 
 ## Live terminal
 
@@ -192,8 +179,8 @@ stepper.
 ```python
 from rflow.utils import save_image, save_steps, save_html
 
-save_image("runs/deep_research", "final.png")       # latest workspace snapshot
-save_html("runs/deep_research", "viewer.html")      # standalone viewer
+save_image(graph, "final.png")
+save_html(graph, "viewer.html")
 save_steps(graphs, "frames/")                       # if you kept a history list
 ```
 
@@ -246,7 +233,7 @@ from CDN and runs in any browser.
 ```python
 from rflow.utils.viewer import open_viewer
 
-open_viewer("runs/deep_research")              # workspace path
+open_viewer("runs/deep_research")              # saved run directory
 open_viewer(graph)                             # single snapshot
 open_viewer(graphs)                            # explicit in-memory history
 ```
@@ -255,8 +242,8 @@ Requires `recursive-flow[viewer]`.
 
 ## CLI
 
-The same helpers are reachable from a shell. `view` and `render` take workspace
-directories.
+The same helpers are reachable from a shell. `view` and `render` take saved run
+directories, graph JSON files, or trace files.
 
 ```
 recursive-flow view   runs/deep_research/

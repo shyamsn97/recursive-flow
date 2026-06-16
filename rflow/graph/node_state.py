@@ -1,35 +1,15 @@
-"""Helpers for carrying active execution state across graph edits."""
+"""Position stamping for out-of-band graph edits.
+
+When an edit (replace/inject) drops a node into a graph position, the new node
+must take that slot's identity — ``agent_id``/``seq`` and the right
+``global_step`` — while getting a fresh node id. An observation that replaces or
+follows an action in the same engine tick keeps that action's ``global_step``
+(they're one tick); anything else takes the next step.
+"""
 
 from __future__ import annotations
 
-from typing import Any
-
-from rflow.graph.node import ActionNode, Node, ObservationNode
-
-
-def inherit_node_state(
-    *,
-    source: Node | None,
-    replacement: Node,
-    output_schema: dict[str, Any] | None = None,
-    inherit_output_schema: bool = True,
-) -> Node:
-    """Return ``replacement`` with active path state inherited or overridden.
-
-    By default the replacement keeps its own schema if present, otherwise it
-    inherits from ``source``. Pass ``output_schema`` to override. Pass
-    ``inherit_output_schema=False`` with no schema to explicitly clear it.
-    """
-
-    next_schema = output_schema
-    if next_schema is None:
-        next_schema = replacement.output_schema
-    if next_schema is None and inherit_output_schema and source is not None:
-        next_schema = source.output_schema
-
-    if replacement.output_schema == next_schema:
-        return replacement
-    return replacement.update(output_schema=next_schema)
+from rflow.graph.graph import ActionNode, Node, ObservationNode
 
 
 def next_global_step_for_position(
@@ -39,7 +19,6 @@ def next_global_step_for_position(
     replacement: Node | None = None,
 ) -> int:
     """Return the logical step for a node placed after/replacing ``source``."""
-
     if (
         source is not None
         and source.global_step is not None
@@ -57,42 +36,14 @@ def stamp_node_for_position(
     agent_id: str,
     seq: int,
     global_step: int | None = None,
-    branch_id: str | None = None,
-    graph_output_schema: dict[str, Any] | None = None,
-    output_schema: dict[str, Any] | None = None,
-    inherit_output_schema: bool = True,
 ) -> Node:
-    """Stamp ``replacement`` into a graph position and carry active state."""
-
+    """Stamp ``replacement`` into a graph position with a fresh id."""
     fields = replacement.model_dump(
-        exclude={"id", "agent_id", "seq", "global_step", "branch_id"},
-        mode="python",
+        exclude={"id", "agent_id", "seq", "global_step"}, mode="python"
     )
-    stamped = replacement.__class__(
-        agent_id=agent_id,
-        seq=seq,
-        global_step=global_step,
-        branch_id=branch_id if branch_id is not None else replacement.branch_id,
-        **fields,
+    return replacement.__class__(
+        agent_id=agent_id, seq=seq, global_step=global_step, **fields
     )
-    stamped = inherit_node_state(
-        source=source,
-        replacement=stamped,
-        output_schema=output_schema,
-        inherit_output_schema=inherit_output_schema,
-    )
-    if (
-        output_schema is None
-        and inherit_output_schema
-        and stamped.output_schema is None
-        and graph_output_schema is not None
-    ):
-        stamped = stamped.update(output_schema=graph_output_schema)
-    return stamped
 
 
-__all__ = [
-    "inherit_node_state",
-    "next_global_step_for_position",
-    "stamp_node_for_position",
-]
+__all__ = ["next_global_step_for_position", "stamp_node_for_position"]

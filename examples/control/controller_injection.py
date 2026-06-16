@@ -1,10 +1,11 @@
-"""Inject typed nodes into a running graph.
+"""Inject typed nodes into a running graph from a controller.
 
-This shows the controller workflow:
+The controller workflow with the stateful engine:
 
-1. Build a new graph value with ``graph.inject(...)``.
-2. Pass that graph to ``agent.step(graph)`` to materialize the injected node.
-3. Let normal scheduling continue, or inject an ``ExecAction`` to finalize now.
+1. Build a new graph value with ``graph.inject(...)`` (pure: returns a copy).
+2. Adopt it by passing it to ``flow.step(injected)`` to react (no ``flow.graph =``).
+3. To stop a run early, call ``flow.terminate()`` — the agent is forced to
+   ``done(...)`` on its next turn (the supported "finalize now" mechanism).
 
 Run:
     python examples/control/controller_injection.py
@@ -13,7 +14,6 @@ Run:
 from __future__ import annotations
 
 import rflow
-from rflow.runtime.local import LocalRuntime
 
 OBSERVATION = "Injected controller observation: finalize using this note."
 
@@ -23,9 +23,11 @@ class DemoLLM(rflow.LLMClient):
 
     def chat(self, messages, *args, **kwargs) -> str:
         self.last_usage = rflow.LLMUsage(input_tokens=80, output_tokens=20)
-        prompt = messages[-1]["content"]
-        if "Injected controller observation" in prompt:
+        convo = "\n".join(m["content"] for m in messages)
+        if "Injected controller observation" in convo:
             return '```repl\ndone("used the injected controller observation")\n```'
+        if "full iteration budget" in convo:  # FINAL nudge from terminate()
+            return '```repl\ndone("controller stopped the run")\n```'
         return '```repl\nprint("waiting for controller input")\n```'
 
 
@@ -47,107 +49,60 @@ def assert_types(graph, expected: list[str]) -> None:
 def print_states(label: str, graph) -> None:
     print(f"\n{label}")
     print("state types:", " -> ".join(state_types(graph)))
-    for state in graph.nodes:
-        print(f"{state.seq}: {state.type}")
 
 
 def observation_injection() -> None:
     banner("1. Inject an observation and let the LLM react")
 
-    agent = rflow.RecursiveFlow(
-        DemoLLM(),
-        runtime=LocalRuntime(),
-        config=rflow.FlowConfig(max_depth=0, max_iterations=4),
-    )
-    graph = agent.start("Wait for a controller note, then finish.")
+    flow = rflow.Flow(DemoLLM(), max_depth=0, max_iters=4)
+    graph = flow.start("Wait for a controller note, then finish.")
     assert_types(graph, ["user_query"])
 
+    # inject() is pure — it returns a NEW graph, leaving the live one untouched.
     injected = graph.inject(
         target="root",
-        node=rflow.ExecOutput(
-            output=OBSERVATION,
-            content=OBSERVATION,
-        ),
+        node=rflow.ExecOutput(output=OBSERVATION, content=OBSERVATION),
     )
-
     assert injected is not graph
     assert_types(graph, ["user_query"])
     assert_types(injected, ["user_query", "exec_output"])
 
     extra = injected.nodes[-1]
-    extra_keys = set(extra.to_dict())
     assert isinstance(extra, rflow.ExecOutput)
-    assert "injected" not in extra_keys
-    assert "injected_reason" not in extra_keys
+    assert "injected" not in set(extra.to_dict())
 
     print_states("start(): original graph", graph)
-    print_states(
-        "graph.inject(...): returned graph with one plain ExecOutput", injected
-    )
-    print("original graph is unchanged:", state_types(graph))
-    print("extra node keys do not include injection metadata:", sorted(extra_keys))
+    print_states("graph.inject(...): returned a copy with one plain ExecOutput", injected)
 
-    projected = agent.build_messages(injected)[-1]["content"]
+    projected = flow.build_messages(injected, force_final=False)[-1]["content"]
     assert OBSERVATION in projected
-    print("message projection contains the controller observation:", OBSERVATION)
+    print("message projection contains the controller observation.")
 
-    graph = agent.step(injected)  # materializes ExecOutput, then calls the LLM
-    assert_types(graph, ["user_query", "exec_output", "llm_action", "llm_output"])
-    print_states("agent.step(injected): committed observation and asked the LLM", graph)
-
-    graph = agent.step(graph)  # executes the LLM's done(...) block
-    assert_types(
-        graph,
-        [
-            "user_query",
-            "exec_output",
-            "llm_action",
-            "llm_output",
-            "exec_action",
-            "done_output",
-        ],
-    )
+    # Adopt the edited graph by passing it to step() — no more flow.graph = ...
+    graph = flow.step(injected)  # reacts to the observation -> LLM call
+    graph = flow.step(graph)  # executes the LLM's done(...) block
     assert graph.result() == "used the injected controller observation"
-
-    print_states("agent.step(...): executed the LLM's done(...) block", graph)
+    print_states("after adopting + stepping: run reacted and finished", graph)
     print(f"result={graph.result()!r}")
 
 
-def action_injection() -> None:
-    banner("2. Inject an ExecAction to finalize immediately")
+def terminate_to_finalize() -> None:
+    banner("2. terminate() to finalize a run immediately")
 
-    agent = rflow.RecursiveFlow(
-        DemoLLM(),
-        runtime=LocalRuntime(),
-        config=rflow.FlowConfig(max_depth=0, max_iterations=4),
-    )
-    graph = agent.start("This run will be stopped by the controller.")
-    assert_types(graph, ["user_query"])
-
-    injected = graph.inject(
-        target="root",
-        node=rflow.ExecAction(code='done("controller stopped the run")'),
-    )
-    assert injected is not graph
-    assert_types(graph, ["user_query"])
-    assert_types(injected, ["user_query", "exec_action"])
-
-    print_states("start(): original graph", graph)
-    print_states(
-        "graph.inject(...): returned graph with one plain ExecAction", injected
-    )
-
-    graph = agent.step(injected)  # persists the ExecAction and executes it directly
-    assert_types(graph, ["user_query", "exec_action", "done_output"])
+    flow = rflow.Flow(DemoLLM(), max_depth=0, max_iters=4)
+    graph = flow.start("This run will be stopped by the controller.")
+    graph = flow.step(graph)  # one normal turn (print)
+    flow.terminate()  # force the agent to wrap up on its next LLM turn
+    while not graph.finished:
+        graph = flow.step(graph)
     assert graph.result() == "controller stopped the run"
-
-    print_states("agent.step(injected): executed the appended action", graph)
+    print_states("after terminate(): forced a clean done(...)", graph)
     print(f"result={graph.result()!r}")
 
 
 def main() -> None:
     observation_injection()
-    action_injection()
+    terminate_to_finalize()
 
 
 if __name__ == "__main__":

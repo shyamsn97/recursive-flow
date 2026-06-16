@@ -1,76 +1,97 @@
 # Examples
 
-The examples are grouped by what you are trying to learn:
+Single-file scripts live at the root. Multi-file tasks and API tours live in
+named folders. Generated runs go under [`_runs/`](_runs/); fixtures under
+[`_data/`](_data/).
 
-- [`basics/`](basics/) — first API examples: running agents, structured output,
-  batched queries, skills, and the viewer.
-- [`graph/`](graph/) — offline tours of graph querying, editing, timeline,
-  forking, and rendering.
-- [`control/`](control/) — steering execution: delegation, branching,
-  injection, replay, and controller-authored graph edits.
-- [`use_cases/`](use_cases/) — concrete workloads like summarization,
-  needle-in-haystack search, autoresearch, and coding-agent demos.
-- [`providers/`](providers/) — model/tool provider adapters such as DSPy, MCP,
-  and Tinker.
-- [`sandboxes/`](sandboxes/) — runtime isolation providers such as Modal, E2B,
-  and Daytona.
-- [`notebooks/`](notebooks/) — notebook walkthroughs.
+## Scripts
 
-Generated workspaces and bulky fixtures live under [`_runs/`](_runs/) and
-[`_data/`](_data/) so source examples stay easy to scan.
+| Script | What it shows |
+|---|---|
+| [`showcase.py`](showcase.py) | End-to-end `Flow` run + live terminal viz |
+| [`drop_in_llm.py`](drop_in_llm.py) | `Flow` as a drop-in `LLMClient` |
+| [`llm_query_batched.py`](llm_query_batched.py) | `llm_query_batched` in the REPL |
+| [`skills.py`](skills.py) | On-disk skills + dynamic prompt section |
+| [`structured_output.py`](structured_output.py) | Root + child `output_schema` validation |
+| [`view_demo.py`](view_demo.py) | Gradio viewer on synthetic graphs |
+| [`summarizer.py`](summarizer.py) | Recursive map-reduce summarization |
 
-Most compute examples (`use_cases/summarizer.py`,
-`use_cases/needle_haystack.py`, `use_cases/needle_haystack_filesystem.py`,
-`basics/showcase.py`, `use_cases/coding_agent/agent.py`) take the same flags. Defaults can
-vary; run `--help` for the exact values.
+```bash
+python examples/showcase.py --no-viz
+python examples/skills.py --model gpt-4o-mini
+python examples/summarizer.py --sections 10 --no-viz
+```
+
+## Tasks
+
+| Folder | What it shows |
+|---|---|
+| [`needle/`](needle/) | Needle-in-haystack (in-memory + filesystem variants) |
+| [`coding/`](coding/) | Interactive file-editing agent |
+| [`autoresearch/`](autoresearch/) | Karpathy-style research loop + circle-packing benchmark |
+
+## Tours & integrations
+
+| Folder | What it shows |
+|---|---|
+| [`graph/`](graph/) | Offline Graph API (query, edit, save, fork, render) |
+| [`control/`](control/) | Delegation, branching, injection |
+| [`sandboxes/`](sandboxes/) | Modal, E2B, Daytona remote execution |
+| [`providers/`](providers/) | DSPy, MCP, Tinker adapters |
+| [`notebooks/`](notebooks/) | Jupyter walkthroughs |
+
+---
+
+Most compute examples (`summarizer.py`, `needle/haystack.py`, `showcase.py`,
+`coding/agent.py`) share the same flags. Run `--help` on any script for defaults.
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--model MODEL` | varies | Main LLM. Prefix decides client (`claude*` → Anthropic, else OpenAI). |
 | `--fast-model MODEL` | varies | Optional cheap secondary model registered as `fast` for delegates. |
-| `--docker-image IMAGE` | unset | If set, run agent code inside this Docker image. Must have `recursive-flow` installed. Leaving this unset uses `LocalRuntime`. |
+| `--docker-image IMAGE` | unset | If set, run agent code inside this Docker image via a `DockerRuntime`. Must have `recursive-flow` installed. Leaving this unset uses the in-process `LocalRuntime`. |
 | `--max-depth N` | `3` | Max delegation depth. |
-| `--max-iterations N` | `15` | Max LLM calls per agent. |
+| `--max-iters N` | `15` | Max LLM turns per agent. |
 | `--no-viz` | off | Disable the live terminal visualization. |
+| `--out-dir PATH` | `_runs/<path>/` | Save the final run here. Defaults mirror the script path under [`_runs/`](_runs/). |
 
 ## Running under Docker
 
-The repo ships a `Dockerfile` at its root that builds an image with `recursive-flow`
-preinstalled. Build it once:
+Build the image once:
 
 ```bash
 docker build -t recursive-flow:local .
 ```
 
-Then just pass `--docker-image recursive-flow:local` to any example — presence of
-the flag is what enables the Docker runtime:
+Then pass `--docker-image recursive-flow:local` to any example that supports it:
 
 ```bash
-python examples/use_cases/summarizer.py                 --docker-image recursive-flow:local
-python examples/use_cases/needle_haystack.py            --docker-image recursive-flow:local
-python examples/use_cases/needle_haystack_filesystem.py --docker-image recursive-flow:local
-python examples/basics/showcase.py                        --docker-image recursive-flow:local
-python examples/use_cases/coding_agent/agent.py --workspace ./proj --docker-image recursive-flow:local
+python examples/summarizer.py                 --docker-image recursive-flow:local
+python examples/needle/haystack.py            --docker-image recursive-flow:local
+python examples/needle/filesystem.py          --docker-image recursive-flow:local
+python examples/coding/agent.py --workdir ./proj --docker-image recursive-flow:local
 ```
 
-The host workspace is bind-mounted at `/workspace` inside the container, so
-registered workspace tools work identically in both modes.
+Examples that use file tools register them on the runtime
+(`runtime.register_tools(FILE_TOOLS)`) and set `working_directory`, so relative
+paths resolve into that directory the same way in local and Docker modes.
 
-Each compute example writes its durable run state into its workspace. Reopen or
-export it with:
+A finished run is saved automatically under `_runs/`; reopen it with:
 
 ```bash
-recursive-flow view path/to/workspace
-recursive-flow render path/to/workspace -f html -o viewer.html
+python examples/summarizer.py        # saves to examples/_runs/summarizer/
+recursive-flow view examples/_runs/summarizer
+recursive-flow render examples/_runs/summarizer --format html -o viewer.html
 ```
 
-The workspace is the saved run.
+The saved directory holds `graph.json` (and optionally `trace.json` when you
+capture a step sequence with `save_trace`).
 
 ## Modal, E2B, and Daytona
 
-Remote sandbox examples live under [`examples/sandboxes/`](sandboxes/). They run
-a small platformer-building task, so set `OPENAI_API_KEY` plus the provider's
-sandbox credentials:
+Remote sandbox examples live under [`sandboxes/`](sandboxes/). They run a small
+platformer-building task, so set `OPENAI_API_KEY` plus the provider's sandbox
+credentials:
 
 ```bash
 python examples/sandboxes/modal_agent.py --model gpt-5 --no-live
@@ -81,20 +102,14 @@ python examples/sandboxes/daytona_agent.py --model gpt-5
 Install the matching extra first: `recursive-flow[modal]`, `recursive-flow[e2b]`,
 `recursive-flow[daytona]`, or `recursive-flow[sandbox]` for all three.
 
-For fully locked-down runs, `DockerRuntime` takes the usual Docker knobs
-directly when built by hand:
+For fully locked-down local runs, pass a `DockerRuntime`:
 
 ```python
-from rflow.runtime.docker import DockerRuntime
+from rflow import Flow, DockerRuntime
+from rflow.clients import OpenAIClient
 
-runtime = DockerRuntime(
-    image="recursive-flow:local",
-    mounts={"./data": "/workspace"},
-    env={"OPENAI_API_KEY": os.environ["OPENAI_API_KEY"]},
-    network="none",       # air-gap the container
-    cpus=1.0,
-    memory="512m",
-)
+runtime = DockerRuntime("recursive-flow:local", working_directory="./proj")
+flow = Flow(OpenAIClient(model="gpt-4o"), runtime=runtime)
 ```
 
 ## Smoke runner

@@ -1,4 +1,4 @@
-"""Shared helpers for provider-backed sandbox runtimes."""
+"""Shared helpers for provider-backed sandbox REPL backends."""
 
 from __future__ import annotations
 
@@ -19,16 +19,12 @@ def command_output(
     stdout_getter: Callable[[object], str] | None = None,
     stderr_getter: Callable[[object], str] | None = None,
 ) -> str:
-    """Return stdout or raise a consistent provider command error."""
-
+    """Return a sandbox command's stdout, or raise a consistent error."""
     stdout = stdout_getter(result) if stdout_getter else _string_attr(result, "stdout")
     stderr = (
         stderr_getter(result)
         if stderr_getter
-        else _first_string_attr(
-            result,
-            ("stderr", "error"),
-        )
+        else _first_string_attr(result, ("stderr", "error"))
     )
     exit_code = getattr(result, "exit_code", 0)
     if exit_code:

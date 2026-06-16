@@ -1,7 +1,7 @@
-"""Best-of-N with independent RecursiveFlow branches.
+"""Best-of-N with independent Flow branches.
 
-Each branch is a fresh Workspace and root QueryNode, demonstrating the current
-node-first surface.
+Each branch is a fresh ``flow.start(...)`` run saved to its own ``graph.json``,
+demonstrating the Graph-centric surface.
 
 Usage:
     python examples/control/branching/best_of_n.py
@@ -73,16 +73,13 @@ def score(result: str) -> tuple[int, dict[str, str]]:
 
 
 def run_branch(root: Path, idx: int) -> tuple[str, int, dict[str, str], int]:
-    workspace = rflow.Workspace.create(root / f"branch_{idx}")
     llm = MockLLM(seed=idx)
-    engine = rflow.RecursiveFlow(
-        llm_client=llm,
-        workspace=workspace,
-        config=rflow.FlowConfig(max_depth=1, max_iterations=10),
-    )
-    graph = engine.start(QUERY)
+    flow = rflow.Flow(llm, max_depth=1, max_iters=10)
+    graph = flow.start(QUERY)
     while not graph.finished:
-        graph = engine.step(graph)
+        graph = flow.step(graph)
+    # Each branch persists to its own directory (graph.json).
+    graph.save(root / f"branch_{idx}")
     result = graph.result()
     correct, preds = score(result)
     return result, correct, preds, llm.call_count
@@ -93,8 +90,8 @@ def main() -> None:
     parser.add_argument("--n", type=int, default=8)
     parser.add_argument(
         "--root-dir",
-        default=str(Path(__file__).resolve().parents[1] / "runs" / "best_of_n"),
-        help="where to drop per-branch workspaces (default: examples/runs/best_of_n/)",
+        default=str(Path(__file__).resolve().parents[2] / "_runs" / "best-of-n"),
+        help="where to drop per-branch run directories (default: examples/_runs/best-of-n/)",
     )
     args = parser.parse_args()
 

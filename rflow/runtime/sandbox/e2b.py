@@ -1,27 +1,29 @@
-"""E2B runtime — run agent code inside an E2B Sandbox.
+"""E2B REPL backend — run an agent's code inside an E2B Sandbox.
 
-Requires ``e2b`` to be installed (``pip install recursive-flow[e2b]``) and an
-``E2B_API_KEY`` environment variable, unless you pass SDK auth options through
-``sandbox_kwargs``.
+Requires ``e2b`` (``pip install recursive-flow[e2b]``) and an ``E2B_API_KEY``
+(unless passed via ``sandbox_kwargs``). Uses the :class:`RemoteFileRuntime` file
+bridge: one persistent :mod:`rflow.runtime.repl_server` process, driven through
+remote files via E2B's ``commands.run``.
 """
 
 from __future__ import annotations
 
-import shutil
-from pathlib import Path
+from typing import TYPE_CHECKING
 
+from rflow.runtime.runtime import ReplBackend, Runtime
 from rflow.runtime.sandbox.common import command_output, optional_dependency_error
 from rflow.runtime.sandbox.remote import RemoteFileRuntime
-from rflow.workspace import BaseWorkspace
+
+if TYPE_CHECKING:
+    from rflow.graph import Graph
 
 
-class E2BRuntime(RemoteFileRuntime):
-    """Execute agent code inside an E2B Sandbox."""
+class E2BRepl(RemoteFileRuntime):
+    """A :class:`RemoteFileRuntime` backed by an E2B Sandbox."""
 
     def __init__(
         self,
         *,
-        workspace: BaseWorkspace | str | Path = ".",
         template: str | None = None,
         timeout: int = 300,
         envs: dict[str, str] | None = None,
@@ -31,28 +33,25 @@ class E2BRuntime(RemoteFileRuntime):
         sandbox_kwargs: dict[str, object] | None = None,
     ) -> None:
         super().__init__(
-            workspace=workspace,
             remote_workdir=remote_workdir,
             repl_timeout=repl_timeout,
+            setup_commands=setup_commands,
         )
         self.template = template
         self.timeout = timeout
         self.envs = envs
-        self.setup_commands = self._resolve_setup_commands(setup_commands)
         self.sandbox_kwargs = dict(sandbox_kwargs or {})
         self.sandbox = None
 
     def _ensure_sandbox(self) -> None:
         if self.sandbox is not None:
             return
-
         try:
             from e2b import Sandbox
-        except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency.
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
             raise ModuleNotFoundError(
-                optional_dependency_error("E2BRuntime", "e2b")
+                optional_dependency_error("E2BRepl", "e2b")
             ) from exc
-
         self.sandbox = Sandbox.create(
             template=self.template,
             timeout=self.timeout,
@@ -72,35 +71,47 @@ class E2BRuntime(RemoteFileRuntime):
         )
         return command_output(result, "E2B")
 
-    def upload_file(self, local_path: str | Path, remote_path: str) -> None:
-        self._ensure_sandbox()
-        assert self.sandbox is not None
-        files = getattr(self.sandbox, "files", None)
-        if files is not None and hasattr(files, "write"):
-            files.write(remote_path, Path(local_path).read_bytes())
+    def _close_sandbox(self) -> None:
+        sandbox, self.sandbox = self.sandbox, None
+        if sandbox is None:
             return
-        dst = Path(remote_path)
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(local_path, dst)
+        for name in ("kill", "close", "disconnect"):
+            method = getattr(sandbox, name, None)
+            if callable(method):
+                method()
+                return
 
-    def download_file(self, remote_path: str, local_path: str | Path) -> None:
-        self._ensure_sandbox()
-        assert self.sandbox is not None
-        dst = Path(local_path)
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        files = getattr(self.sandbox, "files", None)
-        if files is not None and hasattr(files, "read"):
-            data = files.read(remote_path)
-            if isinstance(data, str):
-                dst.write_text(data)
-            else:
-                dst.write_bytes(data)
-            return
-        shutil.copy2(remote_path, dst)
 
-    def clone(self, workspace: BaseWorkspace | str | Path | None = None) -> E2BRuntime:
-        new = E2BRuntime(
-            workspace=workspace or self.workspace_obj,
+class E2BRuntime(Runtime):
+    """Run each agent's code in a remote E2B Sandbox.
+
+    The user-facing object you hand to ``Flow(runtime=...)``; :meth:`open` mints
+    one :class:`E2BRepl` per agent. ``remote_workdir`` is the in-sandbox
+    directory agent code runs in.
+    """
+
+    def __init__(
+        self,
+        *,
+        template: str | None = None,
+        timeout: int = 300,
+        envs: dict[str, str] | None = None,
+        remote_workdir: str = "/workspace",
+        repl_timeout: float = 30,
+        setup_commands: list[str] | None = None,
+        sandbox_kwargs: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(working_directory=remote_workdir)
+        self.template = template
+        self.timeout = timeout
+        self.envs = envs
+        self.remote_workdir = remote_workdir
+        self.repl_timeout = repl_timeout
+        self.setup_commands = setup_commands
+        self.sandbox_kwargs = sandbox_kwargs
+
+    def open(self, agent: Graph) -> ReplBackend:
+        return E2BRepl(
             template=self.template,
             timeout=self.timeout,
             envs=self.envs,
@@ -109,17 +120,6 @@ class E2BRuntime(RemoteFileRuntime):
             setup_commands=self.setup_commands,
             sandbox_kwargs=self.sandbox_kwargs,
         )
-        self._copy_tools_to(new)
-        return new
-
-    def fork(self, new_workspace: BaseWorkspace | str | Path) -> E2BRuntime:
-        return super().fork(new_workspace)
-
-    def _close_sandbox(self) -> None:
-        sandbox, self.sandbox = self.sandbox, None
-        if sandbox is None:
-            return
-        self._close_with_methods(sandbox, ("kill", "close", "disconnect"))
 
 
-__all__ = ["E2BRuntime"]
+__all__ = ["E2BRepl", "E2BRuntime"]

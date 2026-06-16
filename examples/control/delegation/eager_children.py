@@ -19,11 +19,13 @@ import time
 from dataclasses import dataclass, field
 
 import rflow
-from rflow.runtime.local import LocalRuntime
 
 
 @dataclass
 class TimelineLLM(rflow.LLMClient):
+    # The fake only sleeps/records, so concurrent calls are safe; this lets the
+    # bounded LLM channel run sibling calls in parallel instead of serializing.
+    thread_safe = True
     started_at: float = field(default_factory=time.perf_counter)
     events: list[tuple[float, str]] = field(default_factory=list)
 
@@ -64,21 +66,18 @@ class TimelineLLM(rflow.LLMClient):
 
 def run_case(*, eager_children: bool) -> None:
     llm = TimelineLLM()
-    agent = rflow.RecursiveFlow(
+    flow = rflow.Flow(
         llm,
-        runtime=LocalRuntime(),
-        config=rflow.FlowConfig(
-            eager_children=eager_children,
-            max_depth=2,
-            max_iterations=8,
-            max_concurrency=2,
-        ),
+        eager_children=eager_children,
+        max_depth=2,
+        max_iters=8,
+        max_concurrency=2,
     )
 
-    graph = agent.start("Show eager child scheduling.")
+    graph = flow.start("Show eager child scheduling.")
     steps = 0
     while not graph.finished:
-        graph = agent.step(graph)
+        graph = flow.step(graph)
         steps += 1
 
     mode = "eager_children=True" if eager_children else "eager_children=False"

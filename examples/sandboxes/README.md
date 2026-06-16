@@ -1,19 +1,20 @@
 # Sandbox Examples
 
-These examples run a single RecursiveFlow task whose Python code executes inside a
+These examples run a single `Flow` task whose Python code executes inside a
 remote sandbox: build a simple 2D side-scrolling platformer in plain HTML,
 CSS, and JavaScript. They use `OpenAIClient`, so set `OPENAI_API_KEY` before
 running them.
 
-Each example writes durable run state under `examples/_runs/example-workspaces/`.
+Each example passes a sandbox runtime to `Flow(runtime=...)` (for example
+`E2BRuntime`, `ModalRuntime`, or `DaytonaRuntime`). The runtime mints one backend
+lazily per agent when it first executes code.
 
-Good first-turn behavior is to inspect in a small standalone REPL block before
-delegating or writing files. For example:
+Good first-turn behavior is to inspect inputs in a small standalone REPL block
+before delegating or writing files. For example:
 
 ```repl
-info = CONTEXT.info()
-print(info)
-print(CONTEXT.read(0, min(2000, info["chars"])))
+print(list(INPUTS))
+print(INPUTS["key"][:2000])
 ```
 
 Then use that output in the next turn to decide whether to delegate,
@@ -52,7 +53,7 @@ python examples/sandboxes/e2b_agent.py --model gpt-5
 
 By default, `E2BRuntime` starts from E2B's base template and runs
 `python -m pip install -q recursive-flow` inside the sandbox. Pass
-`template=...` and `setup_commands=[]` if you maintain a prebuilt
+`template=...` and `--skip-setup` if you maintain a prebuilt
 template with `recursive-flow` already installed.
 
 Useful E2B sandbox args:
@@ -76,7 +77,7 @@ python examples/sandboxes/daytona_agent.py --model gpt-5
 
 By default, `DaytonaRuntime` creates a default Python sandbox and runs
 `python -m pip install -q recursive-flow` inside it. Pass provider-specific
-`create_params` and `setup_commands=[]` for a prebuilt snapshot.
+create params and `--skip-setup` for a prebuilt snapshot.
 
 Useful Daytona sandbox args:
 

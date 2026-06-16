@@ -1,10 +1,9 @@
-"""Forking a Workspace: copy a run, diverge, compare outcomes.
+"""Forking a run: copy a Graph, diverge it, compare outcomes.
 
-``Workspace.fork(new_dir=...)`` copies the session log and context store into a
-new directory and returns a fresh Workspace handle. User artifacts are opt-in:
-pass ``include_artifacts=True`` when a branch should carry files such as skills,
-reports, fixtures, or notes. Subsequent writes go into the new workspace only —
-the source workspace stays untouched.
+There's no Workspace anymore — a whole run *is* a ``Graph``, so "forking" is
+just ``graph.copy(deep=True)`` followed by an out-of-band edit. Each fork is an
+independent value you can edit, re-run, save, or throw away without touching the
+original.
 
 Use it for:
 
@@ -13,10 +12,10 @@ Use it for:
 - speculative edits without disturbing the canonical run
 
 This script:
-  1. seeds a workspace with a deterministic mock LLM,
-  2. forks twice (one workspace keeps going, the other is replayed with a
-     different LLM),
-  3. shows that the two diverged graphs are independent.
+  1. runs a base graph to completion with a deterministic mock LLM,
+  2. forks it twice and rewrites each fork's result differently
+     (``replace_last_observation``),
+  3. saves each fork to its own ``graph.json`` and shows independence.
 
 Run:
     python examples/graph/06_fork.py
@@ -24,37 +23,21 @@ Run:
 
 from __future__ import annotations
 
+import argparse
+import contextlib
 import shutil
-import tempfile
 from pathlib import Path
 
 import rflow
 
 
 class ScriptedLLM(rflow.LLMClient):
-    """Returns scripted REPL blocks one per call so the engine terminates."""
-
-    def __init__(self, replies: list[str]) -> None:
-        self.replies = list(replies)
-        self.idx = 0
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
 
     def chat(self, messages, *args, **kwargs):
         self.last_usage = rflow.LLMUsage(input_tokens=10, output_tokens=5)
-        reply = self.replies[min(self.idx, len(self.replies) - 1)]
-        self.idx += 1
-        return reply
-
-
-def run(workspace: rflow.Workspace, llm: rflow.LLMClient, query: str) -> str:
-    engine = rflow.RecursiveFlow(
-        llm_client=llm,
-        workspace=workspace,
-        config=rflow.FlowConfig(max_iterations=3),
-    )
-    graph = engine.start(query)
-    while not graph.finished:
-        graph = engine.step(graph)
-    return graph.result()
+        return self.reply
 
 
 def banner(title: str) -> None:
@@ -64,73 +47,49 @@ def banner(title: str) -> None:
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp).resolve()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--out-dir",
+        default=str(Path(__file__).resolve().parents[1] / "_runs" / "fork-demo"),
+        help="where to save the forks (default: examples/_runs/fork-demo/)",
+    )
+    args = parser.parse_args()
 
-        banner("seed: a fresh main workspace")
-        main_ws = rflow.Workspace.create(root / "main")
-        # Pre-seed a user artifact so we can show artifact copying is opt-in.
-        main_ws.artifacts.write_text("notes.md", "# starting notes\n")
-        seeded_result = run(
-            main_ws,
-            ScriptedLLM(['```repl\ndone("seeded result")\n```']),
-            "do the thing",
-        )
-        print(f"main workspace result: {seeded_result!r}")
-        print(
-            f"main workspace files : {sorted(p.name for p in main_ws.root.iterdir())}"
-        )
+    root = Path(args.out_dir).resolve()
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True)
+    with contextlib.nullcontext():
+        banner("seed: run a base graph to completion")
+        flow = rflow.Flow(ScriptedLLM('```repl\ndone("seeded result")\n```'), max_iters=3)
+        base = flow.run("do the thing")  # returns the result string
+        base_graph = flow.graph
+        print(f"base result: {base!r}")
+        print(f"base nodes : {[n.type for n in base_graph.all_nodes]}")
 
-        banner("fork twice — core state copies by default, artifacts are opt-in")
-        # The fork helper deletes the destination if it exists, so make sure
-        # we hand it a fresh path.
-        for workspace_name in ("retry_a", "retry_b"):
-            shutil.rmtree(root / workspace_name, ignore_errors=True)
-        a = main_ws.fork(new_dir=root / "retry_a")
-        b = main_ws.fork(new_dir=root / "retry_b", include_artifacts=True)
-        print(
-            f"main session.jsonl   : {(main_ws.root / 'session/root/session.jsonl').stat().st_size}b"
-        )
-        print(
-            f"retry_a session.jsonl: {(a.root / 'session/root/session.jsonl').stat().st_size}b "
-            f"(copied from main)"
-        )
-        print(
-            f"retry_b session.jsonl: {(b.root / 'session/root/session.jsonl').stat().st_size}b "
-            f"(copied from main)"
-        )
-        print(f"retry_a has notes.md : {a.artifacts.exists('notes.md')}")
-        print(f"retry_b notes.md     : {b.artifacts.read_text('notes.md').strip()!r}")
+        banner("fork twice — copy(deep=True) gives independent graphs")
+        fork_a = base_graph.copy(deep=True)
+        fork_b = base_graph.copy(deep=True)
 
-        banner("diverge: each branch keeps running with its own LLM")
-        # Append a *new* run into each workspace — the seeded states stay,
-        # and the new ones get appended after them.
-        a_result = run(
-            a,
-            ScriptedLLM(['```repl\ndone("retry_a took the careful path")\n```']),
-            "redo with caution",
+        # Diverge each fork by rewriting its terminal answer out of band.
+        fork_a = fork_a.replace_last_observation(
+            "root", rflow.DoneOutput(result="fork A: the careful path"), truncate="none"
         )
-        b_result = run(
-            b,
-            ScriptedLLM(['```repl\ndone("retry_b took the bold path")\n```']),
-            "redo aggressively",
+        fork_b = fork_b.replace_last_observation(
+            "root", rflow.DoneOutput(result="fork B: the bold path"), truncate="none"
         )
 
-        print(f"retry_a: {a_result!r}")
-        print(f"retry_b: {b_result!r}")
+        banner("save each fork to its own graph.json")
+        for name, g in (("base", base_graph), ("fork_a", fork_a), ("fork_b", fork_b)):
+            path = g.save(root / name)
+            print(f"  {name:<7} -> {path.relative_to(root)}  result={g.result()!r}")
 
-        banner("the source workspace is unchanged")
-        main_loaded = rflow.Workspace.open_path(main_ws.root).load_graph()
-        print(f"main result still : {main_loaded.result()!r}")
-        print(f"main state count  : {len(main_loaded.all_nodes)}")
-
-        banner("compare workspaces by result")
-        for ws in (main_ws, a, b):
-            g = rflow.Workspace.open_path(ws.root).load_graph()
-            print(
-                f"  workspace={ws.root.name:<8} nodes={len(g.all_nodes):>2} "
-                f"result={g.result()!r}"
-            )
+        banner("the original is unchanged; forks are independent")
+        reloaded = rflow.Graph.load(root / "base")
+        print(f"base result still : {reloaded.result()!r}")
+        for name in ("base", "fork_a", "fork_b"):
+            g = rflow.Graph.load(root / name)
+            print(f"  {name:<7} nodes={len(g.all_nodes):>2} result={g.result()!r}")
 
 
 if __name__ == "__main__":

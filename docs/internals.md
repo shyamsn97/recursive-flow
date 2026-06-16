@@ -1,5 +1,10 @@
 # RecursiveFlow Internals
 
+> **Status:** this deep dive predates the current `Flow` / `Graph.save()` /
+> `Runtime(working_directory=...)` API and is being refreshed. Prefer
+> [`control.md`](control.md), [`observability.md`](observability.md),
+> [`runtimes.md`](runtimes.md), and the current source for user-facing behavior.
+
 A deep reference for the engine's mechanics: data model, step
 lifecycle, REPL/await protocol, resume semantics, persistence, and
 the extension seams on `RecursiveFlow`. If you want to subclass the

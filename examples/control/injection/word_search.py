@@ -1,6 +1,6 @@
 """Generate the baseline word-search run used by the injection example.
 
-This is the original route: ask a real RecursiveFlow agent to find ``AGENT`` by
+This is the original route: ask a real Flow agent to find ``AGENT`` by
 delegating direction-specific search to three child agents:
 
 - ``rows`` searches rows east/west;
@@ -9,7 +9,9 @@ delegating direction-specific search to three child agents:
 
 That route is intentionally plausible but more complicated than necessary. It
 creates a real root ``SupervisingOutput`` that ``inject_variants.py`` can later
-replace with a direct scanner route.
+replace with a direct scanner route. The finished run is saved as a run
+directory (``graph.json`` manifest plus per-agent logs nested under
+``agents/``) that ``inject_variants.py`` loads with ``rflow.Graph.load``.
 
 Run:
     export OPENAI_API_KEY=...
@@ -19,7 +21,6 @@ Run:
 from __future__ import annotations
 
 import argparse
-import shutil
 from pathlib import Path
 from typing import Literal
 
@@ -30,7 +31,7 @@ from rflow.utils.viz import live_view
 
 TARGET_WORD = "AGENT"
 
-CONTEXT = f"""Word Search Grid:
+GRID = f"""Word Search Grid:
 
 TYPHONQWER
 LMNOPQRSAT
@@ -74,7 +75,7 @@ EXPECTED_HITS = {
 EXPECTED_MISSING: set[str] = set()
 
 QUERY = """\
-Solve the word search puzzle in CONTEXT.
+Solve the word search puzzle in `INPUTS["grid"]`.
 
 You can aproach this problem with the following strategy:
 1. The root should first delegate to three child agents: `rows`, `cols`,
@@ -106,24 +107,22 @@ def _hit_key(hit: WordHit) -> tuple[str, int, int, int, int, str]:
     )
 
 
-def run(model: str, workspace_path: Path, *, reset: bool) -> None:
-    if reset and workspace_path.exists():
-        shutil.rmtree(workspace_path)
-
-    workspace = rflow.Workspace.create(workspace_path)
-    agent = rflow.RecursiveFlow(
+def run(model: str, out_dir: Path) -> None:
+    flow = rflow.Flow(
         client_for_model(model),
-        config=rflow.FlowConfig(max_depth=2, child_max_iterations=10),
-    ).attach_workspace(workspace)
+        max_depth=2,
+        child_max_iters=10,
+    )
 
-    graph = agent.start(QUERY, output_schema=WordSearchResult, context=CONTEXT)
+    graph = flow.start(QUERY, {"grid": GRID}, output_schema=WordSearchResult)
     with live_view() as view:
         view(graph)
         while not graph.finished:
-            graph = agent.step(graph)
+            graph = flow.step(graph)
             view(graph)
+    flow.close()
 
-    result = WordSearchResult.model_validate(graph.result())
+    result = WordSearchResult.model_validate_json(graph.result())
     actual = {_hit_key(hit) for hit in result.found}
     missing = set(result.missing)
 
@@ -133,24 +132,26 @@ def run(model: str, workspace_path: Path, *, reset: bool) -> None:
         raise SystemExit("agent returned word-search hits that do not match EXPECTED")
 
     print("agent returned the expected word-search hits!")
-    print(f"\nwrote injection workspace: {workspace.root}")
+    path = graph.save(out_dir)
+    print(f"\nwrote baseline run: {path}")
+    print(f"  manifest: {path / 'graph.json'}")
+    print(f"  agents:   {path / 'agents'} ({len(list(graph.agents))} agents)")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="gpt-5-mini")
     parser.add_argument(
-        "--workspace",
+        "--out-dir",
         type=Path,
         default=Path(__file__).resolve().parents[2]
         / "_runs"
-        / "word-search-workspace"
-        / "word-search-baseline",
+        / "word-search"
+        / "baseline",
     )
-    parser.add_argument("--no-reset", action="store_true")
     args = parser.parse_args()
 
-    run(args.model, args.workspace.resolve(), reset=not args.no_reset)
+    run(args.model, args.out_dir.resolve())
 
 
 if __name__ == "__main__":

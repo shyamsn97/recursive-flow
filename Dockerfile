@@ -8,7 +8,7 @@
 #   runtime = DockerRuntime("recursive-flow:local")
 #
 # Or via any of the bundled examples:
-#   python examples/use_cases/summarizer.py --runtime docker --docker-image recursive-flow:local
+#   python examples/summarizer.py --runtime docker --docker-image recursive-flow:local
 
 FROM python:3.12-slim
 

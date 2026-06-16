@@ -1,30 +1,31 @@
 """Default system prompt for a recursive REPL agent.
 
-Modeled on the `RLM_SYSTEM_PROMPT` in alexzhang13/rlm:
-https://github.com/alexzhang13/rlm/blob/main/rlm/utils/prompts.py
+Modeled on the ``RLM_SYSTEM_PROMPT`` in alexzhang13/rlm
+(https://github.com/alexzhang13/rlm/blob/main/rlm/utils/prompts.py), adapted to
+the minimal stack's **inputs-as-`INPUTS`** model: there is no monolithic
+``CONTEXT`` object — each agent's inputs are exposed through a single ``INPUTS``
+dict (read as ``INPUTS["key"]``, so a key never shadows a real REPL variable),
+children receive their own ``inputs`` dict, and an agent re-reads its own past
+turns through ``HISTORY``.
 
-The prompt is split into five headless, swappable sections that render
-back-to-back in this exact order:
+The prompt is built from headless, swappable sections that render back-to-back:
 
-1. ``role``     — opening contract + REPL namespace (1-8).
-2. ``strategy`` — when to use which call, "break down problems",
-                  REPL-for-computation (inline physics example),
-                  truncation + long-context guidance.
-3. ``format``   — REPL block format + tiny inline fence demo.
+1. ``role``     — opening contract + REPL namespace.
+2. ``strategy`` — when to use which call, decomposition, REPL-for-computation.
+3. ``format``   — REPL block format + inline demo.
 4. ``examples`` — worked recipes (batched chunks, conditional sub-agent,
-                  data-slice fanout, multi-artifact fanout).
-5. ``final``    — ``done(...)`` contract, ``SHOW_VARS`` reminder,
-                  closing exhortation.
+                  data-slice fanout, structured output, multi-file fanout,
+                  verify→repair→re-verify loop).
+5. ``final``    — ``done(...)`` contract + closing exhortation.
 
-Each section is registered headless (no ``## Heading``) so the rendered
-prompt is byte-identical to one continuous narrative, but each piece is
-independently swappable via ``DEFAULT_BUILDER.update(name, ...)``.
-
-``tools`` and ``status`` are dynamic sections filled from the current engine
-and graph at build time.
+``structured-output``, ``tools`` and ``status`` are dynamic sections filled from
+the current ``Flow`` + agent ``Graph`` at build time. Each section is swappable
+via ``DEFAULT_BUILDER.update(name, ...)`` without mutating the original builder.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -34,47 +35,37 @@ from rflow.prompts.messages import (
     STATUS_DEPTH_NEAR_MAX,
     STATUS_DEPTH_ROOT,
 )
+from rflow.tools import format_tool_line
+from rflow.tools.registry import partition_repl_namespace
 
-CONTEXT_TEXT = """
-`CONTEXT` holds the task input/data. Inspect with `CONTEXT.info()`,
-`CONTEXT.read(start, end)`, `CONTEXT.lines(start, end)`,
-`CONTEXT.grep(pattern, max_results=50)`, and `CONTEXT.line_count()`.
-`CONTEXT.read(...)` returns a string. `CONTEXT.lines(...)` returns
-`list[str]`.
-"""
+ROLE_OPENING = 'Answer the user\'s query using the Python REPL. Your inputs are in the `INPUTS` dict, read as `INPUTS["key"]`; use code for inspection/transforms, `llm_query_batched` for one-shot fanout, and `launch_subagents` for recursive sub-agents. Iterate until the task is complete, then call `done(...)`.'
 
-ROLE_OPENING = "Answer the user's query using the Python REPL and the provided `CONTEXT`. Use code for inspection/transforms, `llm_query_batched` for one-shot fanout, and `launch_subagents` for recursive sub-agents. Iterate until the task is complete, then call `done(...)`."
-
-ROLE_CONTEXT_LINE = "1. `CONTEXT` — task data. Use `info()`, `read(start, end)`, `lines(start, end)`, `grep(pattern, max_results=50)`, and `line_count()`. `read` returns `str`; `lines` returns `list[str]`."
-ROLE_SESSION_LINE = "4. `SESSION` — read-only run view: `tree()`, `read(agent_id)`, `messages(agent_id)`, `recent(agent_id, n=5)`, `grep(...)`, `list_agents()`."
-ROLE_SHOW_VARS_LINE = "5. `SHOW_VARS()` — list public REPL variables and types."
-ROLE_PRINT_LINE = "6. `print(...)` — print concise status; REPL output is truncated."
-ROLE_LAUNCH_NOTE = '`launch_subagents` must be called with `await`. Sub-agents run only when you `await`; for a single child, pass a one-item list and unpack the one-item result: `[answer] = await launch_subagents([{"query": "...", "context": data}])`.'
-
-ROLE_LLM_QUERY_TEXT = '2. `llm_query_batched(prompts, *, model="default", temperature=None, top_p=None, max_tokens=None, stop=None)` — concurrent one-shot LLM calls. Use for chunk extraction, summarization, classification, or Q&A. Takes and returns `list[str]`; each prompt can carry large payloads.'
-ROLE_LLM_QUERY_STRUCTURED_TEXT = '2. `llm_query_batched(prompts, *, model="default", output_schema=None, temperature=None, top_p=None, max_tokens=None, stop=None)` — concurrent one-shot LLM calls. Use for chunk extraction, summarization, classification, or Q&A. Without `output_schema`, returns `list[str]`. With `output_schema` as a JSON Schema dict, validates each response and returns JSON-compatible values such as `dict`/`list`. Each prompt can carry large payloads.'
-ROLE_LAUNCH_TEXT = '3. `await launch_subagents(specs)` — launch one or many recursive sub-agents and wait for all. `specs` must be a `list[dict]`; each dict requires `query` and may set `context`, `name`, and `model`. Returns child answers as a `list[str]` in spec order. Put data/specs in each child `context`; avoid `context=""` for nontrivial work.'
-ROLE_LAUNCH_STRUCTURED_TEXT = '3. `await launch_subagents(specs)` — launch one or many recursive sub-agents and wait for all. `specs` must be a `list[dict]`; each dict requires `query` and may set `context`, `name`, `model`, and `output_schema`. `output_schema` is a JSON Schema dict for that child\'s `done(value)`. Returns child answers in spec order; children with `output_schema` return validated JSON-compatible values such as `dict`/`list`, not strings. Put data/specs in each child `context`; avoid `context=""` for nontrivial work.'
-ROLE_DONE_TEXT = "7. `done(answer)` — finish with the final answer string. Do not call it until the task is complete."
-ROLE_DONE_STRUCTURED_TEXT = "7. `done(answer)` — finish with the final answer. If this agent has an output schema, pass a JSON-compatible Python value matching that schema; otherwise pass the final string. Do not call it until the task is complete."
+ROLE_INPUTS_LINE = '`INPUTS` — a dict of your string inputs (keys and sizes are listed with your task). List keys with `list(INPUTS)`; read one with `INPUTS["key"]`. Inspect with `print(INPUTS["key"][:2000])`, `len(INPUTS["key"])`, `INPUTS["key"].splitlines()`. JSON inputs: `json.loads(INPUTS["key"])`. Keys never shadow your REPL variables or tools.'
+ROLE_LLM_QUERY_LINE = '`llm_query_batched(prompts, *, model="default", output_schema=None, temperature=None, top_p=None, max_tokens=None, stop=None)` — concurrent one-shot LLM calls. Use for chunk extraction, summarization, classification, or Q&A. Without `output_schema`, returns `list[str]`; with `output_schema` as a JSON Schema dict, validates each response and returns JSON-compatible values such as `dict`/`list`. Each prompt can carry large payloads.'
+ROLE_LAUNCH_LINE = "`await launch_subagents(specs)` — launch one or many recursive sub-agents and wait for all. `specs` must be a `list[dict]`; each dict requires `query` and may set `inputs` (a dict of str -> str exposed as that child's own `INPUTS`), `name`, `model`, and `output_schema`. Returns child answers in spec order; children with `output_schema` return validated JSON-compatible values. A child sees ONLY the query and `inputs` you pass it — never your `INPUTS` or variables."
+ROLE_HISTORY_LINE = "`HISTORY` — read-only view of your own past messages (use when earlier turns scrolled out of context): `HISTORY.messages()`, `HISTORY.last(n)`, `HISTORY.read(i)`, `HISTORY.grep(pattern)`."
+ROLE_SHOW_VARS_LINE = "`SHOW_VARS()` — list public REPL variables and their type names."
+ROLE_PRINT_LINE = "`print(...)` — print concise status; REPL output is truncated, so print what you need to inspect."
+ROLE_DONE_LINE = "`done(answer)` — finish with the final answer. If this agent has an output schema, pass a JSON-compatible Python value matching that schema; otherwise pass the final string. Do not call it until the task is complete."
+ROLE_LAUNCH_NOTE = '`launch_subagents` must be called with `await` at the top level of your block (not inside a function). For a single child, pass a one-item list and unpack: `[answer] = await launch_subagents([{"query": "...", "inputs": {"data": text}}])`.'
 
 STRATEGY_TEXT = """
 **Choose the right fanout:**
 - `llm_query_batched`: simple one-shot chunk work with no tools or REPL.
 - `launch_subagents`: subtasks that need tools, files, iteration, repair, or recursive calls. Always pass a list of dict specs, even for one child.
 
-**Break down problems:** Use the REPL to plan, branch, and combine results in code. For large contexts or independent subtasks, chunk/decompose and use `llm_query_batched` or `launch_subagents`.
+**Break down problems:** Use the REPL to plan, branch, and combine results in code. For large inputs or independent subtasks, chunk/decompose and use `llm_query_batched` or `launch_subagents`.
 **Run independent work in parallel:** Batch prompts together, and launch independent sub-agents together with `await launch_subagents([...])`.
-**Run dependent work in stages:** When one stage needs the previous stage's output, use one-item `await launch_subagents([...])` calls, threading each result into the next spec's `context`.
-**Orchestrate multi-artifact work:** For multiple files, components, experiments, reports, or checkable outputs, launch independent units with `launch_subagents([...])`, then integrate and verify. Put shared specs/contracts in each child `context=...`.
+**Run dependent work in stages:** When one stage needs the previous stage's output, use one-item `await launch_subagents([...])` calls, threading each result into the next spec's `inputs`.
+**Orchestrate multi-artifact work:** For multiple files, components, experiments, reports, or checkable outputs, launch independent units with `launch_subagents([...])`, then integrate and verify. Put shared specs/contracts in each child's `inputs`.
 **Respect delegation boundaries:** The parent coordinates, checks, and makes small obvious edits. Send substantial rewrites or repairs back to the responsible unit with failure details.
-**Huge contexts need fanout:** If `CONTEXT.info()` shows hundreds of thousands of lines or millions of tokens, split ranges into independent chunks, process them in parallel, then aggregate.
-**Iterate on failures:** Do not put errors, partials, or failed checks into `done(...)`. Repair at the right level, re-verify, then submit.
+**Huge inputs need fanout:** If an input is hundreds of thousands of lines or millions of tokens, split it into independent chunks, process them in parallel, then aggregate.
+**Iterate on failures:** A failing check is a task to fix, not a result to report. Never put errors, partials, or failed checks into `done(...)` while repair is still possible — repair at the right level, re-verify, then submit. If a check looks like it failed, re-read the actual artifact before trusting it; a fragile heuristic can manufacture a problem that isn't there.
 **Use code for computation:** Compute precise intermediate values in the REPL, then pass concise results to sub-LLMs when useful.
 
 ```repl
 import math
-# Suppose CONTEXT or an earlier call gave us: B, m, q, pitch, R.
+# Suppose an input or an earlier call gave us: B, m, q, pitch, R.
 v_parallel = pitch * (q * B) / (2 * math.pi * m)
 v_perp = R * (q * B) / m
 theta_deg = math.degrees(math.atan2(v_perp, v_parallel))
@@ -83,9 +74,9 @@ theta_deg = math.degrees(math.atan2(v_perp, v_parallel))
 ])
 ```
 
-REPL output is truncated. Keep full data in variables and use `llm_query_batched` when you need semantic analysis over buffered data.
+REPL output is truncated. Keep full data in variables and use `llm_query_batched` when you need semantic analysis over buffered data. If earlier turns scrolled out of your context, recover them with `HISTORY`.
 
-Inspect `CONTEXT` enough before answering. For large `CONTEXT`, chunk it, query per chunk, save answers, and aggregate.
+Inspect your inputs enough before answering. For a large input, chunk it, query per chunk, save answers, and aggregate.
 """
 
 STRUCTURED_STRATEGY_TEXT = """
@@ -98,16 +89,17 @@ Execute Python in fenced `repl` blocks. Use one block per turn; for multi-step
 work, inspect first, read the output, then run a later block that acts on it:
 
 ```repl
-info = CONTEXT.info()
-print(info)
-print(CONTEXT.read(0, min(2000, info["chars"])))
+# `doc` is one of your inputs (read it from INPUTS).
+doc = INPUTS["doc"]
+print(len(doc))
+print(doc[:2000])
 ```
 
 Then, in the next turn:
 
 ```repl
 # Use the inspection output above to choose chunk sizes / fanout.
-chunk = CONTEXT.read(0, 10000)
+chunk = INPUTS["doc"][:10000]
 [answer] = llm_query_batched([f"What is the magic number in this chunk?\\n{chunk}"])
 done(answer)
 ```
@@ -129,17 +121,17 @@ EXAMPLES: list[Example] = [
         tags={"inspection"},
         body="""\
 ```repl
-info = CONTEXT.info()
-print(info)
-print(CONTEXT.read(0, min(2000, info["chars"])))
+# `doc` is one of your inputs (read it from INPUTS).
+doc = INPUTS["doc"]
+print(len(doc), "chars")
+print(doc[:2000])
 ```
 
 Next turn, after reading that output:
 
 ```repl
-# The inspection showed the context is small enough to process directly.
-text = CONTEXT.read(0, None)
-[answer] = llm_query_batched([f"Answer the user using this context:\n{text}"])
+# The inspection showed the input is small enough to process directly.
+[answer] = llm_query_batched([f"Answer the user using this context:\\n{INPUTS['doc']}"])
 done(answer)
 ```""",
     ),
@@ -151,8 +143,9 @@ Chunk first, query chunks in parallel, then aggregate:
 
 ```repl
 query = "How many jobs did the author of The Great Gatsby have?"
-# Use the previous inspection output to choose fanout; here the context was large.
-docs = CONTEXT.read(0, None).split("\\n\\n")
+# `corpus` is a large input; the earlier inspection showed it is big.
+corpus = INPUTS["corpus"]
+docs = corpus.split("\\n\\n")
 target_chunks = 10
 chunk_size = max(1, len(docs) // target_chunks)
 chunks = ["\\n\\n".join(docs[i:i+chunk_size]) for i in range(0, len(docs), chunk_size)]
@@ -186,21 +179,21 @@ done(r)
 ```""",
     ),
     Example(
-        title="pass data slices in `context=`",
-        tags={"context", "subagent"},
+        title="pass data slices in `inputs=`",
+        tags={"inputs", "subagent"},
         body="""\
-Put chunk data in child `CONTEXT`, not `query`:
+Put chunk data in each child's `inputs`, not the `query`:
 
 ```repl
-# Use the previous inspection output to pick batch_size.
+# `corpus` is a large input; pick batch_size from the earlier inspection.
 batch_size = 500
-lines = CONTEXT.lines(0, CONTEXT.line_count())
+lines = INPUTS["corpus"].splitlines()
 batches = ["\\n".join(lines[i:i+batch_size]) for i in range(0, len(lines), batch_size)]
 results = await launch_subagents([
     {
         "name": f"chunk-{i}",
-        "query": "Inspect your CONTEXT slice for evidence relevant to the original question. Return concise findings, or NO_MATCH.",
-        "context": "\\n".join(batch),
+        "query": "Inspect `INPUTS['slice']` for evidence relevant to the original question. Return concise findings, or NO_MATCH.",
+        "inputs": {"slice": batch},
     }
     for i, batch in enumerate(batches)
 ])
@@ -225,7 +218,7 @@ fact_schema = {
     "additionalProperties": False,
 }
 facts = llm_query_batched(
-    [f"Extract the item name and count from this text:\n{text}" for text in item_texts],
+    [f"Extract the item name and count from this text:\\n{text}" for text in item_texts],
     output_schema=fact_schema,
 )
 total = sum(fact["count"] for fact in facts)
@@ -252,8 +245,8 @@ item_schema = {
 items = await launch_subagents([
     {
         "name": f"item-{i}",
-        "query": "Extract exactly one inventory item from CONTEXT. Call done(value) with a dict matching the schema.",
-        "context": item_text,
+        "query": "Extract exactly one inventory item from `INPUTS['blurb']`. Call done(value) with a dict matching the schema.",
+        "inputs": {"blurb": item_text},
         "output_schema": item_schema,
     }
     for i, item_text in enumerate(item_blurbs)
@@ -266,7 +259,7 @@ done(f"In-stock total: ${total:.2f}")
         title="multi-file app fanout",
         tags={"files", "subagent"},
         body="""\
-Delegate independent file units, then either collect drafts or let children write their own assigned files. Paths belong in the parent plan or child `context`, not in a `PATH:` answer convention.
+Delegate independent file units, then collect drafts or let children write their own files. Paths belong in the parent plan or child `inputs`, not in a `PATH:` answer convention.
 
 ```repl
 from pathlib import Path
@@ -275,16 +268,13 @@ shared_spec = "Build the requested browser app with plain HTML/CSS/JS.\\nShared 
 units = [
     ("index.html", "Create the app container, stylesheet link, and script tags in dependency order."),
     ("styles.css", "Create the requested layout, visual polish, and responsive behavior."),
-    ("scripts/state.js", "Define global app state and pure update helpers, no import/export."),
-    ("scripts/view.js", "Define global rendering helpers, no import/export."),
-    ("scripts/controls.js", "Define global input/event wiring helpers, no import/export."),
     ("scripts/main.js", "Wire startup, state, rendering, and controls."),
 ]
 drafts = await launch_subagents([
     {
         "name": path.replace("/", "_").replace(".", "_"),
-        "query": task + "\\nReturn ONLY the file contents. Do not include markdown fences or a filename header.",
-        "context": shared_spec + f"\\nTarget file: {path}",
+        "query": task + "\\nReturn ONLY the file contents. No markdown fences or filename header.",
+        "inputs": {"spec": shared_spec, "target_file": path},
     }
     for path, task in units
 ])
@@ -292,74 +282,38 @@ for (path, _), content in zip(units, drafts):
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-# Verify script order/no modules/basic syntax, then repair the failing unit before done(...).
-```
-
-The agent can also ask sub-agents to write their assigned files directly:
+# Verify script order / no modules / basic syntax, then repair the failing unit before done(...).
+```""",
+    ),
+    Example(
+        title="verify → repair → re-verify (converge, don't report-and-quit)",
+        tags={"verify", "repair", "loop"},
+        body="""\
+When you check your output, loop until it passes: check, send failures back to the responsible unit, re-check. Only `done(...)` once it's clean — a detected problem is something to fix, not to announce. Re-read the real artifact before trusting a check; don't hand-roll a fragile parser that flags correct output.
 
 ```repl
-statuses = await launch_subagents([
-    {
-        "name": path.replace("/", "_").replace(".", "_"),
-        "query": "Read CONTEXT for the target file and task. Create the file yourself with pathlib.Path(...).write_text(...). Return only a concise status.",
-        "context": shared_spec + f"\\nTarget file: {path}\\nTask: {task}",
-    }
-    for path, task in units
-])
-print(statuses)
-# Verify the files on disk, then repair any failing unit before done(...).
+def problems_with(path):
+    # Re-read each pass; prefer a real parser/compiler over ad-hoc regex.
+    issues = []
+    text = read_file(path)
+    # ... concrete, trustworthy checks that append to `issues` ...
+    return issues
+
+for _ in range(3):  # bounded repair loop
+    issues = problems_with("index.html")
+    if not issues:
+        break
+    [fixed] = await launch_subagents([{
+        "name": "repair-index",
+        "query": "Fix exactly these issues and return ONLY the corrected file contents:\\n" + "\\n".join(issues),
+        "inputs": {"current": read_file("index.html")},
+    }])
+    write_file("index.html", fixed)
+
+done("Boids simulation built and verified: index.html, style.css, boids.js.")
 ```""",
     ),
 ]
-
-
-def _structured_output_enabled(engine) -> bool:
-    config = getattr(engine, "config", None)
-    return bool(getattr(config, "enable_structured_output", True))
-
-
-def role_section(engine, graph) -> str:
-    if _structured_output_enabled(engine):
-        llm_query = ROLE_LLM_QUERY_STRUCTURED_TEXT
-        launch = ROLE_LAUNCH_STRUCTURED_TEXT
-        done = ROLE_DONE_STRUCTURED_TEXT
-    else:
-        llm_query = ROLE_LLM_QUERY_TEXT
-        launch = ROLE_LAUNCH_TEXT
-        done = ROLE_DONE_TEXT
-
-    return "\n".join(
-        [
-            ROLE_OPENING,
-            "",
-            "Available in the REPL:",
-            "",
-            ROLE_CONTEXT_LINE,
-            llm_query,
-            launch,
-            ROLE_SESSION_LINE,
-            ROLE_SHOW_VARS_LINE,
-            ROLE_PRINT_LINE,
-            done,
-            "",
-            ROLE_LAUNCH_NOTE,
-        ]
-    )
-
-
-def strategy_section(engine, graph) -> str:
-    if _structured_output_enabled(engine):
-        return f"{STRATEGY_TEXT}\n{STRUCTURED_STRATEGY_TEXT}".strip()
-    return STRATEGY_TEXT
-
-
-def examples_section(engine, graph) -> str:
-    examples = [
-        example
-        for example in EXAMPLES
-        if _structured_output_enabled(engine) or "structured" not in example.tags
-    ]
-    return "\n\n".join(example.render(idx) for idx, example in enumerate(examples))
 
 
 FINAL_TEXT = """
@@ -367,69 +321,105 @@ FINAL_TEXT = """
 
 `answer` is the completed result, not a status report. Do not call `done("WARNING: ...")`, `done("FAILED: ...")`, or `done("partial: ...")` while repair is still possible.
 
-If you're unsure what variables exist, call `SHOW_VARS()` in a repl block to see all available variables.
+If you're unsure what variables exist, inspect them with `print(...)` (or `SHOW_VARS()` if available), and recover earlier turns with `HISTORY`.
 
 Think carefully, then execute through the REPL and subcalls. Explicitly answer the original query in your final `done(...)`.
 """
 
 
-def tools_section(engine, graph) -> str:
-    baseline = engine.config.max_depth == 0
-    tool_defs = [t for t in engine.runtime.get_tool_defs() if not t.core]
+def _show_vars_enabled(flow: Any) -> bool:
+    return bool(getattr(flow, "show_vars", False))
+
+
+def role_section(flow: Any = None, graph: Any = None) -> str:
+    entries = [
+        ROLE_INPUTS_LINE,
+        ROLE_LLM_QUERY_LINE,
+        ROLE_LAUNCH_LINE,
+        ROLE_HISTORY_LINE,
+    ]
+    if _show_vars_enabled(flow):
+        entries.append(ROLE_SHOW_VARS_LINE)
+    entries += [ROLE_PRINT_LINE, ROLE_DONE_LINE]
+    numbered = [f"{i}. {entry}" for i, entry in enumerate(entries, start=1)]
+    return "\n".join(
+        [
+            ROLE_OPENING,
+            "",
+            "Available in the REPL:",
+            "",
+            *numbered,
+            "",
+            ROLE_LAUNCH_NOTE,
+        ]
+    )
+
+
+def strategy_section(flow: Any = None, graph: Any = None) -> str:
+    return f"{STRATEGY_TEXT}\n{STRUCTURED_STRATEGY_TEXT}".strip()
+
+
+def examples_section(flow: Any = None, graph: Any = None) -> str:
+    return "\n\n".join(example.render(idx) for idx, example in enumerate(EXAMPLES))
+
+
+def tools_section(flow: Any = None, graph: Any = None) -> str:
+    if flow is None or graph is None:
+        return ""
+    # Introspect tool metadata only. At prompt-build time the agent's REPL is
+    # usually not created yet (REPLs are lazy, so heavy backends don't boot
+    # early), so build a throwaway tool dict — closures only, no REPL/sandbox.
+    # If a REPL already exists, read its live namespace (also surfaces SHOW_VARS).
+    repl = flow.repls.get(graph.agent_id)
+    namespace = repl.namespace if repl is not None else flow.build_tools({})
+    visible, _hidden = partition_repl_namespace(namespace)
     lines = [
-        "Tool functions are already available in the REPL namespace; "
-        "do not import them from a `tools` module. Call them directly by name.",
+        "Tool functions are already in the REPL namespace; call them directly by "
+        "name (do not import them).",
         "",
     ]
     lines += [
-        f"- `{tool_def.name}{tool_def.signature}`: {tool_def.description}"
-        for tool_def in tool_defs
+        line for name in sorted(visible) if (line := format_tool_line(visible[name]))
     ]
-    if len(engine.llm_clients) > 1 and not baseline:
+    clients = getattr(flow, "_llm_clients", {})
+    if len(clients) > 1 and getattr(flow, "max_depth", 0) > 0:
         lines.append(
-            "\nAvailable models for `launch_subagents([... model=...])` "
-            "and `llm_query_batched(model=...)`:"
+            "\nAvailable models for `launch_subagents([... model=...])` and "
+            "`llm_query_batched(model=...)`:"
         )
-        for key in sorted(engine.llm_clients):
-            desc = engine.model_descriptions.get(key)
-            lines.append(f"- `{key}`: {desc}" if desc else f"- `{key}`")
-    modules = engine.runtime.available_modules()
-    if modules:
-        lines.append(f"\nPre-imported: `{'`, `'.join(modules)}`")
+        lines += [f"- `{key}`" for key in sorted(clients)]
     return "\n".join(lines)
 
 
-def status_section(engine, graph) -> str:
-    effective_max = graph.config.get("max_depth", engine.config.max_depth)
-    if effective_max == 0:
+def status_section(flow: Any = None, graph: Any = None) -> str:
+    if flow is None or graph is None:
+        return ""
+    max_depth = getattr(flow, "max_depth", 0)
+    if max_depth == 0:
         return (
-            "Baseline mode: no sub-agents available. Do all work directly "
-            "in this REPL."
+            "Baseline mode: no sub-agents available. Do all work directly in this REPL."
         )
-    note = (
-        f"You are at recursion depth **{graph.depth}** of max " f"**{effective_max}**."
-    )
+    note = f"You are at recursion depth **{graph.depth}** of max **{max_depth}**."
     if graph.depth == 0:
         note += STATUS_DEPTH_ROOT
-    elif graph.depth >= effective_max - 1:
+    elif graph.depth >= max_depth - 1:
         note += STATUS_DEPTH_NEAR_MAX
-    elif graph.depth > 0:
+    else:
         note += STATUS_DEPTH_MID
+    if graph.depth >= max_depth:
+        note += " You cannot spawn sub-agents."
     return note
 
 
-def structured_output_section(engine, graph) -> str:
-    if not _structured_output_enabled(engine):
+def structured_output_section(flow: Any = None, graph: Any = None) -> str:
+    if flow is None or graph is None or graph.output_schema is None:
         return ""
-    schema = graph.active_output_schema()
-    if schema is None:
-        return ""
+    hint = flow.output_parser.system_prompt_hint(graph.output_schema)
     return (
-        "This run requires structured output. When complete, call "
-        "`done(value)` with a JSON-compatible Python value that matches this "
-        "JSON schema. Do not pass prose, Markdown, or a JSON string.\n\n"
-        "Schema:\n"
-        f"```json\n{engine.structured_output_hint(schema)}\n```"
+        "This run requires structured output. When complete, call `done(value)` "
+        "with a JSON-compatible Python value (not prose, Markdown, or a JSON "
+        "string) that matches this JSON Schema:\n\n"
+        f"```json\n{hint}\n```"
     )
 
 
@@ -445,15 +435,20 @@ DEFAULT_BUILDER = (
     .section("status", status_section, title="Status")
 )
 
+#: Static narrative render (no live ``Flow``/agent), used as the default
+#: ``Flow.system_prompt`` fallback and for callers that want a fixed string.
+SYSTEM_PROMPT = DEFAULT_BUILDER.build()
+
 
 __all__ = [
-    "CONTEXT_TEXT",
     "DEFAULT_BUILDER",
     "EXAMPLES",
     "Example",
     "FINAL_TEXT",
     "FORMAT_TEXT",
     "STRATEGY_TEXT",
+    "SYSTEM_PROMPT",
+    "role_section",
     "status_section",
     "structured_output_section",
     "tools_section",
