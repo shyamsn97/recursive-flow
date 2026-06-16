@@ -117,6 +117,17 @@ pip install -e .
 For local development, `make install` runs cleanup, formatting/lint checks
 including `ruff check .`, then installs the package.
 
+> **Security warning — `LocalRuntime` is not a sandbox.**
+> Agent code runs as full Python in your process: filesystem, network,
+> environment variables, subprocesses — the same privileges as your interpreter.
+> LLM-generated code can be wrong or malicious (prompt injection, model errors,
+> supply-chain risk). **Use `LocalRuntime` only for code you would run yourself.**
+> For untrusted agents or anything exposed to the internet, use
+> [`DockerRuntime`](docs/runtimes.md) or a remote sandbox
+> ([`ModalRuntime`](docs/runtimes.md) / [`E2BRuntime`](docs/runtimes.md) /
+> [`DaytonaRuntime`](docs/runtimes.md)). See [`docs/security.md`](docs/security.md).
+> **Use at your own risk.**
+
 ## Quick start
 
 This example builds a simple coding agent with file tools in a local working
@@ -718,10 +729,10 @@ scaling / label-normalization flags (`--marker-mult`, `--text-mult`,
 - [x] OOLONG long-context aggregation harness (`standard` / `rlm` / `rlm_tips`)
 - [x] `LocalRuntime` + `DockerRuntime` — battle-tested
 - [~] `ModalRuntime` / `E2BRuntime` / `DaytonaRuntime` — full support: native SDK file transfer, real-sandbox CI, depth>1 delegation, heavier example
-- [~] Depth × breadth sweep (accuracy vs `max_depth`) on an OOLONG/BABILong subset
+- [~] OOLONG, LongBench-v2, CodeQA, SWE-bench, etc. benchmarks [benchmarks](benchmarks/eval/)
+- [ ] **REPL security (local)**
 - [ ] [RAO library module](docs/research/rao_implementation_plan.md): `rflow.rao` rollout collection, per-node rewards, leave-one-out advantages, depth weighting, trainer export
 - [ ] [DeLM-style coordination](docs/research/delm_vs_rlmflow.md): shared task queue, verified shared context, multi-worker coordinator over `Flow` graphs
-- [ ] OOLONG, LongBench-v2, CodeQA, SWE-bench benchmarks
 
 ## Docs
 

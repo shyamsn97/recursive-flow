@@ -885,6 +885,7 @@ class RecursiveFlowHero(Scene):
         restore_typed_node_fills(fork_tree)
         self.play(FadeIn(fork_badge, shift=UP * 0.05), run_time=0.40)
         self.wait(0.45)
+        fork_refs = fork_graph_refs(fork_tree)
 
         # Step 3 — on the fork, replace supervising + children with a straight path.
         inject_title = Text(
@@ -894,7 +895,7 @@ class RecursiveFlowHero(Scene):
             color=WHITE_C,
         ).to_edge(UP, buff=0.55)
         supervising = fork_refs["supervising"]
-        children = fork_refs["children"]
+        child_stages = VGroup(fork_tree[4], fork_tree[5], fork_tree[6])
         hi_box = RoundedRectangle(
             corner_radius=0.06,
             width=0.52,
@@ -913,8 +914,9 @@ class RecursiveFlowHero(Scene):
         self.wait(0.25)
         inj = fnode("llm", supervising.get_center())
         inj_pos = supervising.get_center()
-        self.play(FadeOut(children, shift=DOWN * 0.22), run_time=0.55)
-        self.remove(children, *children, *children.get_family())
+        self.play(FadeOut(child_stages, shift=DOWN * 0.22), run_time=0.55)
+        fork_tree.remove(fork_tree[6], fork_tree[5], fork_tree[4])
+        self.remove(child_stages)
         self.play(ReplacementTransform(supervising, inj), run_time=0.65)
         restore_typed_node_fills(fork_tree)
         restore_typed_node_fills(inj)
