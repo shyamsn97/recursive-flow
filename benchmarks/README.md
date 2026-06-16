@@ -1,23 +1,19 @@
 # benchmarks/
 
-Runnable benchmark harnesses for rflow. Each subdirectory is a
-self-contained driver for one public benchmark, with its own README,
-runner, and scoring script.
+Runnable benchmark harnesses for rflow. The canonical harness is
+`benchmarks/eval/`: tasks and runners register into one CLI, with consistent
+artifacts, summaries, tqdm progress, and optional W&B logging.
 
-## Conventions (shared across all benchmarks)
+## Conventions
 
-- **Runtime.** Default to `LocalRuntime` for dev; pass `--docker-image
-  recursive-flow:local` for any serious run. Never run third-party benchmark
-  prompts under `LocalRuntime` on a trusted machine.
-- **Budget.** Every task gets a fixed `max_depth × max_iterations` and
-  optional `max_budget` (total tokens). These are declared in the CLI and
-  written to the run manifest — do not tune per-task.
-- **Manifest.** Every run writes a `manifest.json` with:
-  `{model, fast_model, max_depth, max_iterations, max_budget, split, n,
-   seed, dataset_sha, runtime, timestamp, recursive-flow_version}`.
-- **Results.** Per-task rows go to `results.jsonl`; aggregate metrics to
-  `summary.json`; full traces to `traces/<task_id>/` via
-  `rflow.utils.trace.save_trace`.
+- **Runtime.** Default to `LocalRuntime` for dev. Use sandboxed runtimes for
+  untrusted benchmark prompts.
+- **Budget.** Every task gets fixed `max_depth` and `max_iters` settings from
+  the CLI; do not tune them per task.
+- **Config.** Every run writes `config.json` with provider/model, task names,
+  runner names, seeds, and task parameters.
+- **Results.** Per-task rows go to `results.jsonl`; aggregate metrics go to
+  `summary.json`; rflow artifacts go under `artifacts/<runner>/<task>/<task_id>/`.
 - **Seeds.** Any sampling from a dataset is deterministic given `--seed`
   so partial reruns are reproducible.
 
@@ -26,24 +22,15 @@ runner, and scoring script.
 ```
 benchmarks/
   README.md              # this file
-  comparison/            # recursive-flow vs alexzhang13/rlm synthetic smoke comparison
-  oolong/                # RLM paper: long-context aggregation
-  ...                    # more suites added over time
+  eval/                  # shared task/runner harness with tqdm + W&B logging
 ```
 
-## Running any benchmark
+## Running
 
 ```
-python benchmarks/<name>/run.py --help
+python -m benchmarks.eval --help
 ```
 
-Each driver shares the example-style flags (`--model`, `--fast-model`,
-`--docker-image`, `--max-depth`, `--max-iterations`) plus its own
-dataset flags (`--split`, `--n`, `--seed`, ...).
-
-## Why these and not others
-
-Short version: reproduce the RLM paper's quartet first (OOLONG /
-OOLONG-Pairs / LongBench-v2 CodeQA / BrowseComp-Plus), then add one
-coding and one reasoning anchor for industry credibility. Everything
-else is skipped until that story is solid.
+```
+python -m benchmarks.eval --provider fake --model fake --tasks sniah --runners fake rflow --seeds 0:3
+```

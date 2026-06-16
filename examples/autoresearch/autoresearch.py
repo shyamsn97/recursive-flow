@@ -674,7 +674,7 @@ def main() -> None:
     p.add_argument(
         "--workdir",
         type=Path,
-        default=Path(__file__).resolve().parents[2] / "_runs" / "autoresearch",
+        default=Path(__file__).resolve().parents[1] / "_runs" / "autoresearch",
     )
     p.add_argument("--max-concurrency", type=int, default=8)
     p.add_argument("--max-depth", type=int, default=1)

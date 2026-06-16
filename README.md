@@ -666,21 +666,32 @@ Add `--include-optional`, `--include-live`, `--include-sandbox`, or
 
 ## Benchmarks
 
-A runnable RLM-vs-flat harness for **OOLONG** (long-context aggregation,
-~250k tokens) lives under [`benchmarks/oolong/`](benchmarks/oolong/).
-It mirrors Prime Intellect's reference environment but talks directly
-to `recursive-flow` instead of `verifiers`. Three modes — `standard` (one big
-flat call), `rlm` (recursive scaffold), `rlm_tips` (recursive +
-chunking hints) — across `synth`, `synth_with_labels`, and `real`
-subsets, scored deterministically against the published gold answers.
+The shared eval harness lives under [`benchmarks/eval/`](benchmarks/eval/).
+It uses a task/runner registry, writes `results.jsonl` + `summary.json`, records
+rflow graph-shape metrics, shows tqdm progress bars, and can log per-row metrics
+to W&B. Real runs can compare `vanilla`, `rflow`, and the upstream official RLM
+runner ported from [`avilum/minrlm/eval`](https://github.com/avilum/minrlm/tree/master/eval).
+It also writes model-oriented reports under `eval-runs/<model>/<benchmark>/`,
+including per-question JSON files with prompt, inputs, expected answer, and each
+runner's solution.
 
 ```bash
-python benchmarks/oolong/run.py --mode rlm --subset synth --limit 50
-python benchmarks/oolong/aggregate.py --runs runs/oolong-*
+python -m benchmarks.eval \
+  --provider fake \
+  --model fake \
+  --tasks sniah \
+  --runners fake vanilla rflow \
+  --seeds 0:3
 ```
 
-See [`benchmarks/oolong/README.md`](benchmarks/oolong/README.md) for
-flags, scoring details, and ablation scripts.
+To run the full RLM-Bench-style table sweep with W&B logging:
+
+```bash
+make eval-benchmark EVAL_MODEL=gpt-5-mini
+```
+
+See [`benchmarks/eval/README.md`](benchmarks/eval/README.md) for task/runner
+extension points and W&B usage.
 
 ## CLI
 

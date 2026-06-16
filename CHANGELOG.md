@@ -230,9 +230,8 @@ each one is called out under **Breaking** below.
   publishing remains in `release.yml`.
 - Coverage instrumentation: `pytest-cov` in `[dev]`, `--cov=recursive-flow` in
   CI, `[tool.coverage.*]` config in `pyproject.toml`.
-- OOLONG benchmark harness under `benchmarks/oolong/` — runnable
-  flat-vs-RLM comparison adapted from Prime Intellect's reference
-  environment.
+- Early OOLONG benchmark harness for flat-vs-RLM comparison. This has since
+  been superseded by the shared `benchmarks/eval/` harness.
 - `rflow.utils.save_image(node, path, ...)` — render a node's
   graph to PNG/SVG/PDF. Markers, edges, and fonts auto-scale via
   `element_mult` so the tree stays visually balanced on the larger

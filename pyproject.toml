@@ -38,6 +38,17 @@ mcp = ["mcp"]
 modal = ["modal"]
 e2b = ["e2b"]
 daytona = ["daytona-sdk"]
+eval = [
+    "tqdm>=4.66",
+    "wandb>=0.16",
+    "datasets>=2.19",
+    "huggingface_hub>=0.23",
+    "pandas>=2.0",
+    "pyarrow>=15.0",
+    "openpyxl>=3.1",
+    "PyPDF2>=3.0",
+    "python-docx>=1.1",
+]
 sandbox = ["modal", "e2b", "daytona-sdk"]
 # Gradio viewer pulls plotly transitively (used by the interactive timeline).
 # `rich` powers the live terminal tree (`LiveView`) and `recursive-flow view` output.
@@ -56,6 +67,15 @@ all = [
     "modal",
     "e2b",
     "daytona-sdk",
+    "tqdm>=4.66",
+    "wandb>=0.16",
+    "datasets>=2.19",
+    "huggingface_hub>=0.23",
+    "pandas>=2.0",
+    "pyarrow>=15.0",
+    "openpyxl>=3.1",
+    "PyPDF2>=3.0",
+    "python-docx>=1.1",
     "gradio>=4.29",
     "plotly>=5.0",
     "kaleido>=0.2.1",

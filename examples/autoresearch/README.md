@@ -47,6 +47,7 @@ a human reviews why one idea beat another.
 ```
 examples/autoresearch/
 ├── README.md
+├── Makefile                 # make run, make sanity, make smoke
 ├── autoresearch.py          # driver — target-agnostic
 └── circle_packing/          # example target: pack 26 circles in [0,1]^2
     ├── README.md
@@ -63,12 +64,16 @@ pip install numpy
 
 export OPENAI_API_KEY=...
 
-python examples/autoresearch/circle_packing/evaluate.py \
-    examples/autoresearch/circle_packing/solution.py   # optional sanity
+cd examples/autoresearch
+make sanity   # optional baseline check
 
-python examples/autoresearch/autoresearch.py \
-    --target examples/autoresearch/circle_packing \
-    --budget-s 120 --max-iters 20 --max-submissions 64 --model gpt-5-mini
+make run      # or override: make run MODEL=gpt-5-mini MAX_SUBMISSIONS=64
+
+# equivalent direct invocation:
+python autoresearch.py \
+    --target circle_packing \
+    --budget-s 120 --max-iterations 20 --max-submissions 40 \
+    --model gpt-5 --branches-per-turn 8 --max-depth 2
 ```
 
 Output goes to `examples/_runs/autoresearch/` (or `--workdir`):
