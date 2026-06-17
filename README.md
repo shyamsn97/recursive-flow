@@ -5,8 +5,6 @@
   <a href="https://github.com/shyamsn97/recursive-flow/pkgs/container/recursive-flow"><img src="https://img.shields.io/badge/ghcr.io-recursive-flow-2496ED?logo=docker&logoColor=white" alt="Docker" /></a>
 </p>
 
-A Python library for building Recursive agent graphs built off of [Recursive Language Models](https://arxiv.org/abs/2512.24601).
-
 Read the blog post: [Recursive Flow](https://shyamsn97.github.io/blog/rflow/).
 
 As LLMs get better at coding, strict agent harnesses become less important.
