@@ -595,6 +595,20 @@ def simplified_style_graph(*, with_labels=True):
     return graph, stages, {}
 
 
+def center_head(text, *, buff=0.62):
+    """Section title — centered at the top."""
+    return Text(
+        text, font=CODE_FONT, font_size=FS_HEADER, color=WHITE_C
+    ).to_edge(UP, buff=buff)
+
+
+def center_sub(text, anchor, *, buff=0.20, color=DIM, font_size=FS_CAP):
+    """Subtitle — centered under a section title."""
+    return Text(text, font=CODE_FONT, font_size=font_size, color=color).next_to(
+        anchor, DOWN, buff=buff
+    )
+
+
 def fade_clear(scene, *mobjs, run_time=0.55):
     grp = VGroup(*[m for m in mobjs if m is not None])
     if len(grp) > 0:
@@ -621,12 +635,7 @@ class RecursiveFlowHero(Scene):
             )
 
         # Phase 1 — recursive agents as dynamic graphs.
-        head = Text(
-            "Recursive agents as dynamic graphs.",
-            font=CODE_FONT,
-            font_size=FS_HEADER,
-            color=WHITE_C,
-        ).to_edge(UP, buff=0.55)
+        head = center_head("Recursive agents as dynamic graphs")
         self.play(FadeIn(head, shift=DOWN * 0.06), run_time=0.60)
 
         p1_graph, p1_stages, _ = simplified_style_graph(with_labels=True)
@@ -661,22 +670,10 @@ class RecursiveFlowHero(Scene):
         self.wait(0.85)
 
         # Phase 2 — step through the live run: it is a graph, not a recording.
-        step_title = Text(
-            "Step through the live run.",
-            font=CODE_FONT,
-            font_size=FS_HEADER,
-            color=WHITE_C,
-        ).to_edge(UP, buff=0.55)
-        step_note = Text(
-            "live, executable graph",
-            font=CODE_FONT,
-            font_size=FS_CAP,
-            color=DIM,
-        ).next_to(step_title, DOWN, buff=0.18)
+        step_title = center_head("Step through the live run")
         self.play(
             FadeOut(run_stack, shift=DOWN * 0.05),
             ReplacementTransform(head, step_title),
-            FadeIn(step_note, shift=UP * 0.03),
             run_time=0.70,
         )
         head = step_title
@@ -760,7 +757,7 @@ class RecursiveFlowHero(Scene):
         active_label = None
         active_dot = None
         for i, (specs, label_text) in enumerate(snapshot_steps):
-            graph = tiny_graph(specs, root_pos=UP * 1.05, scale=1.00)
+            graph = tiny_graph(specs, root_pos=UP * 1.85, scale=1.00)
             label = Text(label_text, font=CODE_FONT, font_size=FS_BODY, color=WHITE_C)
             label.move_to(DOWN * 2.62)
             dot = Circle(
@@ -787,7 +784,7 @@ class RecursiveFlowHero(Scene):
         self.play(
             FadeOut(
                 VGroup(
-                    step_note, timeline, dots, active_graph, active_label, active_dot
+                    timeline, dots, active_graph, active_label, active_dot
                 ),
                 shift=DOWN * 0.05,
             ),
@@ -813,9 +810,7 @@ class RecursiveFlowHero(Scene):
         )
         fork_code.to_edge(LEFT, buff=0.40)
 
-        fork_title = Text(
-            "Fork the run.", font=CODE_FONT, font_size=FS_HEADER, color=WHITE_C
-        ).to_edge(UP, buff=0.55)
+        fork_title = center_head("Fork the run")
 
         fork_code_lines = fork_code[2]
 
@@ -849,12 +844,7 @@ class RecursiveFlowHero(Scene):
         fork_refs = fork_graph_refs(fork_tree)
 
         # Step 1 — a supervising multitree with child agents (graph only, no code).
-        multitree_title = Text(
-            "Every recursive run is an editable graph.",
-            font=CODE_FONT,
-            font_size=FS_HEADER,
-            color=WHITE_C,
-        ).to_edge(UP, buff=0.55)
+        multitree_title = center_head("Every recursive run is an editable graph")
         self.play(ReplacementTransform(head, multitree_title), run_time=0.55)
         head = multitree_title
         for stage in tree_stages:
@@ -888,12 +878,7 @@ class RecursiveFlowHero(Scene):
         fork_refs = fork_graph_refs(fork_tree)
 
         # Step 3 — on the fork, replace supervising + children with a straight path.
-        inject_title = Text(
-            "Perform surgery on the graph.",
-            font=CODE_FONT,
-            font_size=FS_HEADER,
-            color=WHITE_C,
-        ).to_edge(UP, buff=0.55)
+        inject_title = center_head("Perform surgery on the graph")
         supervising = fork_refs["supervising"]
         child_stages = VGroup(fork_tree[4], fork_tree[5], fork_tree[6])
         hi_box = RoundedRectangle(
@@ -924,12 +909,7 @@ class RecursiveFlowHero(Scene):
         self.wait(0.35)
 
         # Step 4 — continue the fork: exec, then done.
-        cont_title = Text(
-            "Continue from the fork.",
-            font=CODE_FONT,
-            font_size=FS_HEADER,
-            color=WHITE_C,
-        ).to_edge(UP, buff=0.55)
+        cont_title = center_head("Continue from the fork")
         _, tail_nodes, tail_edges, _ = agent_stack(
             "",
             ["exec", "done"],
@@ -965,61 +945,17 @@ class RecursiveFlowHero(Scene):
 
         fork_mobs = VGroup(fork_code, orig, fork_rhs)
 
-        finale_title = Text(
-            "Thousands of agent steps — in one modular graph.",
-            font=CODE_FONT,
-            font_size=FS_HEADER,
-            color=WHITE_C,
-        ).to_edge(UP, buff=0.55).shift(DOWN * 0.34)
+        finale_title = center_head(
+            "Nested agent trees -- one modular graph", buff=0.72
+        )
         dense_graph, dense_stages = rendered_style_graph()
-        dense_captions = [
-            "one root receives the query",
-            "the root reasons",
-            "the root reaches a supervising wait",
-            "it spawns its first layer of agents",
-            "those agents reason in parallel",
-            "each agent waits on its own children",
-            "every agent spawns more agents",
-            "the swarm reasons, breadth-first",
-            "deeper supervising waits open up",
-            "the swarm keeps branching",
-            "parallel reasoning, everywhere at once",
-            "still more waits, one layer down",
-            "leaf agents fan out at the edges",
-            "the leaves finish their work",
-            "one query, one graph — the whole swarm",
-        ]
-        finale_caption = Text(
-            dense_captions[0],
-            font=CODE_FONT,
-            font_size=FS_BODY,
-            color=WHITE_C,
-        ).to_edge(DOWN, buff=0.30)
         self.play(
             FadeOut(head),
             FadeOut(fork_mobs),
             FadeIn(finale_title, shift=DOWN * 0.05),
             run_time=0.75,
         )
-        self.play(
-            reveal_stage(dense_stages[0]),
-            FadeIn(finale_caption, shift=UP * 0.05),
-            run_time=0.50,
-        )
-        for stage, caption_text in zip(dense_stages[1:], dense_captions[1:]):
-            next_caption = Text(
-                caption_text,
-                font=CODE_FONT,
-                font_size=FS_BODY,
-                color=WHITE_C,
-            ).to_edge(DOWN, buff=0.30)
-            self.play(
-                reveal_stage(stage),
-                FadeOut(finale_caption, shift=DOWN * 0.03),
-                FadeIn(next_caption, shift=UP * 0.03),
-                run_time=0.36,
-            )
-            finale_caption = next_caption
-        self.play(Flash(dense_graph, color=R_C, flash_radius=0.35), run_time=0.36)
-        self.play(FadeOut(finale_caption), run_time=0.35)
-        self.wait(1.60)
+        for stage in dense_stages:
+            self.play(reveal_stage(stage), run_time=0.18)
+        self.play(Flash(dense_graph, color=R_C, flash_radius=0.35), run_time=0.28)
+        self.wait(1.20)
