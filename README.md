@@ -7,6 +7,8 @@
 
 A Python library for building Recursive agent graphs built off of [Recursive Language Models](https://arxiv.org/abs/2512.24601).
 
+Read the blog post: [Recursive Flow](https://shyamsn97.github.io/blog/rflow/).
+
 As LLMs get better at coding, strict agent harnesses become less important.
 RLMs let the model decide how to view and manipulate context, when to
 delegate pieces of it to sub-agents, and how to combine the results,
