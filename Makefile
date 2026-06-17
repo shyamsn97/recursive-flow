@@ -1,4 +1,4 @@
-.PHONY: clean clean-build clean-pyc clean-test coverage dist docs help install lint lint/flake8 format-md lint-md test test-all examples examples-list examples-optional examples-live examples-sandbox examples-all eval-help eval-smoke eval-test eval-run eval-wandb eval-benchmark eval-clean animation animation-preview animation-mp4 animation-gif animation-gif-small animation-clean bump-version
+.PHONY: clean clean-build clean-pyc clean-test coverage dist docs help install lint lint/flake8 format-md lint-md test test-all examples examples-list examples-optional examples-live examples-sandbox examples-all eval-help eval-smoke eval-test eval-run eval-wandb eval-benchmark eval-clean animation animation-preview animation-mp4 animation-gif animation-gif-small animation-clean bump-version release-check release-tag release-push release
 	{%- if cookiecutter.use_black == 'y' %} lint/black{% endif %}
 .DEFAULT_GOAL := help
 
@@ -287,3 +287,23 @@ animation-clean: ## Remove manim render artifacts (media/).
 
 bump-version: ## Bump pyproject.toml version. Use BUMP=minor or VERSION=0.4.1.
 	python -c "$$BUMP_VERSION_PYSCRIPT" "$(BUMP)" "$(VERSION)"
+
+release-check: ## Validate VERSION matches pyproject and working tree is clean.
+	@test -n "$(VERSION)" || (echo "VERSION is required, e.g. make release VERSION=0.4.1" >&2; exit 1)
+	@python -c "import re,sys; v='$(VERSION)'; sys.exit(0 if re.fullmatch(r'\d+\.\d+\.\d+', v) else 'VERSION must be MAJOR.MINOR.PATCH, e.g. 0.4.1')"
+	@python -c "import pathlib,sys,tomllib; v=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']; exp='$(VERSION)'; sys.exit(0 if v == exp else f'pyproject version {v} != VERSION {exp}')"
+	@git diff --quiet || (echo "working tree has unstaged changes; commit the release first" >&2; exit 1)
+	@git diff --cached --quiet || (echo "working tree has staged changes; commit the release first" >&2; exit 1)
+	@! git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null || (echo "tag v$(VERSION) already exists locally" >&2; exit 1)
+
+release-tag: release-check ## Create git tag v$(VERSION) for the current commit.
+	git tag v$(VERSION)
+
+release-push: ## Push current branch and tag v$(VERSION) to trigger release workflow.
+	@test -n "$(VERSION)" || (echo "VERSION is required, e.g. make release-push VERSION=0.4.1" >&2; exit 1)
+	@git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null || (echo "tag v$(VERSION) does not exist locally; run make release-tag VERSION=$(VERSION)" >&2; exit 1)
+	git push origin HEAD
+	git push origin v$(VERSION)
+
+release: release-tag ## Create and push v$(VERSION), triggering the GitHub release workflow.
+	$(MAKE) release-push VERSION=$(VERSION)
