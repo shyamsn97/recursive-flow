@@ -28,7 +28,10 @@ import re
 import sys
 
 part = sys.argv[1]
-if part not in {"major", "minor", "patch"}:
+requested = sys.argv[2].strip()
+if requested and not re.fullmatch(r"\d+\.\d+\.\d+", requested):
+    raise SystemExit("VERSION must be in MAJOR.MINOR.PATCH form, e.g. 0.4.1")
+if not requested and part not in {"major", "minor", "patch"}:
     raise SystemExit("BUMP must be one of: major, minor, patch")
 
 path = Path("pyproject.toml")
@@ -38,15 +41,18 @@ if not match:
     raise SystemExit("Could not find [project] version in pyproject.toml")
 
 major, minor, patch = map(int, match.groups())
-if part == "major":
-    major, minor, patch = major + 1, 0, 0
-elif part == "minor":
-    minor, patch = minor + 1, 0
+if requested:
+    new_version = requested
 else:
-    patch += 1
+    if part == "major":
+        major, minor, patch = major + 1, 0, 0
+    elif part == "minor":
+        minor, patch = minor + 1, 0
+    else:
+        patch += 1
+    new_version = f"{major}.{minor}.{patch}"
 
 old_version = match.group(0).split('"')[1]
-new_version = f"{major}.{minor}.{patch}"
 text = text[: match.start(1)] + new_version + text[match.end(3) :]
 path.write_text(text, encoding="utf-8")
 print(f"{path}: {old_version} -> {new_version}")
@@ -55,6 +61,7 @@ export BUMP_VERSION_PYSCRIPT
 
 BROWSER := python -c "$$BROWSER_PYSCRIPT"
 BUMP ?= patch
+VERSION ?=
 
 
 help: ## Show this help message.
@@ -278,5 +285,5 @@ animation-gif-small: animation-mp4 ## Share-friendly GIF (ffmpeg, ~5MB) — repl
 animation-clean: ## Remove manim render artifacts (media/).
 	rm -rf media/
 
-bump-version: ## Bump pyproject.toml version. Override with BUMP=minor or BUMP=major.
-	python -c "$$BUMP_VERSION_PYSCRIPT" "$(BUMP)"
+bump-version: ## Bump pyproject.toml version. Use BUMP=minor or VERSION=0.4.1.
+	python -c "$$BUMP_VERSION_PYSCRIPT" "$(BUMP)" "$(VERSION)"
