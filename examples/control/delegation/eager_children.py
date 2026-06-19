@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass, field
 
 import rflow
+from rflow.utils.example_runs import example_run_dir, save_example_graph
 
 
 @dataclass
@@ -86,6 +87,13 @@ def run_case(*, eager_children: bool) -> None:
     for t, label in llm.events:
         print(f"{t:0.3f}s  {label}")
     print("result:", graph.result())
+    suffix = "eager-true" if eager_children else "eager-false"
+    save_example_graph(
+        graph,
+        __file__,
+        "eager-children",
+        out_dir=example_run_dir(__file__, "eager-children") / suffix,
+    )
 
 
 def main() -> None:

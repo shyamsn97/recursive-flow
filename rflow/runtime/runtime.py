@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from rflow.graph import ChildHandle, WaitRequest
 from rflow.repl import REPL, DoneSignal
+from rflow.runtime.context import EngineContext
 
 if TYPE_CHECKING:
     from rflow.graph import Graph
@@ -80,14 +81,16 @@ class ReplBackend(Protocol):
       error (``errored`` distinguishes them), or ``(True, (WaitRequest,
       pre_output: str))`` when the block suspends on
       ``await launch_subagents(...)``.
-    * ``done(...)`` (a host tool) sets ``env["DONE_RESULT"]``; the engine reads
-      it back after each turn.
+    * ``done(...)`` (a host tool) sets ``engine_context.done_result``; the engine
+      reads it back after each turn.
     """
 
     #: Host-visible namespace; seedable for local, may be empty for remote.
     namespace: dict[str, Any]
-    #: Host-shared mutable dict; ``DONE_RESULT`` and per-agent context live here.
-    env: dict[str, Any]
+    #: Trusted host-side control state for this agent.
+    engine_context: EngineContext
+    #: Public process environment variables exposed while agent code runs.
+    process_env: dict[str, str]
     #: Set by the last ``start`` / ``resume`` (drives ExecOutput vs ErrorOutput).
     errored: bool
 
@@ -121,12 +124,12 @@ class RemoteRepl(ABC):
     """A REPL running in a sandbox, driven over JSON-line stdio.
 
     Implements the host half of the protocol in :mod:`rflow.runtime.repl_server`.
-    The ``namespace`` is empty host-side (code runs remotely); ``env`` is the
-    host-shared dict the proxied ``done`` writes ``DONE_RESULT`` into.
+    The ``namespace`` is empty host-side (code runs remotely);
+    ``engine_context`` is the host-shared object the proxied ``done`` writes into.
 
     :meth:`seed` routes each tool by kind: host-bound tools proxy back (``done``
-    writes the host's ``env["DONE_RESULT"]``; ``flow_delegate`` spawns a child in
-    the host graph; ``HISTORY`` reads the host graph), while ordinary tools
+    writes the host context; ``flow_delegate`` spawns a child in the host graph;
+    ``HISTORY`` reads the host graph), while ordinary tools
     (``FILE_TOOLS`` and friends) are shipped into the sandbox to run there.
     ``flow_wait`` / ``launch_subagents`` are built remotely from the proxied
     delegate, so child recursion still spawns host-side while the parent's code
@@ -135,7 +138,8 @@ class RemoteRepl(ABC):
 
     def __init__(self) -> None:
         self.namespace: dict[str, Any] = {}
-        self.env: dict[str, Any] = {}
+        self.engine_context = EngineContext()
+        self.process_env: dict[str, str] = {}
         self.errored: bool = False
         self.proxied: dict[str, Callable[..., object]] = {}
 
@@ -194,11 +198,13 @@ class RemoteRepl(ABC):
           **shipped into the sandbox** and runs there, against the sandbox's own
           working directory.
 
-        Inputs are copied as a single ``INPUTS`` dict (read as ``INPUTS["key"]``)
-        so a key can never shadow a real REPL variable in the sandbox.
+        ``process_env`` is copied into the sandbox's real ``os.environ``. Inputs
+        are copied as a single ``INPUTS`` dict (read as ``INPUTS["key"]``) so a
+        key can never shadow a real REPL variable in the sandbox.
         """
         from rflow.tools import get_tool_metadata
 
+        self.inject_process_env(self.process_env)
         self.inject_literal("INPUTS", dict(inputs))
         for name, fn in tools.items():
             if name in REMOTE_LAUNCHER:
@@ -217,6 +223,10 @@ class RemoteRepl(ABC):
     def inject_literal(self, name: str, value: object) -> None:
         """Copy a literal value (round-tripped through ``repr``) into the REPL."""
         self.call({"cmd": "inject", "name": name, "value": repr(value)})
+
+    def inject_process_env(self, values: dict[str, str]) -> None:
+        """Copy public agent metadata into the sandbox process environment."""
+        self.call({"cmd": "set_env", "values": dict(values)})
 
     def inject_function_proxy(self, name: str, fn: Callable[..., object]) -> None:
         """Expose a host callable as a remote REPL function (calls round-trip)."""

@@ -3,32 +3,15 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
-from rflow.clients import LLMClient
-
-from benchmarks.eval.core import RunResult, TaskInstance
-from benchmarks.eval.runners import register_runner
+from benchmarks.eval import runner
+from benchmarks.eval.types import Example, Model, Prediction, RunContext, Runner
 
 
-@register_runner("vanilla")
-class VanillaRunner:
-    """No REPL, no delegation: one chat completion."""
-
-    name = "vanilla"
-
-    def run(
-        self,
-        instance: TaskInstance,
-        *,
-        client: LLMClient,
-        model: str,
-        out_dir: Path,
-        max_iters: int,
-        max_depth: int,
-        live_save: bool,
-    ) -> RunResult:
-        del max_iters, max_depth, live_save
+@runner("vanilla")
+class VanillaRunner(Runner):
+    def run(self, example: Example, model: Model, ctx: RunContext) -> Prediction:
+        del ctx
         messages = [
             {
                 "role": "system",
@@ -37,34 +20,30 @@ class VanillaRunner:
                     "answer value, with no explanation."
                 ),
             },
-            {
-                "role": "user",
-                "content": "\n\n".join(
-                    [
-                        instance.prompt,
-                        "INPUTS:",
-                        *(
-                            f"INPUT {key}:\n{value}"
-                            for key, value in sorted(instance.inputs.items())
-                        ),
-                    ]
-                ),
-            },
+            {"role": "user", "content": _render_example(example)},
         ]
         start = time.perf_counter()
         try:
-            answer, usage = client.completion(messages)
+            answer = model.complete(messages)
             error = None
         except Exception as exc:  # benchmark rows should record failures
             answer = ""
-            usage = client.last_usage
             error = f"{type(exc).__name__}: {exc}"
-        return RunResult(
+        return Prediction(
             answer=answer,
-            input_tokens=usage.input_tokens if usage else 0,
-            output_tokens=usage.output_tokens if usage else 0,
-            time_seconds=time.perf_counter() - start,
-            iterations=1,
+            usage=model.usage(),
+            metrics={"time_seconds": time.perf_counter() - start, "iterations": 1},
             error=error,
-            metadata={"model": model},
         )
+
+
+def _render_example(example: Example) -> str:
+    parts = [example.prompt]
+    inputs = example.inputs()
+    if inputs:
+        parts.append("INPUTS:")
+        parts.extend(f"INPUT {key}:\n{value}" for key, value in sorted(inputs.items()))
+    return "\n\n".join(parts)
+
+
+__all__ = ["VanillaRunner"]

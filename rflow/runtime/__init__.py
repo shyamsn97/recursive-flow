@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from rflow.runtime.context import EngineContext
 from rflow.runtime.docker import DockerRepl, DockerRuntime, build_argv
 from rflow.runtime.runtime import (
     LocalRuntime,
@@ -48,6 +49,7 @@ __all__ = [
     "DockerRuntime",
     "E2BRepl",
     "E2BRuntime",
+    "EngineContext",
     "LocalRuntime",
     "ModalRepl",
     "ModalRuntime",

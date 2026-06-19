@@ -99,6 +99,9 @@ class ReplServer:
         if cmd == "inject":
             self.repl.namespace[msg["name"]] = eval(msg["value"], self.repl.namespace)
             return {"ok": True}
+        if cmd == "set_env":
+            os.environ.update({str(k): str(v) for k, v in msg["values"].items()})
+            return {"ok": True}
         if cmd == "inject_proxy":
             self.repl.namespace[msg["name"]] = self.make_proxy(msg["name"])
             return {"ok": True}

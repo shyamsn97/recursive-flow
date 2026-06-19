@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 
 import rflow
+from rflow.utils.example_runs import save_example_graph
 from rflow.utils.viz import live
 
 
@@ -51,8 +52,9 @@ def main() -> None:
     flow = rflow.Flow(llm, max_iters=args.max_iters)
     print(f"Query: {args.query}\n")
     graph = flow.start(args.query)
-    result = live(flow, graph)[-1].result()
-    print(result)
+    graph = live(flow, graph)[-1]
+    print(graph.result())
+    save_example_graph(graph, __file__, "tinker-agent")
     flow.close()
 
 

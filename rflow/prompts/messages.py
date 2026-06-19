@@ -4,8 +4,7 @@ All bootstrap / nudge / error text lives here so ``flow.py`` stays logic-only.
 Adapted from alexzhang13/rlm (``rlm/utils/prompts.py``) to the minimal stack's
 **inputs-as-`INPUTS`** model: there is no monolithic ``CONTEXT`` variable — each
 agent's inputs are exposed through a single ``INPUTS`` dict (read as
-``INPUTS["key"]``) so a key never shadows a real REPL variable, and an agent
-re-reads its own past turns through ``HISTORY``.
+``INPUTS["key"]``) so a key never shadows a real REPL variable.
 """
 
 from __future__ import annotations
@@ -16,25 +15,30 @@ REPL_BLOCK_RULE = """Use exactly one fenced REPL code block per assistant messag
 ```
 Do not write bare `repl` without the opening and closing triple backticks."""
 
-USER_PROMPT_WITH_ROOT = """Think step-by-step on what to do using the REPL environment (your inputs are available in the `INPUTS` dict, e.g. `INPUTS["key"]`) to answer the original prompt: "{query}".
+USER_PROMPT_WITH_ROOT = """Think step-by-step on what to do using the REPL environment. The original prompt is available as `INPUTS["query"]`.
 
 Continue using the REPL environment and querying sub-LLMs / sub-agents by writing ```repl``` blocks, and determine your answer. Your next action:"""
 
 CONTINUE_ACTION = "Continue your next action:"
 
 FIRST_TURN_INSPECTION_NUDGE = """\
-Your first REPL block should usually inspect your inputs (e.g. `print(list(INPUTS))`, `print(len(INPUTS["key"]))`, `print(INPUTS["key"][:2000])`) and, if needed, your own `HISTORY`, then stop so you can use that output in the next turn.
+Your first REPL block should usually inspect input names, sizes, and tiny bounded samples (e.g. `print(list(INPUTS))`, `print(len(INPUTS["query"]))`, `print(INPUTS["query"][:500])`). Never print a full large input; keep full chunks in variables and pass focused chunks to subcalls.
 """
 
 FIRST_TURN_DECOMPOSITION_NUDGE = """\
-After the initial inspection, delegate independent units with
-`await launch_subagents([...])` or `llm_query_batched(...)` instead of doing all
-work yourself. The parent should combine child results, make final decisions,
-and verify the outcome.
+After the initial inspection, use `await launch_subagents([...])` for independent
+units that need tools, code execution, iteration, repair, or verification. The
+parent should coordinate, integrate child results, make final decisions, and
+verify the outcome.
 
-Put each child's data and requirements in its `inputs` (a dict of str -> str),
-since a child sees only the query and the `INPUTS` you pass it — never your own
-`INPUTS` or variables.
+Do not start producing multiple final artifacts inline in the parent after
+inspection. First delegate the independent units, then integrate and verify.
+
+Put each child's supporting payloads in its `inputs` (a dict of str -> str),
+since a child sees only its query and the `INPUTS` you pass it — never your own
+variables.
+Never put `"query"` inside a child `inputs` dict; the spec's top-level `"query"`
+becomes that child's `INPUTS["query"]`.
 """
 
 FINAL_ANSWER_ACTION = """You have used the full iteration budget without calling done().
@@ -64,26 +68,31 @@ STATUS_DEPTH_NEAR_MAX = " You are near the recursion limit."
 BASELINE_NOTE = "Baseline mode: no sub-agents available. Do all work in this REPL."
 
 
-def build_inputs_manifest(inputs: dict[str, str]) -> str:
+def build_inputs_manifest(query: str, inputs: dict[str, str]) -> str:
     """List inputs by name + size (no value dumps), with a big-input chunk hint.
 
-    Returns ``""`` when there are no inputs. Mirrors the size-signal idea from
-    ``build_rlm_system_prompt`` so the model knows how large each input is
-    before choosing a chunking / fanout strategy.
+    Mirrors the size-signal idea from ``build_rlm_system_prompt`` so the model
+    knows how large each REPL-visible input is before choosing a chunking /
+    fanout strategy. ``query`` is always listed because it is always injected as
+    ``INPUTS["query"]``.
     """
-    if not inputs:
-        return ""
+    manifest_inputs = {"query": query, **inputs}
     lines = [
-        f'  INPUTS["{name}"]  (str, {len(value)} chars)'
-        for name, value in inputs.items()
+        f"- {name}: str, {len(value)} chars" for name, value in manifest_inputs.items()
     ]
-    manifest = 'Your inputs (read with `INPUTS["name"]`):\n' + "\n".join(lines)
+    total = sum(len(value) for value in manifest_inputs.values())
+    manifest = (
+        "Your REPL INPUTS contain:\n"
+        + "\n".join(lines)
+        + f"\nTotal input chars: {total}.\n"
+        + 'Print only small bounded samples, e.g. `print(INPUTS["query"][:500])`; never print a full large input.'
+    )
 
-    total = sum(len(value) for value in inputs.values())
     if total > 50_000:
         manifest += (
             f"\n\nThese inputs total ~{total} characters (~{total // 4} tokens). "
-            "Chunk large inputs and process the pieces in parallel with "
+            "Print only tiny samples for orientation, then chunk large inputs in "
+            "variables and process the pieces in parallel with "
             "`llm_query_batched(...)` or `await launch_subagents([...])`."
         )
     return manifest
@@ -115,10 +124,8 @@ def first_prompt(
     recursion-depth note.
     """
     parts = [FIRST_TURN_SAFEGUARD]
-    manifest = build_inputs_manifest(inputs)
-    if manifest:
-        parts.append(manifest)
-    parts.append(USER_PROMPT_WITH_ROOT.format(query=query))
+    parts.append(build_inputs_manifest(query, inputs))
+    parts.append(USER_PROMPT_WITH_ROOT)
     parts.append(FIRST_TURN_INSPECTION_NUDGE.strip())
     if max_depth > 0 and depth < max_depth:
         parts.append(FIRST_TURN_DECOMPOSITION_NUDGE.strip())

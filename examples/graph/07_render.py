@@ -7,19 +7,17 @@ Several read-only renderers ship with recursive-flow:
 - ``graph[aid].transcript()``      — one agent's transcript only
 - ``graph.save_html(path)``        — interactive viewer page over the snapshots
 
-This script writes ``examples/graph/out/viewer.html`` (creating
-``out/`` if needed) and prints the text renderers to stdout.
+This script writes ``examples/_runs/graph-render/viewer.html`` and prints the
+text renderers to stdout.
 
 Run:
     python examples/graph/07_render.py
-    open examples/graph/out/viewer.html
+    open examples/_runs/graph-render/viewer.html
 """
 
 from __future__ import annotations
-
-from pathlib import Path
-
 import rflow
+from rflow.utils.example_runs import example_run_dir, save_example_graph
 
 
 def build_graph() -> rflow.Graph:
@@ -89,11 +87,12 @@ def main() -> None:
     print(g.session(include_system=False))
 
     banner("graph.save_html(...) — interactive viewer over the history")
-    out_dir = Path(__file__).resolve().parent / "out"
+    out_dir = example_run_dir(__file__, "graph-render")
     out_dir.mkdir(parents=True, exist_ok=True)
     html_path = g.save_html(out_dir / "viewer.html")
     print(f"wrote {html_path} ({html_path.stat().st_size:,} bytes)")
     print(f"\nopen with: open {html_path}")
+    save_example_graph(g, __file__, "graph-render")
 
 
 if __name__ == "__main__":

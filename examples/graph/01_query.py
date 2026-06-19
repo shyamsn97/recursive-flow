@@ -17,6 +17,7 @@ Run:
 from __future__ import annotations
 
 import rflow
+from rflow.utils.example_runs import save_example_graph
 
 
 def build_graph() -> rflow.Graph:
@@ -153,6 +154,7 @@ def main() -> None:
     print(f"finished : {g.finished}")
     print(f"current  : {g.current().type}")
     print(f"result   : {g.result()!r}")
+    save_example_graph(g, __file__, "graph-query")
 
 
 if __name__ == "__main__":

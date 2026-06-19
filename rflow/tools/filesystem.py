@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from rflow.tools import tool
+from rflow.tools.tools import tool
 
 
 @tool("Read a file and return its contents.")

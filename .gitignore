@@ -55,6 +55,7 @@ mlruns/*
 */**/cov-report/*
 */**/gradio_cached_examples/*
 **/docs/internal/*
+!docs/internal/prompt_reliability.md
 **/media/*
 
 # Example trace logs

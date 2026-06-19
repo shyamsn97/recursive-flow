@@ -12,6 +12,7 @@ from __future__ import annotations
 import threading
 
 import rflow
+from rflow.utils.example_runs import save_example_graph
 
 REVIEWS = [
     "The new search UI is fast and surprisingly easy to use.",
@@ -81,6 +82,7 @@ def main() -> None:
 
     print("\nFinal answer:")
     print(graph.result())
+    save_example_graph(graph, __file__, "llm-query-batched")
 
 
 if __name__ == "__main__":

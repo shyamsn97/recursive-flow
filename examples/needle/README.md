@@ -11,4 +11,4 @@ python examples/needle/filesystem.py --num-files 500 --no-viz
 python examples/needle/haystack.py --docker-image recursive-flow:local
 ```
 
-Runs save to `examples/_runs/needle/haystack/` and `examples/_runs/needle/filesystem/` by default.
+Runs save to `examples/_runs/needle-haystack/` and `examples/_runs/needle-filesystem/` by default.

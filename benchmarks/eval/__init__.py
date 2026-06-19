@@ -1,27 +1,31 @@
-"""Shared evaluation harness for recursive-flow benchmarks.
+"""Clean benchmark harness for recursive-flow evaluations."""
 
-Architecture adapted from avilum/minrlm's eval suite:
-https://github.com/avilum/minrlm/tree/master/eval
-"""
+from __future__ import annotations
 
-from benchmarks.eval.core import (
-    EvalResult,
-    RunResult,
-    Score,
-    TaskInstance,
-)
-from benchmarks.eval.runners import get_runner, list_runners, register_runner
-from benchmarks.eval.tasks import get_task, list_tasks, register_task
+from benchmarks.eval.registry import Registry
+from benchmarks.eval.types import Dataset, Logger, Model, Runner
+
+DATASETS = Registry[Dataset]("dataset")
+RUNNERS = Registry[Runner]("runner")
+MODELS = Registry[Model]("model")
+LOGGERS = Registry[Logger]("logger")
+
+dataset = DATASETS.decorator
+runner = RUNNERS.decorator
+model = MODELS.decorator
+logger = LOGGERS.decorator
 
 __all__ = [
-    "EvalResult",
-    "RunResult",
-    "Score",
-    "TaskInstance",
-    "get_runner",
-    "get_task",
-    "list_runners",
-    "list_tasks",
-    "register_runner",
-    "register_task",
+    "DATASETS",
+    "LOGGERS",
+    "MODELS",
+    "RUNNERS",
+    "Dataset",
+    "Logger",
+    "Model",
+    "Runner",
+    "dataset",
+    "logger",
+    "model",
+    "runner",
 ]

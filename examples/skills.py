@@ -21,6 +21,7 @@ from pathlib import Path
 
 import rflow
 from rflow.prompts import DEFAULT_BUILDER
+from rflow.utils.example_runs import example_run_dir, save_example_graph
 
 NUMPY_LINEAR_ALGEBRA_SKILL = """\
 # NumPy Linear Algebra
@@ -123,6 +124,12 @@ def main() -> None:
         action="store_true",
         help="Print the rendered prompt before making the LLM call.",
     )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=example_run_dir(__file__, "skills"),
+        help="Save the final run here (default: examples/_runs/skills/).",
+    )
     args = parser.parse_args()
 
     tmp = None
@@ -152,6 +159,7 @@ def main() -> None:
         while not graph.finished:
             graph = flow.step(graph)
         print(graph.result())
+        save_example_graph(graph, __file__, "skills", out_dir=args.out_dir)
     finally:
         if tmp is not None:
             tmp.cleanup()

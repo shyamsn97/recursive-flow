@@ -17,6 +17,7 @@ The whole tree advances by synchronized steps; drive it yourself with
         ...  # inspect graph
 """
 
+from rflow.base import BaseFlow, BaseOutputParser
 from rflow.clients import (
     AnthropicClient,
     LLMChannel,
@@ -76,7 +77,11 @@ from rflow.graph import (
     truncate_after,
     truncate_agent,
 )
-from rflow.prompts import DEFAULT_BUILDER, SYSTEM_PROMPT, PromptBuilder
+from rflow.prompts import (
+    DEFAULT_BUILDER,
+    SYSTEM_PROMPT,
+    PromptBuilder,
+)
 from rflow.repl import REPL, DoneSignal
 from rflow.runtime import DockerRuntime, LocalRuntime, Runtime
 from rflow.tools import FILE_TOOLS, get_tool_metadata, tool
@@ -86,6 +91,8 @@ __all__ = [
     "Action",
     "ActionNode",
     "AnthropicClient",
+    "BaseFlow",
+    "BaseOutputParser",
     "CallLLM",
     "ChildHandle",
     "CodeObservation",

@@ -25,17 +25,15 @@ from pathlib import Path
 from typing import Any
 
 from rflow.graph import WaitRequest
+from rflow.runtime.context import EngineContext
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _capture = threading.local()
 
-# ``os.chdir`` mutates process-global state, so when a REPL runs with a fixed
-# ``working_directory`` we serialize the chdir + execute window across threads.
-# Without this, agent A could capture the cwd that agent B has already chdir'd
-# into and "restore" the wrong directory, stranding the host. The body is one
-# code block, so the contention is negligible; the lock is only taken when a
-# working directory is actually set.
-_CWD_LOCK = threading.Lock()
+# ``os.chdir`` and ``os.environ`` mutate process-global state, so local REPLs
+# serialize the overlay + execute window whenever either is used. Without this,
+# sibling agents could leak cwd/env changes into each other.
+_PROCESS_STATE_LOCK = threading.Lock()
 
 
 class DoneSignal(BaseException):
@@ -97,7 +95,8 @@ class REPL:
 
     def __init__(self, working_directory: str | Path | None = None) -> None:
         self.namespace: dict[str, Any] = {"__builtins__": __builtins__}
-        self.env: dict[str, Any] = {}
+        self.engine_context = EngineContext()
+        self.process_env: dict[str, str] = {}
         self.coro = None
         self.errored = False
         self._buf = io.StringIO()
@@ -124,8 +123,21 @@ class REPL:
         self.errored = False
         _capture.buf = self._buf
         prev_cwd: str | None = None
+        old_env: dict[str, str] = {}
+        missing_env: set[str] = set()
+        needs_process_lock = self.working_directory is not None or bool(
+            self.process_env
+        )
+        if needs_process_lock:
+            _PROCESS_STATE_LOCK.acquire()
+        if self.process_env:
+            for key, value in self.process_env.items():
+                if key in os.environ:
+                    old_env[key] = os.environ[key]
+                else:
+                    missing_env.add(key)
+                os.environ[key] = value
         if self.working_directory is not None:
-            _CWD_LOCK.acquire()
             prev_cwd = os.getcwd()
             os.chdir(self.working_directory)
         try:
@@ -141,7 +153,13 @@ class REPL:
             _capture.buf = None
             if prev_cwd is not None:
                 os.chdir(prev_cwd)
-                _CWD_LOCK.release()
+            for key in self.process_env:
+                if key in missing_env:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old_env[key]
+            if needs_process_lock:
+                _PROCESS_STATE_LOCK.release()
 
     @property
     def _output(self) -> str:

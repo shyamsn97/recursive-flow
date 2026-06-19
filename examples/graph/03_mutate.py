@@ -22,6 +22,7 @@ Run:
 from __future__ import annotations
 
 import rflow
+from rflow.utils.example_runs import save_example_graph
 
 
 def base_graph() -> rflow.Graph:
@@ -105,6 +106,7 @@ def main() -> None:
     banner("graph.update — bulk top-level field edit")
     g.update(query="hello (updated)", model="gpt-5-mini")
     print(f"query={g.query!r} model={g.model!r}")
+    save_example_graph(g, __file__, "graph-mutate")
 
 
 if __name__ == "__main__":

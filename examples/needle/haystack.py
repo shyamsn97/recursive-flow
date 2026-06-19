@@ -1,9 +1,8 @@
 """Needle in a massive in-memory input.
 
 Inspired by alexzhang13/rlm-minimal's million-line magic-number demo. This
-version passes the haystack as a single `haystack` input (a str) instead of
-writing many files, so the agent must chunk the string and fan out parallel
-child agents.
+version embeds the haystack directly in the query instead of writing many files,
+so the agent must chunk `INPUTS["query"]` and fan out parallel child agents.
 
 Usage:
     python examples/needle/haystack.py
@@ -67,8 +66,8 @@ def main():
     parser.add_argument("--no-viz", action="store_true")
     parser.add_argument(
         "--out-dir",
-        default=str(Path(__file__).resolve().parents[1] / "_runs" / "needle" / "haystack"),
-        help="Save the final run here (default: examples/_runs/needle/haystack/).",
+        default=str(Path(__file__).resolve().parents[1] / "_runs" / "needle-haystack"),
+        help="Save the final run here (default: examples/_runs/needle-haystack/).",
     )
     args = parser.parse_args()
 
@@ -106,9 +105,9 @@ def main():
     )
 
     graph = flow.start(
-        "I'm looking for a magic number buried somewhere in `INPUTS[\"haystack\"]` "
-        "(a str). What is it? Chunk the string and search the pieces in parallel.",
-        {"haystack": haystack},
+        "I'm looking for a magic number buried somewhere in the haystack below. "
+        "What is it? Chunk the string and search the "
+        f"pieces in parallel.\n\nHaystack:\n{haystack}",
     )
 
     if args.no_viz:
@@ -122,6 +121,7 @@ def main():
         graph = graphs[-1]
 
     print(f"\n{'=' * 40}")
+    print(f"Result:         {graph.result()}")
     print(f"Actual answer:  {answer}")
     print(f"Correct:        {answer in graph.result()}")
 

@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import rflow  # noqa: E402
 from rflow.runtime.sandbox.e2b import E2BRuntime  # noqa: E402
+from rflow.utils.example_runs import save_example_graph  # noqa: E402
 
 PLATFORMER_QUERY = """\
 Build a simple 2D side-scrolling platformer in plain HTML/CSS/JS under output/.
@@ -73,6 +74,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip setup commands, useful for templates with recursive-flow preinstalled.",
     )
+    parser.add_argument(
+        "--out-dir",
+        default=str(REPO_ROOT / "examples" / "_runs" / "sandbox-e2b"),
+        help="Save the final run here (default: examples/_runs/sandbox-e2b/).",
+    )
     return parser.parse_args()
 
 
@@ -97,7 +103,11 @@ def main() -> None:
         max_iters=args.max_iters,
     )
     try:
-        print(flow.run(PLATFORMER_QUERY))
+        graph = flow.start(PLATFORMER_QUERY)
+        while not graph.finished:
+            graph = flow.step(graph)
+        print(graph.result())
+        save_example_graph(graph, __file__, "sandbox-e2b", out_dir=args.out_dir)
     finally:
         flow.close()
 

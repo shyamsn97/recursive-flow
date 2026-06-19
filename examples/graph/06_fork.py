@@ -50,8 +50,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--out-dir",
-        default=str(Path(__file__).resolve().parents[1] / "_runs" / "fork-demo"),
-        help="where to save the forks (default: examples/_runs/fork-demo/)",
+        default=str(Path(__file__).resolve().parents[1] / "_runs" / "graph-fork"),
+        help="where to save the forks (default: examples/_runs/graph-fork/)",
     )
     args = parser.parse_args()
 

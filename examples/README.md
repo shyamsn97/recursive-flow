@@ -53,7 +53,7 @@ Most compute examples (`summarizer.py`, `needle/haystack.py`, `showcase.py`,
 | `--max-depth N` | `3` | Max delegation depth. |
 | `--max-iters N` | `15` | Max LLM turns per agent. |
 | `--no-viz` | off | Disable the live terminal visualization. |
-| `--out-dir PATH` | `_runs/<path>/` | Save the final run here. Defaults mirror the script path under [`_runs/`](_runs/). |
+| `--out-dir PATH` | `_runs/<example-name>/` | Save the final run here. Defaults use flat example names under [`_runs/`](_runs/). |
 
 ## Running under Docker
 

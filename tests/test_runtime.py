@@ -33,10 +33,31 @@ from rflow.runtime import (
 )
 from rflow.runtime.repl_server import ReplServer
 from rflow.runtime.runtime import parse_response
-from rflow.tools.builtins import ENV_AGENT_ID, ENV_DONE_RESULT, ENV_OUTPUT_SCHEMA
+from rflow.runtime.env import (
+    RFLOW_AGENT_ID,
+    RFLOW_DEPTH,
+    RFLOW_IS_ROOT,
+    RFLOW_MAX_DEPTH,
+    RFLOW_PARENT_AGENT_ID,
+)
+from rflow.tools.builtins import make_history
 
 from .fakes.sandbox import FakeE2BSandboxFactory, NoopLLM
 from .helpers import ScriptedLLM, StubLLM, first_user_text, run_to_completion
+
+_RFLOW_ENV_KEYS = [
+    RFLOW_AGENT_ID,
+    RFLOW_DEPTH,
+    RFLOW_PARENT_AGENT_ID,
+    RFLOW_MAX_DEPTH,
+    RFLOW_IS_ROOT,
+]
+
+
+def _clear_rflow_env(monkeypatch):
+    for key in _RFLOW_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
 
 # ── serde ─────────────────────────────────────────────────────────────
 
@@ -83,6 +104,25 @@ def test_parse_response_suspended_and_done():
 
     suspended, out = parse_response({"suspended": False, "output": "done"})
     assert suspended is False and out == "done"
+
+
+def test_local_runtime_exposes_public_agent_env(monkeypatch):
+    _clear_rflow_env(monkeypatch)
+
+    reply = (
+        "```repl\n"
+        "import os\n"
+        f"print(os.environ[{RFLOW_AGENT_ID!r}])\n"
+        f"print(os.environ[{RFLOW_DEPTH!r}])\n"
+        f"print(os.environ[{RFLOW_PARENT_AGENT_ID!r}])\n"
+        f"print(os.environ[{RFLOW_MAX_DEPTH!r}])\n"
+        f"done(os.environ[{RFLOW_IS_ROOT!r}])\n"
+        "```"
+    )
+    flow = Flow(StubLLM(reply), max_depth=3)
+    assert flow.run("q") == "1"
+    for key in _RFLOW_ENV_KEYS:
+        assert key not in os.environ
 
 
 # ── docker argv ───────────────────────────────────────────────────────
@@ -274,7 +314,7 @@ def test_loopback_structured_done_validates_on_host():
 def test_loopback_launch_subagents_delegates_and_resumes():
     def reply_for(messages):
         task = first_user_text(messages)
-        if "child task" in task:
+        if "depth 1" in task:
             return '```repl\ndone("child-answer")\n```'
         return (
             "```repl\n"
@@ -293,13 +333,13 @@ def test_loopback_launch_subagents_delegates_and_resumes():
 def test_loopback_launch_subagents_parallel_in_order():
     def reply_for(messages):
         task = first_user_text(messages)
-        if "task a" in task:
+        if "query: str, 6 chars" in task:
             return '```repl\ndone("A")\n```'
-        if "task b" in task:
+        if "query: str, 7 chars" in task:
             return '```repl\ndone("B")\n```'
         return (
             "```repl\n"
-            'rs = await launch_subagents([{"query": "task a"}, {"query": "task b"}])\n'
+            'rs = await launch_subagents([{"query": "task a"}, {"query": "task bb"}])\n'
             'done("|".join(rs))\n'
             "```"
         )
@@ -341,58 +381,70 @@ def test_e2b_executes_repl_protocol_over_bridge(monkeypatch, tmp_path):
 
 
 def test_e2b_seed_routes_tools_by_kind(monkeypatch, tmp_path):
+    _clear_rflow_env(monkeypatch)
     E2BRepl = _use_fake_e2b(monkeypatch)
     flow = Flow(NoopLLM(), max_depth=1)
     agent = flow.start("q")
     repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
-    repl.env[ENV_AGENT_ID] = agent.agent_id
-    repl.env[ENV_OUTPUT_SCHEMA] = None
+    flow.seed_agent_context(repl, agent)
     try:
-        repl.seed(flow.build_tools(repl.env), {"DOC": "hi"})
+        repl.seed(flow.build_tools(repl.engine_context), {"DOC": "hi"})
         proxied = set(repl.proxied)
         # host-bound callables (proxy=True) are function proxies
         assert {"done", "flow_delegate", "llm_query_batched"} <= proxied
-        # HISTORY is a host object: its public methods are object-proxied
-        assert {"HISTORY.messages", "HISTORY.last", "HISTORY.grep"} <= proxied
+        # HISTORY is no longer part of the default tool namespace.
+        assert not any(name.startswith("HISTORY") for name in proxied)
         # launchers are composed in the sandbox, never proxied
         assert not (proxied & {"flow_wait", "launch_subagents"})
-        # inputs were copied into the remote namespace under INPUTS, not proxied
+        # inputs land in the namespace; public agent metadata lands in os.environ.
         assert repl.start('print(INPUTS["DOC"])') == (False, "hi")
+        suspended, out = repl.start(
+            "import os\n"
+            f"print(os.environ[{RFLOW_AGENT_ID!r}])\n"
+            f"print(os.environ[{RFLOW_DEPTH!r}])\n"
+            f"print(os.environ[{RFLOW_IS_ROOT!r}])"
+        )
+        assert suspended is False and out.splitlines() == ["root", "0", "1"]
     finally:
         repl.close()
         flow.close()
+        _clear_rflow_env(monkeypatch)
 
 
 def test_e2b_done_proxies_back_to_host_over_bridge(monkeypatch, tmp_path):
+    _clear_rflow_env(monkeypatch)
     E2BRepl = _use_fake_e2b(monkeypatch)
     flow = Flow(NoopLLM(), max_depth=1)
     agent = flow.start("q")
     repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
-    repl.env[ENV_AGENT_ID] = agent.agent_id
-    repl.env[ENV_OUTPUT_SCHEMA] = None
+    flow.seed_agent_context(repl, agent)
     try:
-        repl.seed(flow.build_tools(repl.env), {})
-        repl.env.pop(ENV_DONE_RESULT, None)
+        repl.seed(flow.build_tools(repl.engine_context), {})
+        repl.engine_context.done_result = None
         suspended, _ = repl.start('done("answer")')
         assert suspended is False and not repl.errored
         # the host-side done() ran (over the wire) and stashed the result
-        assert repl.env[ENV_DONE_RESULT] == "answer"
+        assert repl.engine_context.done_result == "answer"
     finally:
         repl.close()
         flow.close()
+        _clear_rflow_env(monkeypatch)
 
 
-def test_e2b_history_object_proxies_to_host_over_bridge(monkeypatch, tmp_path):
+def test_e2b_history_object_can_be_proxied_when_opted_in(monkeypatch, tmp_path):
+    _clear_rflow_env(monkeypatch)
     E2BRepl = _use_fake_e2b(monkeypatch)
     flow = Flow(NoopLLM(), max_depth=1)
     agent = flow.start("remember this")
     repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
-    repl.env[ENV_AGENT_ID] = agent.agent_id
-    repl.env[ENV_OUTPUT_SCHEMA] = None
+    flow.seed_agent_context(repl, agent)
     try:
-        repl.seed(flow.build_tools(repl.env), {})
-        # HISTORY in the sandbox forwards each call to the host, which slices the
-        # live host graph and ships only the result back over the wire.
+        tools = flow.build_tools(repl.engine_context) | {
+            "HISTORY": make_history(flow, repl.engine_context)
+        }
+        repl.seed(tools, {})
+        # Opted-in HISTORY forwards each call to the host, which slices the live
+        # host graph and ships only the result back over the wire.
         suspended, out = repl.start(
             "print(HISTORY.messages()[0]['role']); print(len(HISTORY.last(5)))"
         )
@@ -401,22 +453,23 @@ def test_e2b_history_object_proxies_to_host_over_bridge(monkeypatch, tmp_path):
     finally:
         repl.close()
         flow.close()
+        _clear_rflow_env(monkeypatch)
 
 
 def test_e2b_registered_tool_runs_in_sandbox_not_proxied(monkeypatch, tmp_path):
     from rflow.tools.filesystem import read_file
 
+    _clear_rflow_env(monkeypatch)
     E2BRepl = _use_fake_e2b(monkeypatch)
     flow = Flow(NoopLLM(), max_depth=1)
     flow.runtime.register_tools([read_file])
     agent = flow.start("q")
     repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
-    repl.env[ENV_AGENT_ID] = agent.agent_id
-    repl.env[ENV_OUTPUT_SCHEMA] = None
+    flow.seed_agent_context(repl, agent)
     note = tmp_path / "note.txt"
     note.write_text("hello\nworld\n")
     try:
-        repl.seed(flow.build_tools(repl.env), {})
+        repl.seed(flow.build_tools(repl.engine_context), {})
         # A registered tool is shipped into the sandbox to run there — it is NOT a
         # host proxy (calling it never crosses the wire).
         assert "read_file" not in repl.proxied
@@ -426,9 +479,11 @@ def test_e2b_registered_tool_runs_in_sandbox_not_proxied(monkeypatch, tmp_path):
     finally:
         repl.close()
         flow.close()
+        _clear_rflow_env(monkeypatch)
 
 
 def test_e2b_full_flow_over_bridge(monkeypatch, tmp_path):
+    _clear_rflow_env(monkeypatch)
     E2BRepl = _use_fake_e2b(monkeypatch)
 
     def factory(agent):
@@ -445,6 +500,7 @@ def test_e2b_full_flow_over_bridge(monkeypatch, tmp_path):
     g = run_to_completion(flow, "q")
     assert g.result() == "ok"
     flow.close()
+    _clear_rflow_env(monkeypatch)
 
 
 def test_remote_file_runtime_setup_commands_resolution(monkeypatch, tmp_path):

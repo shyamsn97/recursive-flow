@@ -9,6 +9,8 @@ from typing import Any
 import jsonschema
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from rflow.base import BaseOutputParser
+
 
 def render_json_schema_hint(schema: Mapping[str, Any] | str) -> str:
     return json.dumps(_load_json_schema(schema), indent=2)
@@ -46,7 +48,7 @@ class StructuredOutputError(ValueError):
         super().__init__(_format_error_message(content, schema, cause))
 
 
-class StructuredOutputParser:
+class StructuredOutputParser(BaseOutputParser):
     """Parse and validate a structured-output JSON string.
 
     ``content`` is the JSON string to validate. ``schema`` is a Pydantic model

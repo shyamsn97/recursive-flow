@@ -76,6 +76,11 @@ def main():
     parser.add_argument("--max-depth", type=int, default=2)
     parser.add_argument("--max-iters", type=int, default=15)
     parser.add_argument("--no-viz", action="store_true")
+    parser.add_argument(
+        "--out-dir",
+        default=str(Path(__file__).resolve().parents[1] / "_runs" / "needle-filesystem"),
+        help="Save the final run here (default: examples/_runs/needle-filesystem/).",
+    )
     args = parser.parse_args()
 
     if args.docker_image:
@@ -135,8 +140,13 @@ def main():
             graph = live(flow, graph)[-1]
 
         print(f"\n{'=' * 40}")
+        print(f"Result:         {graph.result()}")
         print(f"Actual answer:  {answer}")
         print(f"Correct:        {answer in graph.result()}")
+
+        if args.out_dir:
+            path = graph.save(Path(args.out_dir))
+            print(f"Graph saved to {path}")
 
         if args.viewer:
             from rflow.utils.viewer import open_viewer

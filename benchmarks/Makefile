@@ -1,0 +1,101 @@
+.PHONY: help eval-help eval-smoke eval-test eval-run eval-wandb eval-benchmark eval-clean
+.DEFAULT_GOAL := help
+
+# Commands run from the repo root because the harness uses absolute imports
+# (`from benchmarks.eval ...`). This lets `make -C benchmarks ...` or
+# `cd benchmarks && make ...` both work.
+REPO_ROOT := $(realpath $(dir $(realpath $(firstword $(MAKEFILE_LIST))))/..)
+
+define PRINT_HELP_PYSCRIPT
+import re, sys
+
+for line in sys.stdin:
+	match = re.match(r'^([a-zA-Z0-9_/-]+):.*?## (.*)$$', line)
+	if match:
+		target, help = match.groups()
+		print("%-20s %s" % (target, help))
+endef
+export PRINT_HELP_PYSCRIPT
+
+EVAL_PROVIDER ?= openai
+EVAL_MODEL ?= gpt-5-mini
+EVAL_DATASETS ?= oolong
+EVAL_RUNNERS ?= vanilla rflow-local
+EVAL_SEEDS ?= 0:10
+EVAL_BENCHMARK_DATASETS ?= oolong
+EVAL_BENCHMARK_RUNNERS ?= rflow-local vanilla official-rlm
+EVAL_BENCHMARK_SEEDS ?= 0:20
+EVAL_MAX_ITERS ?= 20
+EVAL_MAX_DEPTH ?= 1
+EVAL_OUT_DIR ?= benchmarks/eval/runs
+EVAL_DATASET_PARAMS ?=
+EVAL_RUNNER_PARAMS ?= --runner-param rflow-local.max_iters=$(EVAL_MAX_ITERS) --runner-param rflow-local.max_depth=$(EVAL_MAX_DEPTH)
+EVAL_ARGS ?=
+EVAL_WANDB_PROJECT ?= rflow-eval
+EVAL_WANDB_ENTITY ?=
+EVAL_WANDB_ENTITY_ARG := $(if $(EVAL_WANDB_ENTITY),--wandb-entity $(EVAL_WANDB_ENTITY),)
+
+help: ## Show this help message.
+	@python -c "$$PRINT_HELP_PYSCRIPT" < $(MAKEFILE_LIST)
+
+eval-help: ## Show eval harness CLI help.
+	cd $(REPO_ROOT) && python -m benchmarks.eval --help
+
+eval-smoke: ## Run local fake eval smoke across fake/vanilla/rflow.
+	cd $(REPO_ROOT) && python -m benchmarks.eval \
+		--model fake \
+		--dataset synthetic_needle \
+		--runner fake vanilla rflow-local \
+		--seeds 0:3 \
+		--dataset-param synthetic_needle.records=8 \
+		--dataset-param synthetic_needle.filler_words=2 \
+		--runner-param rflow-local.max_iters=3 \
+		--runner-param rflow-local.max_depth=1 \
+		--runner-param rflow-local.live_save=false \
+		--out-dir $(EVAL_OUT_DIR) \
+		$(EVAL_ARGS)
+
+eval-test: ## Run focused eval harness tests.
+	cd $(REPO_ROOT) && python -m pytest tests/test_eval_benchmarks.py
+
+eval-run: ## Run real eval harness. Override EVAL_PROVIDER/MODEL/TASKS/RUNNERS/SEEDS/ARGS.
+	cd $(REPO_ROOT) && python -m benchmarks.eval \
+		--model $(EVAL_PROVIDER):$(EVAL_MODEL) \
+		--dataset $(EVAL_DATASETS) \
+		--runner $(EVAL_RUNNERS) \
+		--seeds $(EVAL_SEEDS) \
+		--out-dir $(EVAL_OUT_DIR) \
+		$(EVAL_DATASET_PARAMS) \
+		$(EVAL_RUNNER_PARAMS) \
+		$(EVAL_ARGS)
+
+eval-wandb: ## Run real eval harness with W&B logging enabled.
+	cd $(REPO_ROOT) && python -m benchmarks.eval \
+		--model $(EVAL_PROVIDER):$(EVAL_MODEL) \
+		--dataset $(EVAL_DATASETS) \
+		--runner $(EVAL_RUNNERS) \
+		--seeds $(EVAL_SEEDS) \
+		--out-dir $(EVAL_OUT_DIR) \
+		--wandb \
+		--wandb-project $(EVAL_WANDB_PROJECT) \
+		$(EVAL_WANDB_ENTITY_ARG) \
+		$(EVAL_DATASET_PARAMS) \
+		$(EVAL_RUNNER_PARAMS) \
+		$(EVAL_ARGS)
+
+eval-benchmark:
+	cd $(REPO_ROOT) && python -m benchmarks.eval \
+		--model $(EVAL_PROVIDER):$(EVAL_MODEL) \
+		--dataset $(EVAL_BENCHMARK_DATASETS) \
+		--runner $(EVAL_BENCHMARK_RUNNERS) \
+		--seeds $(EVAL_BENCHMARK_SEEDS) \
+		--out-dir $(EVAL_OUT_DIR) \
+		--wandb \
+		--wandb-project $(EVAL_WANDB_PROJECT) \
+		$(EVAL_WANDB_ENTITY_ARG) \
+		$(EVAL_DATASET_PARAMS) \
+		$(EVAL_RUNNER_PARAMS) \
+		$(EVAL_ARGS)
+
+eval-clean: ## Remove local eval run artifacts.
+	rm -rf $(REPO_ROOT)/benchmarks/eval/runs/

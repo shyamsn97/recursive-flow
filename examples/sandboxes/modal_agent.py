@@ -26,6 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import rflow  # noqa: E402
 from rflow.runtime.sandbox.modal import ModalRuntime  # noqa: E402
+from rflow.utils.example_runs import save_example_graph  # noqa: E402
 from rflow.utils.viz import live  # noqa: E402
 
 REMOTE_REPO = "/opt/recursive-flow"
@@ -79,16 +80,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable the live terminal graph view.",
     )
+    parser.add_argument(
+        "--out-dir",
+        default=str(REPO_ROOT / "examples" / "_runs" / "sandbox-modal"),
+        help="Save the final run here (default: examples/_runs/sandbox-modal/).",
+    )
     return parser.parse_args()
 
 
-def run_turn(flow: rflow.Flow, query: str, *, use_live: bool) -> str:
+def run_turn(flow: rflow.Flow, query: str, *, use_live: bool) -> rflow.Graph:
     graph = flow.start(query)
     if use_live:
-        return live(flow, graph)[-1].result()
+        return live(flow, graph)[-1]
     while not graph.finished:
         graph = flow.step(graph)
-    return graph.result()
+    return graph
 
 
 def local_recursive_flow_image() -> modal.Image:
@@ -140,7 +146,9 @@ def main() -> None:
     )
     log("running platformer task; first run may build/start Modal sandbox")
     try:
-        print(run_turn(flow, PLATFORMER_QUERY, use_live=not args.no_live))
+        graph = run_turn(flow, PLATFORMER_QUERY, use_live=not args.no_live)
+        print(graph.result())
+        save_example_graph(graph, __file__, "sandbox-modal", out_dir=args.out_dir)
     finally:
         log("closing Flow")
         flow.close()

@@ -156,6 +156,8 @@ def main() -> None:
         print(f"step {step}: state={kind} reward={reward}")
     print(f"{GREEN}Result:{RESET} {graph3.result()}")
     print(f"Total reward: {sum(rewards):.1f}")
+    gym_path = graph3.save(workdir / "gym-run")
+    print(f"Gym run saved to {gym_path}")
 
     banner("Done")
 

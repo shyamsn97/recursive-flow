@@ -1,36 +1,63 @@
 # benchmarks/
 
-Runnable benchmark harnesses for rflow. The canonical harness is
-`benchmarks/eval/`: tasks and runners register into one CLI, with consistent
-artifacts, summaries, tqdm progress, and optional W&B logging.
+Runnable benchmark harnesses for recursive-flow.
 
-## Conventions
+The canonical harness is `benchmarks/eval/`. It is intentionally small and built
+around four components:
 
-- **Runtime.** Default to `LocalRuntime` for dev. Use sandboxed runtimes for
-  untrusted benchmark prompts.
-- **Budget.** Every task gets fixed `max_depth` and `max_iters` settings from
-  the CLI; do not tune them per task.
-- **Config.** Every run writes `config.json` with provider/model, task names,
-  runner names, seeds, and task parameters.
-- **Results.** Per-task rows go to `results.jsonl`; aggregate metrics go to
-  `summary.json`; rflow artifacts go under `artifacts/<runner>/<task>/<task_id>/`.
-- **Seeds.** Any sampling from a dataset is deterministic given `--seed`
-  so partial reruns are reproducible.
+- `Dataset` - yields examples and scores predictions.
+- `Model` - wraps inference.
+- `Runner` - executes an example (`vanilla`, `rflow-local`, `official-rlm`, etc.).
+- `Logger` - writes JSONL, console output, reports, or W&B metrics.
 
-## Layout
+Initial datasets:
 
-```
-benchmarks/
-  README.md              # this file
-  eval/                  # shared task/runner harness with tqdm + W&B logging
-```
+- `synthetic_needle` - deterministic needle-in-haystack smoke task.
+- `oolong` - first real long-context dataset.
 
 ## Running
 
-```
+```bash
 python -m benchmarks.eval --help
 ```
 
+Smoke:
+
+```bash
+make eval-smoke
 ```
-python -m benchmarks.eval --provider fake --model fake --tasks sniah --runners fake rflow --seeds 0:3
+
+Direct equivalent:
+
+```bash
+python -m benchmarks.eval \
+  --model fake \
+  --dataset synthetic_needle \
+  --runner fake vanilla rflow-local \
+  --seeds 0:3 \
+  --dataset-param synthetic_needle.records=8 \
+  --dataset-param synthetic_needle.filler_words=2 \
+  --runner-param rflow-local.max_iters=3 \
+  --runner-param rflow-local.max_depth=1
+```
+
+Real run:
+
+```bash
+python -m benchmarks.eval \
+  --model openai:gpt-5-mini \
+  --dataset oolong \
+  --runner vanilla rflow-local official-rlm \
+  --seeds 0:20
+```
+
+Every run writes:
+
+```text
+benchmarks/runs/<run_id>/
+  config.json
+  rows.jsonl
+  summary.json
+  report.md
+  artifacts/<dataset>/<example_id>/<runner>/
 ```

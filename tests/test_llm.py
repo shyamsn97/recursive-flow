@@ -28,7 +28,7 @@ from rflow.integrations.structured import (
     json_schema_for,
 )
 from rflow.clients.llm import TinkerClient, is_retryable, retry_transient
-from rflow.tools.builtins import ENV_DONE_RESULT, ENV_OUTPUT_SCHEMA
+from rflow.runtime.context import EngineContext
 
 from rflow import is_errored
 
@@ -368,11 +368,11 @@ def test_build_messages_includes_schema_hint():
 def test_done_validates_against_schema():
     flow = make_flow()
     graph = flow.start("q", output_schema=Out)
-    env: dict = {ENV_OUTPUT_SCHEMA: graph.output_schema}
-    tools = flow.build_tools(env)
+    context = EngineContext(output_schema=graph.output_schema)
+    tools = flow.build_tools(context)
     with pytest.raises(DoneSignal):
         tools["done"]({"answer": 7, "note": "hi"})
-    assert json.loads(env[ENV_DONE_RESULT]) == {"answer": 7, "note": "hi"}
+    assert json.loads(context.done_result or "") == {"answer": 7, "note": "hi"}
 
     with pytest.raises(StructuredOutputError):
         tools["done"]("not structured")
@@ -381,11 +381,11 @@ def test_done_validates_against_schema():
 def test_done_json_schema_dict():
     flow = make_flow()
     graph = flow.start("q", output_schema=JSON_SCHEMA)
-    env: dict = {ENV_OUTPUT_SCHEMA: graph.output_schema}
-    tools = flow.build_tools(env)
+    context = EngineContext(output_schema=graph.output_schema)
+    tools = flow.build_tools(context)
     with pytest.raises(DoneSignal):
         tools["done"]({"x": 1})
-    assert env[ENV_DONE_RESULT] == '{"x": 1}'
+    assert context.done_result == '{"x": 1}'
     with pytest.raises(StructuredOutputError):
         tools["done"]({"x": "not an int"})
 
@@ -435,7 +435,7 @@ def test_llm_query_batched_parses_structured():
 def test_llm_query_batched_registered_and_reserved():
     flow = make_flow()
     flow.start("q")
-    assert "llm_query_batched" in flow.build_tools({})
+    assert "llm_query_batched" in flow.build_tools()
     assert "llm_query_batched" in Flow._RESERVED
     with pytest.raises(ValueError, match="reserved"):
         flow.start("q", {"llm_query_batched": "x"})

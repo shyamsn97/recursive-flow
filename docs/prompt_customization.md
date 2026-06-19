@@ -46,11 +46,12 @@ The default builder has seven sections, in order:
 
 | Section | Purpose |
 | --- | --- |
-| `role` | Opening contract + REPL namespace (`INPUTS`, `HISTORY`, `llm_query_batched`, `launch_subagents`, `SHOW_VARS`, `print`, `done`). |
-| `strategy` | When to use `llm_query_batched` vs `launch_subagents`, "break down problems", REPL-for-computation with an inline physics example, truncation + long-context guidance. |
-| `format` | REPL block fence rules + tiny inline demo. |
-| `examples` | Five worked recipes (chunked scan, batched chunks, branch on delegate, program-style fanout, parallel fanout). |
-| `final` | `done(...)` contract, `SHOW_VARS` reminder, closing exhortation. |
+| `role` | Opening contract + REPL namespace. `output_schema` blurbs appear when `enable_structured_output=True`. |
+| `strategy` | Orchestrator principles: probe inputs, decompose/fanout, truncation, fix failures before `done()`. |
+| `format` | One `repl` block per turn; use `print(...)` for inspection. |
+| `examples` | Three core recipes (inspect→act, batched chunks, conditional sub-agent). Structured and orchestrator examples are opt-in. |
+| `final` | `done(...)` contract and repair discipline. |
+| `structured-output` | Per-agent `done(value)` schema when `enable_structured_output=True` and the agent has `output_schema`. |
 | `tools` | Runtime-generated tool list (custom user tools registered with the engine). |
 | `status` | Runtime-generated agent id, depth, and config status. |
 

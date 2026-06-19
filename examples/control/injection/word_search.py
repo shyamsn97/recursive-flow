@@ -27,6 +27,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 import rflow
+from rflow.utils.example_runs import save_example_graph
 from rflow.utils.viz import live_view
 
 TARGET_WORD = "AGENT"
@@ -136,6 +137,7 @@ def run(model: str, out_dir: Path) -> None:
     print(f"\nwrote baseline run: {path}")
     print(f"  manifest: {path / 'graph.json'}")
     print(f"  agents:   {path / 'agents'} ({len(list(graph.agents))} agents)")
+    save_example_graph(graph, __file__, "injection-word-search")
 
 
 def main() -> None:

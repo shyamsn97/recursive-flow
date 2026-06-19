@@ -115,6 +115,7 @@ def run_branch(root: Path, name: str, implementation: str, label: str):
     while not graph.finished:
         graph = flow.step(graph)
     passed, output = run_tests(workdir)
+    graph.save(workdir / "graph")
     return workdir, graph, passed, output
 
 

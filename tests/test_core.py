@@ -174,7 +174,7 @@ def test_invalid_await_is_rejected_before_running():
 
 def _tight_parent_child(messages):
     """Parent delegates one child (tight: delegate→wait→done in one block)."""
-    if "child task" in first_user_text(messages):
+    if "depth 1" in first_user_text(messages):
         return '```repl\ndone("c")\n```'
     return (
         "```repl\n"
@@ -216,13 +216,13 @@ def test_tight_delegation_records_supervising_then_resume():
 def test_launch_subagents_fans_out_in_order():
     def reply_for(messages):
         task = first_user_text(messages)
-        if "task a" in task:
+        if "query: str, 6 chars" in task:
             return '```repl\ndone("A")\n```'
-        if "task b" in task:
+        if "query: str, 7 chars" in task:
             return '```repl\ndone("B")\n```'
         return (
             "```repl\n"
-            'rs = await launch_subagents([{"query": "task a"}, {"query": "task b"}])\n'
+            'rs = await launch_subagents([{"query": "task a"}, {"query": "task bb"}])\n'
             'done("|".join(rs))\n'
             "```"
         )
@@ -253,7 +253,7 @@ def test_structured_child_result_is_parsed_not_a_json_string():
 
     def reply_for(messages):
         task = first_user_text(messages)
-        if "child task" in task:
+        if "depth 1" in task:
             return '```repl\ndone([{"word": "AGENT"}])\n```'
         return (
             "```repl\n"
@@ -277,7 +277,7 @@ def test_resume_does_not_leak_child_result_into_prompt():
 
     def reply_for(messages):
         task = first_user_text(messages)
-        if "child task" in task:
+        if "depth 1" in task:
             return f'```repl\ndone("{secret}")\n```'
         prior_assistant = "\n".join(
             m["content"] for m in messages if m["role"] == "assistant"
@@ -307,7 +307,7 @@ def test_recursive_depth_chain():
 
     def reply_for(messages):
         task = first_user_text(messages)
-        m = re.search(r"level:(\d+)", task)
+        m = re.search(r"depth (\d+) of", task)
         level = int(m.group(1)) if m else 0
         if level >= max_depth:
             return f'```repl\ndone("leaf@{level}")\n```'

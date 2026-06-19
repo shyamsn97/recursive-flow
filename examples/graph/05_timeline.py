@@ -20,6 +20,7 @@ Run:
 from __future__ import annotations
 
 import rflow
+from rflow.utils.example_runs import save_example_graph
 
 ROOT_SPLIT = (
     "```repl\n"
@@ -101,6 +102,7 @@ def main() -> None:
         if kids and all(k.finished for k in kids):
             print(snap.tree())
             break
+    save_example_graph(graph, __file__, "graph-timeline")
 
 
 if __name__ == "__main__":

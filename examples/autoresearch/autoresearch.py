@@ -226,7 +226,7 @@ def build_prompt_builder():
         "autoresearch_recursion",
         AUTORESEARCH_RECURSION_TEXT,
         title="Autoresearch",
-        after="examples",
+        after="format",
     )
 
 

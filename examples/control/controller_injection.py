@@ -14,6 +14,7 @@ Run:
 from __future__ import annotations
 
 import rflow
+from rflow.utils.example_runs import example_run_dir, save_example_graph
 
 OBSERVATION = "Injected controller observation: finalize using this note."
 
@@ -84,6 +85,13 @@ def observation_injection() -> None:
     assert graph.result() == "used the injected controller observation"
     print_states("after adopting + stepping: run reacted and finished", graph)
     print(f"result={graph.result()!r}")
+    save_example_graph(
+        graph,
+        __file__,
+        "controller-injection",
+        out_dir=example_run_dir(__file__, "controller-injection")
+        / "observation-injection",
+    )
 
 
 def terminate_to_finalize() -> None:
@@ -98,6 +106,13 @@ def terminate_to_finalize() -> None:
     assert graph.result() == "controller stopped the run"
     print_states("after terminate(): forced a clean done(...)", graph)
     print(f"result={graph.result()!r}")
+    save_example_graph(
+        graph,
+        __file__,
+        "controller-injection",
+        out_dir=example_run_dir(__file__, "controller-injection")
+        / "terminate-to-finalize",
+    )
 
 
 def main() -> None:

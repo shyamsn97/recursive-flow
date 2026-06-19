@@ -22,6 +22,7 @@ Run with:
 from __future__ import annotations
 
 import rflow
+from rflow.utils.example_runs import example_run_dir, save_example_graph
 
 
 def ask(llm: rflow.LLMClient, question: str) -> str:
@@ -50,6 +51,14 @@ def demo_flow_as_llm():
     )
     answer = ask(agent, "Compute 17 * 23 using a ```repl``` block, then call done().")
     print(answer, "\n")
+    if agent.graph is not None:
+        save_example_graph(
+            agent.graph,
+            __file__,
+            "drop-in-llm",
+            out_dir=example_run_dir(__file__, "drop-in-llm") / "flow-as-llm",
+        )
+    agent.close()
 
 
 def demo_nested_flow():
@@ -65,6 +74,15 @@ def demo_nested_flow():
     )
     answer = outer.run("What's the 7th Fibonacci number? Use ```repl``` to compute.")
     print(answer)
+    if outer.graph is not None:
+        save_example_graph(
+            outer.graph,
+            __file__,
+            "drop-in-llm",
+            out_dir=example_run_dir(__file__, "drop-in-llm") / "nested-flow",
+        )
+    outer.close()
+    inner.close()
 
 
 if __name__ == "__main__":

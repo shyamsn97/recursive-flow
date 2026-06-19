@@ -1,10 +1,10 @@
-"""Core REPL tools, assembled once per agent by :meth:`rflow.flow.Flow.build_tools`.
+"""Core REPL tools, assembled once per agent by :meth:`rflow.base.BaseFlow.build_tools`.
 
-Each ``make_*`` factory returns a closure bound to the live ``Flow`` and the
-agent's REPL ``env`` dict — *not* its ``Graph``. The per-agent context the tools
-need (``ENV_AGENT_ID``, ``ENV_OUTPUT_SCHEMA``) is seeded into ``env`` by
-``repl_for`` and read at call time, so a single build serves the agent for its
-whole life. They raise the existing :class:`rflow.repl.DoneSignal` and are
+Each ``make_*`` factory returns a closure bound to the live ``BaseFlow`` and the
+agent's :class:`rflow.runtime.context.EngineContext` — *not* its ``Graph``. The
+per-agent context is seeded by :meth:`rflow.base.BaseFlow.seed_agent_context` and
+read at call time, so a single build serves the agent for its whole life. They
+raise the existing :class:`rflow.repl.DoneSignal` and are
 ``@tool``-decorated so the prompt's tool list can describe them. ``History`` is
 the read-only ``HISTORY`` object an agent uses to re-read its own past turns when
 the model's context has been windowed (it does wrap the ``Graph``, since it is a
@@ -17,36 +17,29 @@ import json
 import re
 from typing import TYPE_CHECKING, Any
 
+from rflow.base import BaseFlow
 from rflow.graph import ChildHandle, WaitRequest
 from rflow.repl import DoneSignal
-from rflow.tools import get_tool_metadata, tool
+from rflow.runtime.context import EngineContext
 from rflow.tools.registry import HIDDEN_REPL_TOOL_NAMES
+from rflow.tools.tools import get_tool_metadata, tool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from rflow.flow import Flow
     from rflow.graph import Graph
 
-#: Keys the engine seeds into each agent's REPL ``env`` so the tool closures can
-#: read their per-agent context at call time (instead of capturing the Graph).
-#: ``env`` is the REPL's hidden execution dict — never shown to the model — and
-#: is the same object the engine reads ``ENV_DONE_RESULT`` back from.
-ENV_AGENT_ID = "__agent_id__"
-ENV_OUTPUT_SCHEMA = "__output_schema__"
-ENV_DONE_RESULT = "DONE_RESULT"
 
+def make_done(flow: BaseFlow, engine_context: EngineContext):
+    """Build ``done(answer)``; enforces the schema in ``engine_context``.
 
-def make_done(flow: Flow, env: dict[str, Any]):
-    """Build ``done(answer)``; enforces the schema stashed in ``env``.
-
-    Reads ``env[ENV_OUTPUT_SCHEMA]`` (set per-agent by ``repl_for``) so the same
-    factory works for any agent — no Graph captured.
+    Reads context set per-agent by ``seed_agent_context`` so the same factory
+    works for any agent — no Graph captured.
     """
 
     @tool("Finish and return this agent's final answer.", proxy=True)
     def done(answer: Any) -> None:
-        schema = env.get(ENV_OUTPUT_SCHEMA)
+        schema = engine_context.output_schema
         if schema is not None:
             content = answer if isinstance(answer, str) else json.dumps(answer)
             # Validate against the schema; a mismatch raises StructuredOutputError
@@ -55,7 +48,7 @@ def make_done(flow: Flow, env: dict[str, Any]):
             result = content
         else:
             result = str(answer).strip()
-        env[ENV_DONE_RESULT] = result
+        engine_context.done_result = result
         print(f"[done] {result}")
         raise DoneSignal()
 
@@ -85,11 +78,11 @@ def make_wait():
     return flow_wait
 
 
-def make_delegate(flow: Flow, env: dict[str, Any]):
-    """Build the hidden ``flow_delegate(...)`` primitive for ``env``'s agent.
+def make_delegate(flow: BaseFlow, engine_context: EngineContext):
+    """Build the hidden ``flow_delegate(...)`` primitive for this agent.
 
-    Reads ``env[ENV_AGENT_ID]`` at call time to know which agent is spawning, so
-    the same factory works for any agent — no Graph captured.
+    Reads ``engine_context.agent_id`` at call time to know which agent is
+    spawning, so the same factory works for any agent — no Graph captured.
     """
 
     @tool(
@@ -108,7 +101,7 @@ def make_delegate(flow: Flow, env: dict[str, Any]):
         output_schema: Any | None = None,
     ) -> ChildHandle | str:
         return flow.spawn_child(
-            env[ENV_AGENT_ID], name, query, inputs, model, output_schema
+            engine_context.agent_id, name, query, inputs, model, output_schema
         )
 
     return flow_delegate
@@ -135,10 +128,17 @@ def make_launch_subagents(flow_delegate, flow_wait):
                 )
             if "query" not in spec:
                 raise KeyError("launch_subagents(...) spec missing required 'query'")
+            inputs = spec.get("inputs")
+            if isinstance(inputs, dict) and "query" in inputs:
+                raise ValueError(
+                    "launch_subagents(...) spec inputs must not contain reserved "
+                    "key 'query'; put the child task in the top-level spec "
+                    "'query' and use another input key for supporting text"
+                )
             handle = flow_delegate(
                 name=spec.get("name", "subagent"),
                 query=spec["query"],
-                inputs=spec.get("inputs"),
+                inputs=inputs,
                 model=spec.get("model", "default"),
                 output_schema=spec.get("output_schema"),
             )
@@ -173,8 +173,8 @@ def make_show_vars(namespace: dict[str, Any]):
     return SHOW_VARS
 
 
-def make_history(flow: Flow, env: dict[str, Any]) -> "History":
-    """Build this agent's ``HISTORY`` view, mirroring ``make_done(flow, env)``.
+def make_history(flow: BaseFlow, engine_context: EngineContext) -> "History":
+    """Build this agent's ``HISTORY`` view, mirroring ``make_done``.
 
     The view resolves the agent's *live* graph by id at call time (never captures
     a ``Graph``), so it stays correct across deep-copy-on-adopt, ``inject``, and
@@ -182,7 +182,7 @@ def make_history(flow: Flow, env: dict[str, Any]) -> "History":
     is host-bound: a remote runtime object-proxies it so the slice computed over
     the full host trajectory is all that crosses the wire.
     """
-    return History(lambda: flow.graph.agents.get(env[ENV_AGENT_ID]))
+    return History(lambda: flow.graph.agents.get(engine_context.agent_id))
 
 
 class History:
@@ -247,9 +247,6 @@ class History:
 
 
 __all__ = [
-    "ENV_AGENT_ID",
-    "ENV_DONE_RESULT",
-    "ENV_OUTPUT_SCHEMA",
     "History",
     "make_delegate",
     "make_done",

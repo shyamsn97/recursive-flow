@@ -29,6 +29,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 import rflow
+from rflow.utils.example_runs import example_run_dir, save_example_graph
 
 
 class WordHit(BaseModel):
@@ -208,10 +209,22 @@ def main() -> None:
     summarize("Variation A: prompt root.cols to scan columns directly", cols_graph)
     validate_result("Variation A", cols_graph)
     print(f"saved -> {cols_dir}")
+    save_example_graph(
+        cols_graph,
+        __file__,
+        "injection-variants",
+        out_dir=example_run_dir(__file__, "injection-variants") / "variant-cols",
+    )
 
     summarize("Variation B: prompt root to write a direct scanner", root_graph)
     validate_result("Variation B", root_graph)
     print(f"saved -> {root_dir}")
+    save_example_graph(
+        root_graph,
+        __file__,
+        "injection-variants",
+        out_dir=example_run_dir(__file__, "injection-variants") / "variant-root",
+    )
 
 
 if __name__ == "__main__":

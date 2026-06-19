@@ -24,6 +24,7 @@ import threading
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 
+from rflow.base import BaseFlow
 from rflow.clients.llm import LLMClient, LLMUsage
 from rflow.clients.llm_channel import LLMChannel
 from rflow.code import check_wait_syntax, find_code_blocks
@@ -48,16 +49,19 @@ from rflow.integrations.structured import (
     StructuredOutputParser,
     json_schema_for,
 )
-from rflow.prompts import DEFAULT_BUILDER, SYSTEM_PROMPT, messages
+from rflow.prompts import (
+    DEFAULT_BUILDER,
+    SYSTEM_PROMPT,
+    PromptBuilder,
+    messages,
+)
+from rflow.runtime.context import EngineContext
+from rflow.runtime.env import agent_process_env
 from rflow.runtime.runtime import LocalRuntime, RemoteRepl, ReplBackend, Runtime
 from rflow.tools import tool
 from rflow.tools.builtins import (
-    ENV_AGENT_ID,
-    ENV_DONE_RESULT,
-    ENV_OUTPUT_SCHEMA,
     make_delegate,
     make_done,
-    make_history,
     make_launch_subagents,
     make_show_vars,
     make_wait,
@@ -89,7 +93,7 @@ class ResumeError(RuntimeError):
         )
 
 
-class Flow:
+class Flow(BaseFlow):
     """A minimal, stateless recursive-flow engine.
 
     A :class:`Flow` holds only configuration — the LLM client and the core
@@ -133,14 +137,16 @@ class Flow:
         max_iters: int | None = 20,
         child_max_iters: int | None = 20,
         max_concurrency: int = 8,
-        max_output_length: int = 10_000,
+        max_output_length: int = 4_000,
         max_budget: int | None = None,
         max_messages: int | None = None,
         eager_children: bool = False,
         pool: object | None = None,
         system_prompt: str | None = None,
+        prompt_builder: PromptBuilder | None = None,
         show_vars: bool = False,
         runtime: Runtime | None = None,
+        enable_structured_output: bool = True,
     ) -> None:
         self.llm = llm
         self.max_depth = max_depth
@@ -151,10 +157,11 @@ class Flow:
         self.max_budget = max_budget
         self.max_messages = max_messages
         self.eager_children = eager_children
+        self.enable_structured_output = enable_structured_output
         # ``system_prompt=None`` renders the live prompt builder per turn (the
         # default). Pass a string to force a fixed system prompt (escape hatch).
         self.system_prompt = system_prompt
-        self.prompt_builder = DEFAULT_BUILDER
+        self.prompt_builder = prompt_builder or DEFAULT_BUILDER
         self.show_vars = show_vars
         # Where each agent's code runs. Defaults to the in-process
         # :class:`LocalRuntime`; pass a ``DockerRuntime`` / sandbox runtime (see
@@ -191,6 +198,11 @@ class Flow:
         self._step = 0
         self._terminate_requested: set[str] = set()
         self._lock = threading.RLock()
+
+    @property
+    def llm_clients(self) -> dict[str, LLMClient]:
+        """Named LLM clients available for model routing."""
+        return self._llm_clients
 
     def close(self) -> None:
         """Release the LLM channel's HTTP thread pool.
@@ -340,8 +352,8 @@ class Flow:
     def _adopt(self, graph: Graph) -> None:
         """Take ``graph`` as run state, deep-copied so the original stays frozen.
 
-        Nothing to re-point: ``HISTORY`` resolves the live graph by agent id, so a
-        copy/adopt/edit is reflected automatically (see ``make_history``).
+        Repls are re-created lazily after adoption; the graph copy becomes the
+        live run state for subsequent planning and execution.
         """
         self.graph = graph.copy(deep=True)
         self._step = self.graph.max_global_step() or 0
@@ -631,7 +643,7 @@ class Flow:
             self._append(agent, ErrorOutput(error="invalid_wait", content=err))
             return
         repl = self.repl_for(agent)
-        repl.env.pop(ENV_DONE_RESULT, None)
+        repl.engine_context.done_result = None
         suspended, payload = repl.start(code)
         self.record_observation(agent, repl, suspended, payload)
 
@@ -642,7 +654,7 @@ class Flow:
         results = [self._child_result(aid) for aid in sup.waiting_on]
         self._append(agent, ResumeAction(resumed_from=list(sup.waiting_on)))
         repl = self.repl_for(agent)
-        repl.env.pop(ENV_DONE_RESULT, None)
+        repl.engine_context.done_result = None
         suspended, payload = repl.resume(results)
         self.record_observation(
             agent, repl, suspended, payload, resumed_from=list(sup.waiting_on)
@@ -663,7 +675,7 @@ class Flow:
         recorded so a runaway ``print`` can't blow the next prompt.
         """
         rf = list(resumed_from or [])
-        done = repl.env.get(ENV_DONE_RESULT)
+        done = repl.engine_context.done_result
         if done is not None:
             out = self.truncate_output(payload if isinstance(payload, str) else "")
             self._append(
@@ -718,7 +730,11 @@ class Flow:
         """Cap REPL stdout at ``max_output_length`` chars (0 disables the cap)."""
         limit = self.max_output_length
         if limit and len(output) > limit:
-            return output[:limit] + "\n...<truncated>"
+            omitted = len(output) - limit
+            return (
+                output[:limit]
+                + f"\n...<truncated {omitted} chars; keep full data in variables>"
+            )
         return output
 
     def _budget_exceeded(self, agent: Graph) -> int | None:
@@ -815,6 +831,26 @@ class Flow:
 
     # ── REPL setup ────────────────────────────────────────────────────
 
+    def seed_agent_context(self, repl: ReplBackend, agent: Graph) -> None:
+        """Seed per-agent engine context and public process env.
+
+        Called once when a backend is first created for ``agent``. Override to
+        customize either the trusted host-side context used by tool closures or
+        the public ``RFLOW_*`` process environment visible to agent code.
+        """
+        repl.engine_context = EngineContext(
+            agent_id=agent.agent_id,
+            output_schema=agent.output_schema,
+        )
+        repl.process_env.update(
+            agent_process_env(
+                agent_id=agent.agent_id,
+                depth=agent.depth,
+                parent_agent_id=agent.parent_agent_id,
+                max_depth=self.max_depth,
+            )
+        )
+
     def repl_for(self, agent: Graph) -> ReplBackend:
         """Get (creating lazily, on first execution) this agent's REPL backend.
 
@@ -823,15 +859,14 @@ class Flow:
         time — so heavy backends (Docker/Modal) only boot when work arrives, in
         the worker thread that steps the agent rather than under the engine lock.
         :meth:`make_repl` picks the backend (the runtime mints it);
-        :meth:`_seed_repl` binds the agent's tools, inputs, and per-agent ``env``
-        context. Override either seam to customize.
+        :meth:`seed_agent_context` seeds per-agent context;
+        :meth:`_seed_repl` binds tools and inputs. Override any seam to customize.
         """
         repl = self.repls.get(agent.agent_id)
         if repl is None:
             repl = self.make_repl(agent)
-            repl.env[ENV_AGENT_ID] = agent.agent_id
-            repl.env[ENV_OUTPUT_SCHEMA] = agent.output_schema
-            self._seed_repl(repl, agent, self.build_tools(repl.env))
+            self.seed_agent_context(repl, agent)
+            self._seed_repl(repl, agent, self.build_tools(repl.engine_context))
             self.repls[agent.agent_id] = repl
         return repl
 
@@ -848,14 +883,15 @@ class Flow:
     def _seed_repl(self, repl: ReplBackend, agent: Graph, tools: dict) -> None:
         """Install ``agent``'s tools and inputs into a freshly created backend.
 
-        In-process backends get the full tool namespace (including ``HISTORY``,
-        built by ``build_tools``) plus optional ``SHOW_VARS``. Remote backends run
-        code in a sandbox, so ``seed`` routes each tool by its kind: host-bound
-        tools (``done``/``flow_delegate``/``HISTORY``) are proxied, the rest are
-        shipped in to run locally (see :meth:`RemoteRepl.seed`).
+        In-process backends get the full tool namespace plus optional
+        ``SHOW_VARS``. Remote backends run code in a sandbox, so ``seed`` copies
+        public ``RFLOW_*`` env vars and routes each tool by kind: host-bound tools
+        are proxied, the rest are shipped in to run locally (see
+        :meth:`RemoteRepl.seed`).
         """
+        repl_inputs = {"query": agent.query, **agent.inputs}
         if isinstance(repl, RemoteRepl):
-            repl.seed(tools, agent.inputs)
+            repl.seed(tools, repl_inputs)
             return
         repl.namespace.update(tools)
         if self.show_vars:
@@ -863,30 +899,30 @@ class Flow:
         # Inputs live under a single ``INPUTS`` dict (read as ``INPUTS["key"]``)
         # rather than as top-level names, so an input key can never shadow a
         # real REPL variable, tool, or import.
-        repl.namespace["INPUTS"] = dict(agent.inputs)
+        repl.namespace["INPUTS"] = repl_inputs
 
-    def build_tools(self, env: dict) -> dict:
+    def build_tools(self, engine_context: EngineContext | None = None) -> dict:
         """Assemble the core REPL tools (see :mod:`rflow.tools.builtins`).
 
-        The tools are bound to ``env`` (the REPL's hidden execution dict), not to
-        a Graph: they read their per-agent context — agent id, output schema —
-        from ``env`` at call time, so this is built once per agent in
+        The tools are bound to ``engine_context``, not to a Graph: they read
+        per-agent control state — agent id, output schema, done result — from it
+        at call time, so this is built once per agent in
         :meth:`repl_for`. For most cases, register tools on the runtime
         (``runtime.register_tools(FILE_TOOLS)``) and they are merged in here.
-        Override (typically ``super().build_tools(env) | extra``) only when a
-        tool must close over ``env`` or the flow. ``flow_delegate``/``flow_wait``
-        are hidden control primitives that ``launch_subagents`` composes; the
-        rest are model-facing.
+        Override (typically ``super().build_tools(engine_context) | extra``) only
+        when a tool must close over the context or the flow. ``flow_delegate`` /
+        ``flow_wait`` are hidden control primitives that ``launch_subagents``
+        composes; the rest are model-facing.
         """
-        delegate = make_delegate(self, env)
+        engine_context = engine_context or EngineContext()
+        delegate = make_delegate(self, engine_context)
         wait = make_wait()
         tools = {
-            "done": make_done(self, env),
+            "done": make_done(self, engine_context),
             "flow_wait": wait,
             "flow_delegate": delegate,
             "launch_subagents": make_launch_subagents(delegate, wait),
             "llm_query_batched": self.llm_query_batched,
-            "HISTORY": make_history(self, env),
         }
         # Tools registered on the runtime (e.g. ``runtime.register_tools(
         # FILE_TOOLS)``) reach every agent and its children. Core control tools
@@ -999,7 +1035,7 @@ class Flow:
         """
         if self.system_prompt is not None:
             system = self.system_prompt
-            if graph.output_schema is not None:
+            if graph.output_schema is not None and self.enable_structured_output:
                 system = f"{system}\n\n{self._schema_instruction(graph.output_schema)}"
             return system
         return self.prompt_builder.build(self, graph)
@@ -1029,7 +1065,10 @@ class Flow:
         Override to change the bootstrap framing.
         """
         return messages.first_prompt(
-            query, inputs, depth=depth, max_depth=self.max_depth
+            query,
+            inputs,
+            depth=depth,
+            max_depth=self.max_depth,
         )
 
     _RESERVED = frozenset(
@@ -1039,6 +1078,7 @@ class Flow:
             "flow_delegate",
             "launch_subagents",
             "llm_query_batched",
+            "query",
             "HISTORY",
             "SHOW_VARS",
         }

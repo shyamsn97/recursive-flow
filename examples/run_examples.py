@@ -87,13 +87,13 @@ EXAMPLES: list[Example] = [
     Example(
         "graph-save-load",
         "examples/graph/04_save_load.py",
-        args=("--out-dir", "{tmp}/save-load-demo"),
+        args=("--out-dir", "{tmp}/graph-save-load"),
     ),
     Example("graph-timeline", "examples/graph/05_timeline.py"),
     Example(
         "graph-fork",
         "examples/graph/06_fork.py",
-        args=("--out-dir", "{tmp}/fork-demo"),
+        args=("--out-dir", "{tmp}/graph-fork"),
     ),
     Example("graph-render", "examples/graph/07_render.py"),
     Example(
@@ -157,7 +157,10 @@ EXAMPLES: list[Example] = [
         "needle-haystack-filesystem",
         "examples/needle/filesystem.py",
         category="live",
-        args=("--num-files", "50", "--no-viz", "--max-iters", "8"),
+        args=(
+            "--num-files", "50", "--no-viz", "--max-iters", "8",
+            "--out-dir", "{tmp}/needle-filesystem",
+        ),
         env=("OPENAI_API_KEY",),
         modules=("openai",),
         timeout=300,

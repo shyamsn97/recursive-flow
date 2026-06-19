@@ -105,6 +105,8 @@ def main():
                         view(graph)
 
             print(f"\n{graph.result() or '(no result)'}\n")
+            path = graph.save(workdir / "graph")
+            print(f"Graph saved to {path}")
             print(f"Files written under {workdir}")
     finally:
         flow.close()

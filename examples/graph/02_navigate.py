@@ -18,6 +18,7 @@ Run:
 from __future__ import annotations
 
 import rflow
+from rflow.utils.example_runs import save_example_graph
 
 
 def build_graph() -> rflow.Graph:
@@ -113,6 +114,7 @@ def main() -> None:
             f"{sub.agent_id:<24} parent_id={sub.parent_id!s:<12} "
             f"parent_node_id={(sub.parent_node_id or '-')[:14]}"
         )
+    save_example_graph(g, __file__, "graph-navigate")
 
 
 if __name__ == "__main__":

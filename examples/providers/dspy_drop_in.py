@@ -15,6 +15,7 @@ import dspy
 
 import rflow
 from rflow.integrations.dspy import RecursiveFlowLM
+from rflow.utils.example_runs import save_example_graph
 
 
 def main() -> None:
@@ -29,6 +30,8 @@ def main() -> None:
     qa = dspy.ChainOfThought("question -> answer")
     result = qa(question="What is 17 * 23? Show a short calculation.")
     print(result.answer)
+    if flow.graph is not None:
+        save_example_graph(flow.graph, __file__, "dspy-drop-in")
 
     flow.close()
 

@@ -1,10 +1,12 @@
-"""Phase 3 — tools, builtins, HISTORY, and the ported prompt builder."""
+"""Phase 3 — tools, builtins, history helpers, and the ported prompt builder."""
 
 from __future__ import annotations
 
 import pytest
 
 from rflow import (
+    BaseFlow,
+    BaseOutputParser,
     DEFAULT_BUILDER,
     FILE_TOOLS,
     Flow,
@@ -13,14 +15,13 @@ from rflow import (
     get_tool_metadata,
     tool,
 )
+from rflow.prompts.default import MAX_STATIC_PROMPT_CHARS
 from rflow.graph import ChildHandle, WaitRequest
 from rflow.integrations.structured import StructuredOutputError
 from rflow.repl import DoneSignal
+from rflow.runtime.context import EngineContext
 from rflow.tools import format_tool_line
 from rflow.tools.builtins import (
-    ENV_AGENT_ID,
-    ENV_DONE_RESULT,
-    ENV_OUTPUT_SCHEMA,
     History,
     make_delegate,
     make_done,
@@ -114,7 +115,7 @@ def test_file_tools_collection_decorated():
 def test_partition_repl_namespace_hides_control_tools():
     flow = make_flow()
     flow.start("q")
-    namespace = flow.build_tools({})
+    namespace = flow.build_tools()
     visible, hidden = partition_repl_namespace(namespace)
     assert set(hidden) == set(HIDDEN_REPL_TOOL_NAMES)
     assert "done" in visible and "launch_subagents" in visible
@@ -159,26 +160,28 @@ def test_make_launch_subagents_spec_validation():
         asyncio.run(launch([123]))
     with pytest.raises(KeyError, match="query"):
         asyncio.run(launch([{"name": "x"}]))
+    with pytest.raises(ValueError, match="inputs must not contain reserved key 'query'"):
+        asyncio.run(launch([{"name": "x", "query": "q", "inputs": {"query": "bad"}}]))
     out = asyncio.run(launch([{"name": "a", "query": "q"}, {"name": "b", "query": "q"}]))
     assert out == ["a", "b"]
 
 
 def test_make_done_plain_and_structured():
     flow = make_flow()
-    # plain: no schema in env
-    env: dict = {}
-    done = make_done(flow, env)
+    # plain: no schema in engine context
+    context = EngineContext()
+    done = make_done(flow, context)
     with pytest.raises(DoneSignal):
         done("  hi  ")
-    assert env[ENV_DONE_RESULT] == "hi"
+    assert context.done_result == "hi"
 
-    # structured: schema stashed in env (as repl_for does per agent)
+    # structured: schema stashed in context (as repl_for does per agent)
     schema = {"type": "object", "properties": {"x": {"type": "integer"}}, "required": ["x"]}
-    env2: dict = {ENV_OUTPUT_SCHEMA: schema}
-    done2 = make_done(flow, env2)
+    context2 = EngineContext(output_schema=schema)
+    done2 = make_done(flow, context2)
     with pytest.raises(DoneSignal):
         done2({"x": 5})
-    assert env2[ENV_DONE_RESULT] == '{"x": 5}'
+    assert context2.done_result == '{"x": 5}'
     with pytest.raises(StructuredOutputError):
         done2({"x": "nope"})
 
@@ -198,15 +201,15 @@ def test_history_over_finished_run():
     assert all(m["role"] != "system" for m in msgs)
     assert hist.last(1) == [msgs[-1]]
     assert hist.read(0) == msgs[0]
-    assert "summarize" in hist.text()
-    assert hist.grep("summarize")
+    assert "query: str, 14 chars" in hist.text()
+    assert hist.grep("query: str")
 
 
-def test_history_injected_into_repl_namespace():
+def test_history_not_injected_into_repl_namespace_by_default():
     flow = make_flow(DONE_OK)
     agent = flow.start("q")
     repl = flow.repl_for(agent)
-    assert isinstance(repl.namespace["HISTORY"], History)
+    assert "HISTORY" not in repl.namespace
     assert "SHOW_VARS" not in repl.namespace  # off by default
 
 
@@ -226,7 +229,7 @@ def test_make_history_tracks_live_graph_across_functional_adopt():
     # no rebinding of the REPL's HISTORY.
     flow = make_flow(DONE_OK)
     graph = flow.start("q")
-    hist = make_history(flow, {ENV_AGENT_ID: graph.agent_id})
+    hist = make_history(flow, EngineContext(agent_id=graph.agent_id))
     before = len(hist)
     graph = flow.step(graph)
     assert len(hist) > before
@@ -238,17 +241,60 @@ def test_make_history_tracks_live_graph_across_functional_adopt():
 def test_static_system_prompt_content():
     assert "CONTEXT" not in SYSTEM_PROMPT
     assert "llm_query_batched" in SYSTEM_PROMPT
-    assert "HISTORY" in SYSTEM_PROMPT
+    assert "HISTORY" not in SYSTEM_PROMPT
     assert "launch_subagents" in SYSTEM_PROMPT
+    assert "Never put a `query` key inside `inputs`" in SYSTEM_PROMPT
+    assert "Never dump large `INPUTS` values" in SYSTEM_PROMPT
+    assert 'INPUTS["query"][:' not in SYSTEM_PROMPT
+    assert "Use exactly one block per assistant" in SYSTEM_PROMPT
+    assert "never include a second ```repl fence" in SYSTEM_PROMPT
+    assert "act as an orchestrator, not a solver" in SYSTEM_PROMPT
+    assert "Do not call `done(...)` on turn 1 without first inspecting `INPUTS`" in SYSTEM_PROMPT
+    # The default prompt ships no worked code examples (matches upstream's live
+    # RLM prompt); the old generic recipes used to leak their shape into runs.
+    assert "chunk and batch long inputs" not in SYSTEM_PROMPT
+    assert "recursive delegation" not in SYSTEM_PROMPT
+    assert "delegated units" not in SYSTEM_PROMPT
+    assert "Repair the integrated result" not in SYSTEM_PROMPT
+    assert "**Example 1" not in SYSTEM_PROMPT
+
+
+def test_flow_implements_base_contract():
+    flow = make_flow()
+    assert isinstance(flow, BaseFlow)
+    assert isinstance(flow.output_parser, BaseOutputParser)
+    assert flow.llm_clients["default"] is flow.llm
+
+
+def test_static_system_prompt_length_ceiling():
+    raw = DEFAULT_BUILDER.build()
+    assert SYSTEM_PROMPT == raw
+    assert len(raw) < MAX_STATIC_PROMPT_CHARS
+
+
+def test_enable_structured_output_false_omits_schema_prompt():
+    flow = make_flow(enable_structured_output=False)
+    agent = flow.start("q")
+    prompt = flow.build_system_prompt(agent)
+    assert "## Structured Output" not in prompt
+
+
+def test_enable_structured_output_false_skips_schema_section():
+    flow = make_flow(enable_structured_output=False)
+    schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+    agent = flow.start("q", output_schema=schema)
+    prompt = flow.build_system_prompt(agent)
+    assert "## Structured Output" in prompt
 
 
 def test_build_system_prompt_has_dynamic_tool_docs():
     flow = make_flow()
     agent = flow.start("q")
     prompt = flow.build_system_prompt(agent)
-    assert "## Tools" in prompt
-    assert "`done(" in prompt and "`launch_subagents(" in prompt
-    assert "`llm_query_batched(" in prompt
+    assert "\n## Tools\n\n" not in prompt
+    assert "`done(" in prompt
+    assert "launch_subagents" in prompt
+    assert "llm_query_batched" in prompt
     # hidden control tools are not advertised
     assert "`flow_delegate(" not in prompt
     # recursion status
@@ -268,7 +314,7 @@ def test_system_prompt_is_rendered_once_and_stored_on_graph():
     agent = flow.start("q")
     # builder path stores the full rendered prompt on the graph (not "")
     assert agent.system_prompt
-    assert "## Tools" in agent.system_prompt
+    assert "launch_subagents" in agent.system_prompt
     # survives serialization round-trip
     from rflow import Graph
 
@@ -310,10 +356,48 @@ def test_tool_section_lists_models_when_multimodel():
 def test_first_prompt_has_manifest_and_depth_note():
     flow = make_flow()
     msg = flow.first_prompt("do a thing", {"doc": "abc"}, depth=0)
-    assert "do a thing" in msg
-    assert 'INPUTS["doc"]  (str, 3 chars)' in msg
+    assert "Your REPL INPUTS contain:" in msg
+    assert "- query: str, 10 chars" in msg
+    assert "- doc: str, 3 chars" in msg
+    assert "Total input chars: 13." in msg
+    assert 'INPUTS["query"]' in msg
     assert "recursion depth 0" in msg
+    assert "do a thing" not in msg  # query is injected into INPUTS, not dumped
     assert "abc" not in msg  # values are never dumped
+    assert 'INPUTS["query"][:500]' in msg
+    assert 'INPUTS["query"][:2000]' not in msg
+    assert "Print only small bounded samples" in msg
+    assert "Never print a full large input" in msg
+
+
+def test_large_first_prompt_warns_not_to_print_contents():
+    flow = make_flow()
+    msg = flow.first_prompt("x" * 50_001, {}, depth=0)
+    assert "Print only tiny samples" in msg
+    assert 'INPUTS["query"][:500]' in msg
+    assert 'INPUTS["query"][:2000]' not in msg
+
+
+def test_first_prompt_treats_separate_files_as_delegation_signal():
+    flow = make_flow()
+    msg = flow.first_prompt("write separate files: index.html, style.css, app.js", {}, depth=0)
+    normalized = " ".join(msg.split())
+    assert "independent units that need tools" in normalized
+    assert "parent should coordinate" in normalized
+    assert "Do not start producing multiple final artifacts inline" in normalized
+    assert "await launch_subagents" in normalized
+    assert 'Never put `"query"` inside a child `inputs` dict' in normalized
+
+
+def test_repl_output_truncated_by_default():
+    flow = make_flow('```repl\nprint("x" * 5000)\n```')
+    graph = flow.start("print a lot")
+    flow.step()
+    flow.step()
+    out = graph.current().output
+    assert len(out) < 4_100
+    assert "...<truncated" in out
+    assert "keep full data in variables" in out
 
 
 def test_first_prompt_depth_limit_note():
@@ -335,12 +419,14 @@ def test_no_code_block_message_used():
 # ── reserved names + show_vars ──────────────────────────────────────────
 
 
-def test_reserved_names_include_history_and_tools():
-    for name in ("HISTORY", "SHOW_VARS", "llm_query_batched", "done"):
+def test_reserved_names_include_query_history_and_tools():
+    for name in ("query", "HISTORY", "SHOW_VARS", "llm_query_batched", "done"):
         assert name in Flow._RESERVED
     flow = make_flow()
     with pytest.raises(ValueError, match="reserved"):
         flow.start("q", {"HISTORY": "x"})
+    with pytest.raises(ValueError, match="reserved"):
+        flow.start("q", {"query": "x"})
 
 
 def test_show_vars_opt_in():
@@ -349,7 +435,7 @@ def test_show_vars_opt_in():
     repl = flow.repl_for(agent)
     assert "SHOW_VARS" in repl.namespace
     # Inputs live under INPUTS now, not as a top-level `doc` variable.
-    assert repl.namespace["INPUTS"] == {"doc": "hello"}
+    assert repl.namespace["INPUTS"] == {"query": "q", "doc": "hello"}
     assert "doc" not in repl.namespace
     show = repl.namespace["SHOW_VARS"]
     out = show()
@@ -374,9 +460,9 @@ def test_make_show_vars_filters_tools_and_hidden():
 
 
 class FileFlow(Flow):
-    def build_tools(self, env):
+    def build_tools(self, engine_context=None):
         file_tools = {get_tool_metadata(fn).name: fn for fn in FILE_TOOLS}
-        return super().build_tools(env) | file_tools
+        return super().build_tools(engine_context) | file_tools
 
 
 def test_file_flow_writes_and_reads(tmp_path, monkeypatch):
@@ -393,7 +479,17 @@ def test_file_flow_writes_and_reads(tmp_path, monkeypatch):
     assert (tmp_path / "out.txt").read_text() == "generated"
     # file tools advertised in the prompt
     agent = flow.graph
-    assert "`write_file(" in flow.build_system_prompt(agent)
+    prompt = flow.build_system_prompt(agent)
+    assert "\n## Tools\n\n" in prompt
+    tools_section = prompt.split("\n## Tools\n\n", 1)[1].split("\n\n## ", 1)[0]
+    assert "`write_file(" in tools_section
+    assert "act as an orchestrator, not a solver" in prompt
+    assert "`done(" in prompt
+    assert "- `done(" not in tools_section
+    assert "- `launch_subagents(" not in tools_section
+    assert "- `llm_query_batched(" not in tools_section
+    assert "- `flow_delegate(" not in tools_section
+    assert "- `flow_wait(" not in tools_section
 
 
 # ── filesystem tools: edge cases (ported from legacy test_filesystem_tools) ─
@@ -496,8 +592,8 @@ def test_flow_delegate_is_keyword_only_and_wires_spawn():
         return ChildHandle(f"{parent_agent_id}.{name}")
 
     flow.spawn_child = fake_spawn  # type: ignore[assignment]
-    env = {ENV_AGENT_ID: agent.agent_id}
-    delegate = make_delegate(flow, env)
+    context = EngineContext(agent_id=agent.agent_id)
+    delegate = make_delegate(flow, context)
 
     params = inspect.signature(delegate).parameters
     assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in params.values())
@@ -541,7 +637,6 @@ def test_default_builder_section_order():
         "role",
         "strategy",
         "format",
-        "examples",
         "final",
         "structured-output",
         "tools",

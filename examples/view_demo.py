@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import rflow
 from rflow.utils.viewer import open_viewer
+from rflow.utils.example_runs import save_example_graph
 
 QUERY = "Create a boids simulation in plain HTML + JS"
 MODEL = "gpt-5"
@@ -317,4 +318,5 @@ graphs = [g0, g1, g2, g3, g4, g5]
 
 if __name__ == "__main__":
     print(f"Generated {len(graphs)} graph snapshots. Launching viewer...")
+    save_example_graph(graphs[-1], __file__, "view-demo")
     open_viewer(graphs)

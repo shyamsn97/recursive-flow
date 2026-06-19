@@ -46,8 +46,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--out-dir",
-        default=str(Path(__file__).resolve().parents[1] / "_runs" / "save-load-demo"),
-        help="where to write the demo artifacts (default: examples/_runs/save-load-demo/)",
+        default=str(Path(__file__).resolve().parents[1] / "_runs" / "graph-save-load"),
+        help="where to write the demo artifacts (default: examples/_runs/graph-save-load/)",
     )
     args = parser.parse_args()
 

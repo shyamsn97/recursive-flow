@@ -1,37 +1,16 @@
-"""Deterministic no-LLM runner used to smoke-test the harness."""
+"""Fake runner for harness smoke tests."""
 
 from __future__ import annotations
 
-import time
-from pathlib import Path
-
-from rflow.clients import LLMClient
-
-from benchmarks.eval.core import RunResult, TaskInstance
-from benchmarks.eval.runners import register_runner
+from benchmarks.eval import runner
+from benchmarks.eval.types import Example, Model, Prediction, RunContext, Runner
 
 
-@register_runner("fake")
-class FakeRunner:
-    """Return the expected answer directly; useful for CI and CLI validation."""
+@runner("fake")
+class FakeRunner(Runner):
+    def run(self, example: Example, model: Model, ctx: RunContext) -> Prediction:
+        del model, ctx
+        return Prediction(answer=str(example.expected), metrics={"iterations": 1})
 
-    name = "fake"
 
-    def run(
-        self,
-        instance: TaskInstance,
-        *,
-        client: LLMClient,
-        model: str,
-        out_dir: Path,
-        max_iters: int,
-        max_depth: int,
-        live_save: bool,
-    ) -> RunResult:
-        del client, model, out_dir, max_iters, max_depth, live_save
-        start = time.perf_counter()
-        return RunResult(
-            answer=str(instance.expected),
-            time_seconds=time.perf_counter() - start,
-            iterations=0,
-        )
+__all__ = ["FakeRunner"]
