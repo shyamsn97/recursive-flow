@@ -15,9 +15,6 @@ class Example:
     expected: Any = None
     context: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    #: Optional JSON-schema dict / Pydantic model constraining the final answer.
-    #: Datasets may set this so schema-aware runners (e.g. rflow) validate output.
-    output_schema: Any = None
 
     def inputs(self) -> dict[str, str]:
         if self.context is None:

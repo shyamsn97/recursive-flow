@@ -29,7 +29,7 @@ from tests.helpers import ScriptedLLM
 
 def _delegating_reply(messages):
     task = next((m["content"] for m in messages if m["role"] == "user"), "")
-    if "child task" in task:
+    if "depth 1" in task:
         return '```repl\ndone("child-answer")\n```'
     return (
         "```repl\n"

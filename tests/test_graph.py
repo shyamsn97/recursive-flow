@@ -31,7 +31,7 @@ from tests.helpers import ScriptedLLM, run_to_completion
 
 def _tight_parent_child(messages):
     task = next((m["content"] for m in messages if m["role"] == "user"), "")
-    if "child task" in task:
+    if "depth 1" in task:
         return '```repl\ndone("c")\n```'
     return (
         "```repl\n"

@@ -35,6 +35,7 @@ class RFlowLocalRunner(Runner):
             max_iters=self.max_iters,
             max_depth=self.max_depth,
             runtime=LocalRuntime(working_directory=work_dir),
+            enable_structured_output=False,
         )
         start = time.perf_counter()
         graph = None
@@ -44,7 +45,6 @@ class RFlowLocalRunner(Runner):
             graph = flow.start(
                 example.prompt,
                 example.inputs(),
-                output_schema=example.output_schema,
             )
             if self.live_save:
                 graph.save(graph_dir)

@@ -24,7 +24,7 @@ def _delegated_graph() -> Graph:
 
     def reply(messages):
         task = next((m["content"] for m in messages if m["role"] == "user"), "")
-        if "child task" in task:
+        if "depth 1" in task:
             return '```repl\ndone("c")\n```'
         return (
             "```repl\n"

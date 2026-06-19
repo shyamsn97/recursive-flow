@@ -94,7 +94,6 @@ class OolongDataset(Dataset):
                 "answer_type": answer_type,
                 "context_window_id": row.get("context_window_id"),
             },
-            output_schema=_schema_for_answer_type(answer_type),
         )
 
     def score(self, example: Example, prediction: Prediction) -> Score:
@@ -119,29 +118,6 @@ class OolongDataset(Dataset):
             correct=best >= 1.0,
             details={"matched": matched, "expected": example.expected},
         )
-
-
-def _schema_for_answer_type(answer_type: Any) -> dict[str, Any] | None:
-    """Map an OOLONG ``answer_type`` to a small object output schema.
-
-    Wrapped in an object (``{"answer": ...}``) because ``done()`` validates the
-    JSON of the passed value, and a bare top-level string is not valid JSON.
-    NUMERIC answers are integers (counts); LABEL/USER/COMPARISON are free strings.
-    No enum for COMPARISON: the canonical phrases vary per row ("more common" vs
-    "more common than" vs "the same frequency"), so an enum would break scoring.
-    """
-    name = str(answer_type or "").rsplit(".", 1)[-1].strip().upper()
-    if name == "NUMERIC":
-        value: dict[str, Any] = {"type": "integer"}
-    elif name in {"LABEL", "USER", "COMPARISON"}:
-        value = {"type": "string"}
-    else:
-        return None
-    return {
-        "type": "object",
-        "properties": {"answer": value},
-        "required": ["answer"],
-    }
 
 
 def _normalize_answers(raw: Any) -> list[str]:
