@@ -5,10 +5,7 @@ from __future__ import annotations
 from benchmarks.eval import LOGGERS, logger
 from benchmarks.eval.types import Example, Logger, Row
 
-from benchmarks.eval.loggers import console as _console  # noqa: E402,F401
-from benchmarks.eval.loggers import jsonl as _jsonl  # noqa: E402,F401
-from benchmarks.eval.loggers import report as _report  # noqa: E402,F401
-from benchmarks.eval.loggers import wandb as _wandb  # noqa: E402,F401
+from benchmarks.eval.loggers import console, jsonl, report, wandb  # noqa: E402,F401
 
 
 class MultiLogger(Logger):

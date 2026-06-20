@@ -22,11 +22,17 @@ EVAL_MODEL ?= gpt-5-mini
 EVAL_DATASETS ?= oolong
 EVAL_RUNNERS ?= vanilla rflow-local
 EVAL_SEEDS ?= 0:10
-EVAL_BENCHMARK_DATASETS ?= oolong
+EVAL_BENCHMARK_DATASETS ?= oolong official_longbench_v2 official_livecodebench official_sudoku_extreme
 EVAL_BENCHMARK_RUNNERS ?= rflow-local vanilla official-rlm
 EVAL_BENCHMARK_SEEDS ?= 0:20
 EVAL_MAX_ITERS ?= 20
 EVAL_MAX_DEPTH ?= 1
+EVAL_EXECUTOR ?= local
+EVAL_PARALLEL ?= 1
+EVAL_BEST_OF_N ?= 1
+EVAL_MODAL_APP_NAME ?= rflow-benchmarks
+EVAL_MODAL_CPU ?= 1
+EVAL_MODAL_TIMEOUT ?= 3600
 EVAL_OUT_DIR ?= benchmarks/eval/runs
 EVAL_DATASET_PARAMS ?=
 EVAL_RUNNER_PARAMS ?= --runner-param rflow-local.max_iters=$(EVAL_MAX_ITERS) --runner-param rflow-local.max_depth=$(EVAL_MAX_DEPTH)
@@ -65,6 +71,12 @@ eval-run: ## Run real eval harness. Override EVAL_PROVIDER/MODEL/TASKS/RUNNERS/S
 		--runner $(EVAL_RUNNERS) \
 		--seeds $(EVAL_SEEDS) \
 		--out-dir $(EVAL_OUT_DIR) \
+		--executor $(EVAL_EXECUTOR) \
+		--parallel $(EVAL_PARALLEL) \
+		--best-of-n $(EVAL_BEST_OF_N) \
+		--modal-app-name $(EVAL_MODAL_APP_NAME) \
+		--modal-cpu $(EVAL_MODAL_CPU) \
+		--modal-timeout $(EVAL_MODAL_TIMEOUT) \
 		$(EVAL_DATASET_PARAMS) \
 		$(EVAL_RUNNER_PARAMS) \
 		$(EVAL_ARGS)
@@ -76,6 +88,12 @@ eval-wandb: ## Run real eval harness with W&B logging enabled.
 		--runner $(EVAL_RUNNERS) \
 		--seeds $(EVAL_SEEDS) \
 		--out-dir $(EVAL_OUT_DIR) \
+		--executor $(EVAL_EXECUTOR) \
+		--parallel $(EVAL_PARALLEL) \
+		--best-of-n $(EVAL_BEST_OF_N) \
+		--modal-app-name $(EVAL_MODAL_APP_NAME) \
+		--modal-cpu $(EVAL_MODAL_CPU) \
+		--modal-timeout $(EVAL_MODAL_TIMEOUT) \
 		--wandb \
 		--wandb-project $(EVAL_WANDB_PROJECT) \
 		$(EVAL_WANDB_ENTITY_ARG) \
@@ -90,6 +108,12 @@ eval-benchmark:
 		--runner $(EVAL_BENCHMARK_RUNNERS) \
 		--seeds $(EVAL_BENCHMARK_SEEDS) \
 		--out-dir $(EVAL_OUT_DIR) \
+		--executor $(EVAL_EXECUTOR) \
+		--parallel $(EVAL_PARALLEL) \
+		--best-of-n $(EVAL_BEST_OF_N) \
+		--modal-app-name $(EVAL_MODAL_APP_NAME) \
+		--modal-cpu $(EVAL_MODAL_CPU) \
+		--modal-timeout $(EVAL_MODAL_TIMEOUT) \
 		--wandb \
 		--wandb-project $(EVAL_WANDB_PROJECT) \
 		$(EVAL_WANDB_ENTITY_ARG) \

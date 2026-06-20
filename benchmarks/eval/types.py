@@ -106,6 +106,12 @@ class SuiteConfig:
     limit: int | None = None
     output_root: Path = Path("benchmarks/runs")
     resume: bool = False
+    executor: str = "local"
+    parallelism: int = 1
+    best_of_n: int = 1
+    modal_app_name: str = "rflow-benchmarks"
+    modal_cpu: float = 1.0
+    modal_timeout: int = 3600
 
     @property
     def root(self) -> Path:
@@ -123,6 +129,12 @@ class SuiteConfig:
             "limit": self.limit,
             "output_root": str(self.output_root),
             "resume": self.resume,
+            "executor": self.executor,
+            "parallelism": self.parallelism,
+            "best_of_n": self.best_of_n,
+            "modal_app_name": self.modal_app_name,
+            "modal_cpu": self.modal_cpu,
+            "modal_timeout": self.modal_timeout,
         }
 
 

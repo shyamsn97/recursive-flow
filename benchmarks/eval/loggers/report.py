@@ -34,22 +34,47 @@ class ReportLogger(Logger):
                 [
                     "## Overall",
                     "",
-                    f"- Count: {summary.get('count', 0)}",
-                    f"- Accuracy: {overall.get('accuracy')}",
-                    f"- Score: {overall.get('score')}",
-                    f"- Errors: {overall.get('errors')}",
+                    f"- Count: {overall.get('count', 0)}",
+                    f"- Correct: {overall.get('correct', 0)} / {overall.get('graded_count', 0)}",
+                    f"- Accuracy: {_format_pct(overall.get('accuracy_pct'))}",
+                    f"- Score: {_format_float(overall.get('score'))}",
+                    f"- Errors: {overall.get('errors', 0)}",
                     "",
                 ]
             )
-        lines.extend(["## By Runner", ""])
-        for runner, values in summary.get("by_runner", {}).items():
-            lines.append(f"- `{runner}`: score={values.get('score')} errors={values.get('errors')}")
-        lines.extend(["", "## By Dataset", ""])
-        for dataset, values in summary.get("by_dataset", {}).items():
-            lines.append(f"- `{dataset}`: score={values.get('score')} errors={values.get('errors')}")
+        lines.extend(_summary_table("By Benchmark", summary.get("by_dataset", {})))
+        lines.extend([""])
+        lines.extend(_summary_table("By Runner", summary.get("by_runner", {})))
+        lines.extend([""])
+        lines.extend(_summary_table("By Runner And Benchmark", summary.get("by_runner_dataset", {})))
         lines.extend(["", *_examples_section(rows)])
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _summary_table(title: str, values: dict[str, dict]) -> list[str]:
+    lines = [f"## {title}", ""]
+    if not values:
+        lines.append("No rows yet.")
+        return lines
+    lines.extend(
+        [
+            "| name | rows | correct | pct correct | score | errors | avg time | avg tokens |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for name, item in values.items():
+        tokens = int((item.get("input_tokens") or 0) + (item.get("output_tokens") or 0))
+        lines.append(
+            f"| `{name}` | {item.get('count', 0)} | "
+            f"{item.get('correct', 0)}/{item.get('graded_count', 0)} | "
+            f"{_format_pct(item.get('accuracy_pct'))} | "
+            f"{_format_float(item.get('score'))} | "
+            f"{item.get('errors', 0)} | "
+            f"{_format_float(item.get('time_seconds'), suffix='s')} | "
+            f"{tokens} |"
+        )
+    return lines
 
 
 def _examples_section(rows: list[Row]) -> list[str]:
@@ -67,12 +92,17 @@ def _examples_section(rows: list[Row]) -> list[str]:
         lines.append("")
         lines.append(f"- Expected: {_format_cell(_expected(group))}")
         lines.append("")
-        lines.append("| runner | correct | answer |")
-        lines.append("| --- | --- | --- |")
+        lines.append("| runner | correct | input tokens | output tokens | answer |")
+        lines.append("| --- | --- | ---: | ---: | --- |")
         for row in group:
             answer = row.prediction.error or row.prediction.answer
             mark = "x" if row.prediction.error else _mark(row.score.correct, row.score.value)
-            lines.append(f"| `{row.runner}` | {mark} | {_format_cell(answer)} |")
+            input_tokens = row.prediction.usage.get("input_tokens", 0)
+            output_tokens = row.prediction.usage.get("output_tokens", 0)
+            lines.append(
+                f"| `{row.runner}` | {mark} | {input_tokens} | {output_tokens} | "
+                f"{_format_cell(answer)} |"
+            )
         lines.append("")
     return lines
 
@@ -102,6 +132,18 @@ def _format_cell(value: object) -> str:
     if len(text) > MAX_ANSWER_CHARS:
         text = text[:MAX_ANSWER_CHARS].rstrip() + "..."
     return text or "_(empty)_"
+
+
+def _format_float(value: object, *, suffix: str = "") -> str:
+    if isinstance(value, (int, float)):
+        return f"{value:.3g}{suffix}"
+    return ""
+
+
+def _format_pct(value: object) -> str:
+    if isinstance(value, (int, float)):
+        return f"{value:.1f}%"
+    return ""
 
 
 __all__ = ["ReportLogger"]

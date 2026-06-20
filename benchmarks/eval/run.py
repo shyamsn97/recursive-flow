@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
+import os
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -15,85 +20,352 @@ from benchmarks.eval.loggers.jsonl import load_rows
 from benchmarks.eval.metrics import summarize
 from benchmarks.eval.types import (
     ComponentSpec,
+    Example,
     ModelSpec,
+    Prediction,
     Row,
     RunContext,
+    Score,
     SuiteConfig,
 )
 
 # Import built-ins so decorators register.
-from benchmarks.eval import loggers as _loggers  # noqa: F401,E402
-from benchmarks.eval import models as _models  # noqa: F401,E402
-from benchmarks.eval import runners as _runners  # noqa: F401,E402
-from benchmarks.eval import tasks as _tasks  # noqa: F401,E402
+for module_name in (
+    "benchmarks.eval.loggers",
+    "benchmarks.eval.models",
+    "benchmarks.eval.runners",
+    "benchmarks.eval.tasks",
+):
+    importlib.import_module(module_name)
 
 
 def run_suite(config: SuiteConfig) -> list[Row]:
     config.root.mkdir(parents=True, exist_ok=True)
-    datasets = [DATASETS.make(spec.name, **spec.params) for spec in config.datasets]
-    runners = [RUNNERS.make(spec.name, **spec.params) for spec in config.runners]
-    model = MODELS.make(config.model.provider, name=config.model.name, **config.model.params)
     logger = build_logger(config)
     rows = load_rows(config.root / "rows.jsonl") if config.resume else []
     seen = {
         (row.dataset, row.example_id, row.runner, row.model, row.seed)
         for row in rows
     }
+    jobs = _build_jobs(config, seen=seen)
 
     logger.start(config.to_dict())
     try:
-        for dataset in datasets:
-            for seed in config.seeds:
-                examples = dataset.examples(
-                    split=config.split,
-                    limit=config.limit,
-                    seed=seed,
-                )
-                for example in examples:
-                    for runner in runners:
-                        key = (dataset.name, example.id, runner.name, model.name, seed)
-                        if key in seen:
-                            continue
-                        artifact_dir = (
-                            config.root
-                            / "artifacts"
-                            / dataset.name
-                            / example.id
-                            / runner.name
-                        )
-                        ctx = RunContext(
-                            run_id=config.run_id,
-                            root=config.root,
-                            artifact_dir=artifact_dir,
-                        )
-                        logger.example_start(example, runner=runner.name, model=model.name)
-                        prediction = runner.run(example, model, ctx)
-                        score = dataset.score(example, prediction)
-                        row = Row(
-                            run_id=config.run_id,
-                            dataset=dataset.name,
-                            example_id=example.id,
-                            runner=runner.name,
-                            model=model.name,
-                            seed=seed,
-                            prediction=prediction,
-                            score=score,
-                            metadata=example.metadata,
-                        )
-                        rows.append(row)
-                        seen.add(key)
-                        logger.row(row)
+        for job in jobs:
+            logger.example_start(
+                job["example"],
+                runner=job["payloads"][0]["runner"]["name"],
+                model=config.model.name,
+            )
+        for row in _run_jobs(config, jobs):
+            rows.append(row)
+            seen.add((row.dataset, row.example_id, row.runner, row.model, row.seed))
+            logger.row(row)
         logger.summary(rows)
         return rows
     finally:
         logger.finish()
 
 
+def _build_jobs(config: SuiteConfig, *, seen: set[tuple]) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    job_root = _job_root(config)
+    for dataset_spec in config.datasets:
+        dataset = DATASETS.make(dataset_spec.name, **dataset_spec.params)
+        for seed in config.seeds:
+            examples = dataset.examples(split=config.split, limit=config.limit, seed=seed)
+            for example in examples:
+                for runner_spec in config.runners:
+                    key = (
+                        dataset.name,
+                        example.id,
+                        runner_spec.name,
+                        config.model.name,
+                        seed,
+                    )
+                    if key in seen:
+                        continue
+                    job_index = len(jobs)
+                    jobs.append(
+                        {
+                            "dataset": dataset,
+                            "example": example,
+                            "payloads": [
+                                {
+                                    "run_id": config.run_id,
+                                    "root": str(job_root),
+                                    "dataset_name": dataset.name,
+                                    "runner": asdict(runner_spec),
+                                    "model": asdict(config.model),
+                                    "seed": seed,
+                                    "example": asdict(example),
+                                    "job_index": job_index,
+                                    "attempt": attempt,
+                                    "best_of_n": config.best_of_n,
+                                }
+                                for attempt in range(config.best_of_n)
+                            ],
+                        }
+                    )
+    return jobs
+
+
+def _job_root(config: SuiteConfig) -> Path:
+    if config.executor == "modal":
+        return Path("/tmp/rflow-benchmarks") / config.run_id
+    return config.root
+
+
+def _run_jobs(config: SuiteConfig, jobs: list[dict[str, Any]]) -> Iterable[Row]:
+    if not jobs:
+        return []
+    payloads = [payload for job in jobs for payload in job["payloads"]]
+    if config.executor == "modal":
+        return _stream_best_rows_from_results(jobs, _run_jobs_modal(config, payloads))
+    if config.executor != "local":
+        raise ValueError("executor must be 'local' or 'modal'")
+    if config.parallelism <= 1:
+        return _best_rows_from_results(
+            jobs,
+            [_run_job_payload(payload) for payload in payloads],
+        )
+    results_by_index: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=config.parallelism) as pool:
+        futures = {
+            pool.submit(_run_job_payload, payload): index
+            for index, payload in enumerate(payloads)
+        }
+        for future in as_completed(futures):
+            results_by_index[futures[future]] = future.result()
+    return _best_rows_from_results(
+        jobs,
+        [results_by_index[index] for index in range(len(payloads))],
+    )
+
+
+def _run_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    runner_spec = ComponentSpec(**payload["runner"])
+    model_spec = ModelSpec(**payload["model"])
+    dataset_name = str(payload["dataset_name"])
+    runner_name = runner_spec.name
+    example = Example(**payload["example"])
+    seed = payload["seed"]
+    attempt = int(payload.get("attempt", 0))
+    best_of_n = int(payload.get("best_of_n", 1))
+    try:
+        runner = RUNNERS.make(runner_spec.name, **runner_spec.params)
+        model = MODELS.make(model_spec.provider, name=model_spec.name, **model_spec.params)
+        artifact_dir = (
+            Path(payload["root"])
+            / "artifacts"
+            / dataset_name
+            / example.id
+            / runner.name
+        )
+        if best_of_n > 1:
+            artifact_dir = artifact_dir / f"attempt_{attempt:02d}"
+        ctx = RunContext(
+            run_id=payload["run_id"],
+            root=Path(payload["root"]),
+            artifact_dir=artifact_dir,
+        )
+        prediction = runner.run(example, model, ctx)
+        return {
+            "run_id": payload["run_id"],
+            "dataset": dataset_name,
+            "example_id": example.id,
+            "runner": runner.name,
+            "model": model.name,
+            "seed": seed,
+            "prediction": asdict(prediction),
+            "metadata": example.metadata,
+            "job_index": payload.get("job_index"),
+            "attempt": attempt,
+            "best_of_n": best_of_n,
+        }
+    except Exception as exc:
+        prediction = Prediction(answer="", error=f"{type(exc).__name__}: {exc}")
+        return {
+            "run_id": payload["run_id"],
+            "dataset": dataset_name,
+            "example_id": example.id,
+            "runner": runner_name,
+            "model": model_spec.name,
+            "seed": seed,
+            "prediction": asdict(prediction),
+            "metadata": example.metadata,
+            "job_index": payload.get("job_index"),
+            "attempt": attempt,
+            "best_of_n": best_of_n,
+        }
+
+
+def _best_rows_from_results(jobs: list[dict[str, Any]], results: list[dict[str, Any]]) -> list[Row]:
+    rows: list[Row] = []
+    offset = 0
+    for job in jobs:
+        count = len(job["payloads"])
+        attempt_results = results[offset : offset + count]
+        offset += count
+        attempts = [_row_from_result(job, result) for result in attempt_results]
+        rows.append(_select_best_attempt(attempts))
+    return rows
+
+
+def _stream_best_rows_from_results(
+    jobs: list[dict[str, Any]],
+    results: Iterable[dict[str, Any]],
+) -> Iterable[Row]:
+    attempts_by_job: dict[int, list[Row]] = {}
+    expected_by_job = {index: len(job["payloads"]) for index, job in enumerate(jobs)}
+    for result in results:
+        job_index = int(result["job_index"])
+        attempts = attempts_by_job.setdefault(job_index, [])
+        attempts.append(_row_from_result(jobs[job_index], result))
+        if len(attempts) == expected_by_job[job_index]:
+            yield _select_best_attempt(attempts)
+            del attempts_by_job[job_index]
+
+
+def _row_from_result(job: dict[str, Any], result: dict[str, Any]) -> Row:
+    prediction = Prediction(**result["prediction"])
+    dataset = job["dataset"]
+    example = job["example"]
+    if prediction.error:
+        score = Score(value=0.0, correct=False, details={"error": prediction.error})
+    else:
+        try:
+            score = dataset.score(example, prediction)
+        except Exception as exc:
+            prediction = Prediction(
+                answer=prediction.answer,
+                usage=prediction.usage,
+                metrics=prediction.metrics,
+                artifacts=prediction.artifacts,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            score = Score(value=0.0, correct=False, details={"error": prediction.error})
+    metadata = result.get("metadata", {})
+    if result.get("best_of_n", 1) > 1:
+        metadata = {
+            **metadata,
+            "attempt": result.get("attempt"),
+            "best_of_n": result.get("best_of_n"),
+        }
+    return Row(
+        run_id=result["run_id"],
+        dataset=result["dataset"],
+        example_id=result["example_id"],
+        runner=result["runner"],
+        model=result["model"],
+        seed=result["seed"],
+        prediction=prediction,
+        score=score,
+        metadata=metadata,
+    )
+
+
+def _select_best_attempt(rows: list[Row]) -> Row:
+    if len(rows) == 1:
+        return rows[0]
+    best = max(rows, key=_attempt_rank)
+    metadata = {
+        **best.metadata,
+        "best_of_n": len(rows),
+        "selected_attempt": best.metadata.get("attempt"),
+        "attempt_scores": [row.score.value for row in rows],
+        "attempt_correct": [row.score.correct for row in rows],
+        "attempt_errors": sum(1 for row in rows if row.prediction.error),
+    }
+    return replace(best, metadata=metadata)
+
+
+def _attempt_rank(row: Row) -> tuple[float, bool, bool]:
+    return (
+        row.score.value,
+        row.score.correct is True,
+        row.prediction.error is None,
+    )
+
+
+def _run_jobs_modal(config: SuiteConfig, payloads: list[dict[str, Any]]):
+    try:
+        import modal  # pyright: ignore[reportMissingImports]
+    except ImportError as exc:
+        raise RuntimeError(
+            "Modal execution requires the modal extra: pip install -e '.[modal,eval]'"
+        ) from exc
+
+    app = modal.App(config.modal_app_name)
+    image = _modal_image(modal)
+    secrets = _modal_secrets(modal)
+
+    @app.function(
+        image=image,
+        cpu=config.modal_cpu,
+        timeout=config.modal_timeout,
+        max_containers=config.parallelism,
+        secrets=secrets,
+        serialized=True,
+    )
+    def run_benchmark_row(payload: dict[str, Any]) -> dict[str, Any]:
+        return _run_job_payload(payload)
+
+    with modal.enable_output():
+        with app.run():
+            for result in run_benchmark_row.map(
+                payloads,
+                order_outputs=False,
+                return_exceptions=False,
+            ):
+                yield result
+
+
+def _modal_image(modal):
+    repo_root = Path(__file__).resolve().parents[2]
+    remote_repo = "/opt/recursive-flow"
+    return (
+        modal.Image.debian_slim()
+        .add_local_dir(
+            repo_root,
+            remote_path=remote_repo,
+            copy=True,
+            ignore=[
+                ".git",
+                ".venv",
+                "__pycache__",
+                ".pytest_cache",
+                ".ruff_cache",
+                "wandb",
+                "benchmarks/eval/runs",
+                "examples/_runs",
+                "media",
+            ],
+        )
+        .run_commands(
+            "apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*",
+            f"python -m pip install -e '{remote_repo}[eval,openai,anthropic]'",
+            "python -m pip install 'git+https://github.com/alexzhang13/rlm'",
+        )
+    )
+
+
+def _modal_secrets(modal) -> list:
+    names = [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "HUGGING_FACE_HUB_TOKEN",
+        "HF_TOKEN",
+    ]
+    available = [name for name in names if os.environ.get(name)]
+    return [modal.Secret.from_local_environ(available)] if available else []
+
+
 def build_logger(config: SuiteConfig) -> MultiLogger:
     instances = []
     for spec in config.loggers:
         params = dict(spec.params)
-        if spec.name in {"jsonl", "report"}:
+        if spec.name in {"jsonl", "report", "wandb"}:
             params.setdefault("root", config.root)
         instances.append(LOGGERS.make(spec.name, **params))
     return MultiLogger(instances)
@@ -118,6 +390,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wandb", action="store_true", help="Add the W&B logger.")
     parser.add_argument("--wandb-project", default="rflow-eval")
     parser.add_argument("--wandb-entity")
+    parser.add_argument(
+        "--executor",
+        choices=["local", "modal"],
+        default="local",
+        help="Where to run row jobs. `modal` maps each row to a Modal function.",
+    )
+    parser.add_argument("--modal", action="store_true", help="Shortcut for --executor modal.")
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="Maximum row jobs to run concurrently. Defaults to sequential execution.",
+    )
+    parser.add_argument(
+        "--best-of-n",
+        type=int,
+        default=1,
+        help="Run each logical row N times and keep only the best-scoring attempt.",
+    )
+    parser.add_argument("--modal-app-name", default="rflow-benchmarks")
+    parser.add_argument("--modal-cpu", type=float, default=1.0)
+    parser.add_argument("--modal-timeout", type=int, default=3600)
     return parser
 
 
@@ -136,6 +430,9 @@ def config_from_args(args: argparse.Namespace) -> SuiteConfig:
         logger_params["wandb"].setdefault("project", args.wandb_project)
         if args.wandb_entity:
             logger_params["wandb"]["entity"] = args.wandb_entity
+    executor = "modal" if args.modal else args.executor
+    parallelism = max(1, args.parallel)
+    best_of_n = max(1, args.best_of_n)
     config = SuiteConfig(
         run_id=args.run_id
         or make_run_id(
@@ -161,6 +458,12 @@ def config_from_args(args: argparse.Namespace) -> SuiteConfig:
         limit=args.limit,
         output_root=args.out_dir,
         resume=args.resume,
+        executor=executor,
+        parallelism=parallelism,
+        best_of_n=best_of_n,
+        modal_app_name=args.modal_app_name,
+        modal_cpu=args.modal_cpu,
+        modal_timeout=args.modal_timeout,
     )
     return config
 

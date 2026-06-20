@@ -687,6 +687,16 @@ def test_modal_uses_direct_repl_streams(tmp_path):
     assert repl.recv() == {"ok": True}
 
 
+def test_modal_recv_reads_stdout_stream_without_background_thread():
+    from rflow.runtime.sandbox.modal import ModalRepl
+
+    repl = ModalRepl()
+    repl.container = object()
+    repl._stdout_iter = iter(['{"ok": true}\n'])
+
+    assert repl.recv() == {"ok": True}
+
+
 def test_modal_splits_stdout_chunks_into_json_lines():
     import queue
 
@@ -700,6 +710,29 @@ def test_modal_splits_stdout_chunks_into_json_lines():
     )
     assert repl._stdout_queue.get(timeout=1) == '{"ok": true}'
     assert repl._stdout_queue.get(timeout=1) == '{"suspended": false, "output": ""}'
+
+
+def test_modal_stdout_reader_ignores_client_closed_during_close():
+    import queue
+
+    from rflow.runtime.sandbox.modal import ModalRepl
+
+    class ClientClosed(Exception):
+        pass
+
+    class ClosingStream:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise ClientClosed("client closed")
+
+    repl = ModalRepl()
+    repl._stdout_queue = queue.Queue()
+    repl._closing.set()
+    repl._start_reader(ClosingStream(), repl._stdout_queue)
+
+    assert repl._stdout_queue.get(timeout=1) is None
 
 
 def test_modal_requires_optional_dependency(monkeypatch):

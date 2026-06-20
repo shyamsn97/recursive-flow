@@ -55,7 +55,10 @@ class ModalRepl(RemoteRepl):
         self.container_kwargs = container_kwargs
         self.container = None
         self._stdout_queue: Queue[str | None] | None = None
+        self._stdout_iter = None
+        self._stdout_pending = ""
         self._stderr_tail: deque[str] = deque(maxlen=40)
+        self._closing = threading.Event()
 
     def _ensure_sandbox(self):
         if self.container is not None:
@@ -83,9 +86,9 @@ class ModalRepl(RemoteRepl):
             timeout=self.timeout,
             **self.container_kwargs,
         )
-        self._stdout_queue = Queue()
-        self._start_reader(self.container.stdout, self._stdout_queue)
-        self._start_stderr_reader(self.container.stderr)
+        self._closing.clear()
+        self._stdout_iter = iter(self.container.stdout)
+        self._stdout_pending = ""
 
     def _start_reader(self, stream, output: Queue) -> None:
         def read() -> None:
@@ -99,6 +102,9 @@ class ModalRepl(RemoteRepl):
                             output.put(line)
                 if pending:
                     output.put(pending)
+            except Exception as exc:  # noqa: BLE001 - stream closes during teardown
+                if not self._is_expected_stream_close(exc):
+                    output.put(f'{{"error": "Modal stdout reader failed: {exc}"}}')
             finally:
                 output.put(None)
 
@@ -109,8 +115,9 @@ class ModalRepl(RemoteRepl):
             try:
                 for line in stream:
                     self._stderr_tail.append(str(line))
-            except Exception:  # noqa: BLE001
-                return
+            except Exception as exc:  # noqa: BLE001 - stream closes during teardown
+                if not self._is_expected_stream_close(exc):
+                    self._stderr_tail.append(f"Modal stderr reader failed: {exc}")
 
         threading.Thread(target=read, daemon=True).start()
 
@@ -122,25 +129,61 @@ class ModalRepl(RemoteRepl):
 
     def recv(self) -> dict:
         self._ensure_sandbox()
+        if self._stdout_queue is not None:
+            line = self._recv_from_queue()
+        else:
+            line = self._recv_from_stream()
+        return json.loads(line)
+
+    def _recv_from_queue(self) -> str:
         assert self._stdout_queue is not None
         try:
             line = self._stdout_queue.get(timeout=self.repl_timeout + 5)
         except Empty as exc:
-            stderr = "".join(self._stderr_tail).strip()
-            raise RuntimeError(
-                "Modal recursive-flow REPL did not respond within "
-                f"{self.repl_timeout}s. stderr: {stderr or '<empty>'}"
-            ) from exc
+            raise self._timeout_error() from exc
         if line is None:
             stderr = "".join(self._stderr_tail).strip()
             raise RuntimeError(
                 f"Modal recursive-flow REPL exited. stderr: {stderr or '<empty>'}"
             )
-        return json.loads(line)
+        return line
+
+    def _recv_from_stream(self) -> str:
+        if self._stdout_iter is None:
+            raise RuntimeError("Modal stdout stream is not available")
+        try:
+            while True:
+                if "\n" in self._stdout_pending:
+                    line, self._stdout_pending = self._stdout_pending.split("\n", 1)
+                    if line:
+                        return line
+                self._stdout_pending += _to_text(next(self._stdout_iter))
+        except StopIteration as exc:
+            stderr = "".join(self._stderr_tail).strip()
+            raise RuntimeError(
+                f"Modal recursive-flow REPL exited. stderr: {stderr or '<empty>'}"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            if self._is_expected_stream_close(exc):
+                stderr = "".join(self._stderr_tail).strip()
+                raise RuntimeError(
+                    f"Modal recursive-flow REPL exited. stderr: {stderr or '<empty>'}"
+                ) from exc
+            raise
+
+    def _timeout_error(self) -> RuntimeError:
+        stderr = "".join(self._stderr_tail).strip()
+        return RuntimeError(
+            "Modal recursive-flow REPL did not respond within "
+            f"{self.repl_timeout}s. stderr: {stderr or '<empty>'}"
+        )
 
     def close(self) -> None:
         container, self.container = self.container, None
+        self._closing.set()
         self._stdout_queue = None
+        self._stdout_iter = None
+        self._stdout_pending = ""
         self._stderr_tail.clear()
         if container is None:
             return
@@ -148,6 +191,15 @@ class ModalRepl(RemoteRepl):
             container.terminate()
         except Exception:  # noqa: BLE001
             pass
+
+    def _is_expected_stream_close(self, exc: Exception) -> bool:
+        if self._closing.is_set():
+            return True
+        return exc.__class__.__name__ in {
+            "ClientClosed",
+            "StreamTerminatedError",
+            "GRPCError",
+        }
 
 
 def _to_text(data: object) -> str:

@@ -11,6 +11,9 @@ Initial datasets:
 
 - `synthetic_needle`
 - `oolong`
+- `official_longbench_v2`
+- `official_livecodebench`
+- `official_sudoku_extreme`
 
 ## Smoke
 
@@ -35,10 +38,33 @@ python -m benchmarks.eval \
 ```bash
 python -m benchmarks.eval \
   --model openai:gpt-5-mini \
-  --dataset oolong \
+  --dataset oolong official_longbench_v2 official_livecodebench official_sudoku_extreme \
   --runner vanilla rflow-local official-rlm \
-  --seeds 0:20
+  --seeds 0:20 \
+  --wandb
 ```
+
+## Modal Parallelism
+
+The unit of parallelism is one benchmark row: `(dataset example, runner, seed)`.
+Each row runs sequentially inside its worker, so recursive-flow graph execution
+is unchanged. To fan rows out to cheap one-CPU Modal workers:
+
+```bash
+python -m benchmarks.eval \
+  --model openai:gpt-5-mini \
+  --dataset oolong official_longbench_v2 official_livecodebench official_sudoku_extreme \
+  --runner vanilla rflow-local official-rlm \
+  --seeds 0:20 \
+  --executor modal \
+  --parallel 20 \
+  --best-of-n 1 \
+  --modal-cpu 1 \
+  --wandb
+```
+
+Set `--best-of-n N` to run each logical row N times and keep only the best
+scoring attempt in `rows.jsonl`.
 
 Rows and artifacts are written under `benchmarks/runs/<run_id>/`.
 

@@ -35,15 +35,16 @@ def summarize(rows: list[Row]) -> dict[str, Any]:
         return {"count": 0, "overall": {}, "by_runner": {}, "by_dataset": {}}
 
     def group(items: list[Row]) -> dict[str, Any]:
+        graded = [row for row in items if row.score.correct is not None]
+        correct = sum(1 for row in graded if row.score.correct is True)
+        accuracy = correct / len(graded) if graded else None
         return {
             "count": len(items),
-            "accuracy": mean(
-                1.0 if row.score.correct else 0.0
-                for row in items
-                if row.score.correct is not None
-            )
-            if any(row.score.correct is not None for row in items)
-            else None,
+            "graded_count": len(graded),
+            "correct": correct,
+            "incorrect": len(graded) - correct,
+            "accuracy": accuracy,
+            "accuracy_pct": accuracy * 100.0 if accuracy is not None else None,
             "score": mean(row.score.value for row in items),
             "errors": sum(1 for row in items if row.prediction.error),
             "input_tokens": mean(row.prediction.usage.get("input_tokens", 0) for row in items),
