@@ -21,7 +21,7 @@ from types import SimpleNamespace
 import pytest
 
 from rflow import Flow, Graph
-from rflow.graph import ChildHandle, WaitRequest
+from rflow.graph import ChildHandle, UserQuery, WaitRequest
 from rflow.runtime import (
     DockerRepl,
     RemoteRepl,
@@ -32,6 +32,7 @@ from rflow.runtime import (
     serialize,
 )
 from rflow.runtime.repl_server import ReplServer
+from rflow.runtime.context import EngineContext
 from rflow.runtime.runtime import parse_response
 from rflow.runtime.env import (
     RFLOW_AGENT_ID,
@@ -194,6 +195,24 @@ class _BackendRuntime(Runtime):
         return self._factory(agent)
 
 
+class _CountingRepl:
+    def __init__(self) -> None:
+        self.namespace = {}
+        self.engine_context = EngineContext()
+        self.process_env = {}
+        self.errored = False
+        self.closed = 0
+
+    def start(self, code: str):
+        return False, ""
+
+    def resume(self, send_value: object):
+        return False, ""
+
+    def close(self) -> None:
+        self.closed += 1
+
+
 def test_make_repl_defaults_to_in_process():
     from rflow.repl import REPL
 
@@ -228,6 +247,58 @@ def test_close_tears_down_backends():
     run_to_completion(flow, "q")
     flow.close()
     assert closed["n"] == 1
+
+
+def test_step_adopts_external_graph_and_discards_stale_repl():
+    created: list[_CountingRepl] = []
+
+    def factory(agent):
+        repl = _CountingRepl()
+        created.append(repl)
+        return repl
+
+    flow = Flow(StubLLM(), max_depth=1, runtime=_BackendRuntime(factory))
+    old = flow.start("old", {"doc": "old"})
+    stale = flow.repl_for(old)
+    flow.runtime.repl_env_cache["root"] = {"stale": "1"}
+    flow.runtime.repl_inputs_cache["root"] = {"query": "old", "doc": "old"}
+
+    incoming = Graph(
+        agent_id="root",
+        query="new",
+        nodes=[UserQuery(content="incoming")],
+    )
+    before = incoming.to_dict()
+
+    advanced = flow.step(incoming)
+
+    assert stale.closed == 1
+    assert flow.repls == {}
+    assert flow.runtime.repl_env_cache == {}
+    assert flow.runtime.repl_inputs_cache == {}
+    assert advanced is flow.graph and advanced is not incoming
+    assert incoming.to_dict() == before
+    assert advanced.query == "new"
+    assert advanced.inputs == {}
+    assert advanced.nodes[0].content == "incoming"
+
+
+def test_step_preserves_repl_for_same_graph_history():
+    created: list[_CountingRepl] = []
+
+    def factory(agent):
+        repl = _CountingRepl()
+        created.append(repl)
+        return repl
+
+    flow = Flow(StubLLM(), max_depth=1, runtime=_BackendRuntime(factory))
+    graph = flow.start("same")
+    live = flow.repl_for(graph)
+
+    flow.step(graph.copy(deep=True))
+
+    assert live.closed == 0
+    assert flow.repls["root"] is live
 
 
 # ── loopback backend: full protocol, no container ─────────────────────

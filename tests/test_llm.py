@@ -396,6 +396,188 @@ def test_structured_run_end_to_end():
     assert json.loads(result) == {"answer": 42, "note": "hi"}
 
 
+def test_step_applies_output_schema_to_existing_graph():
+    def reply_for(messages):
+        system = messages[0]["content"]
+        if "answer" in system and "note" in system:
+            return '```repl\ndone({"answer": 7, "note": "updated"})\n```'
+        return '```repl\ndone("plain")\n```'
+
+    flow = Flow(ScriptedLLM(reply_for), max_iters=5)
+    graph = flow.start("q")
+    graph = flow.step(graph, output_schema=Out)
+    while not graph.finished:
+        graph = flow.step(graph)
+
+    assert graph.output_schema == json_schema_for(Out)
+    assert json.loads(graph.result()) == {"answer": 7, "note": "updated"}
+
+
+def test_step_followup_can_change_output_schema():
+    def reply_for(messages):
+        system = messages[0]["content"]
+        if "answer" in system and "note" in system:
+            return '```repl\ndone({"answer": 9, "note": "followup"})\n```'
+        return '```repl\ndone("plain")\n```'
+
+    flow = Flow(ScriptedLLM(reply_for), max_iters=5)
+    graph = run_to_completion(flow, "plain task")
+    assert graph.result() == "plain"
+
+    graph = flow.step(query="now answer with structure", output_schema=Out)
+    while not graph.finished:
+        graph = flow.step(graph)
+
+    assert graph.output_schema == json_schema_for(Out)
+    assert json.loads(graph.result()) == {"answer": 9, "note": "followup"}
+
+
+def test_direct_graph_output_schema_mutation_syncs_live_repl():
+    replies = iter(
+        [
+            '```repl\nprint("created repl")\n```',
+            '```repl\ndone({"answer": 11, "note": "direct"})\n```',
+        ]
+    )
+    flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=5)
+    graph = flow.start("plain first")
+    graph = flow.step(graph)  # LLMOutput
+    graph = flow.step(graph)  # ExecOutput, root REPL now exists
+    assert "root" in flow.repls
+
+    graph.output_schema = json_schema_for(Out)
+    graph = flow.step(graph)  # LLMOutput sees refreshed schema prompt
+    graph = flow.step(graph)  # done(...) validates against graph.output_schema
+
+    assert json.loads(graph.result()) == {"answer": 11, "note": "direct"}
+
+
+def test_direct_graph_output_schema_removal_syncs_live_repl():
+    replies = iter(
+        [
+            '```repl\ndone({"answer": 1, "note": "structured"})\n```',
+            '```repl\ndone("plain after schema removal")\n```',
+        ]
+    )
+    flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=5)
+    graph = run_to_completion(flow, "structured", output_schema=Out)
+    assert "root" in flow.repls
+    assert json.loads(graph.result()) == {"answer": 1, "note": "structured"}
+
+    graph.output_schema = None
+    graph = flow.step(graph, query="plain follow-up")
+    while not graph.finished:
+        graph = flow.step(graph)
+
+    assert graph.output_schema is None
+    assert graph.result() == "plain after schema removal"
+
+
+def test_done_result_does_not_persist_into_followup_execution():
+    replies = iter(
+        [
+            '```repl\ndone({"answer": 1, "note": "structured"})\n```',
+            '```repl\nprint("not done yet")\n```',
+            '```repl\ndone("plain final")\n```',
+        ]
+    )
+    flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=6)
+    graph = run_to_completion(flow, "structured", output_schema=Out)
+    assert json.loads(graph.result()) == {"answer": 1, "note": "structured"}
+    assert flow.repls["root"].engine_context.done_result is not None
+
+    graph.output_schema = None
+    graph = flow.step(graph, query="plain follow-up")  # LLMOutput with print only
+    graph = flow.step(graph)  # ExecOutput; stale done_result must not terminate
+    assert graph.current().type == "exec_output"
+    assert not graph.finished
+    assert "not done yet" in graph.current().output
+
+    while not graph.finished:
+        graph = flow.step(graph)
+    assert graph.result() == "plain final"
+
+
+def test_direct_graph_input_mutation_syncs_live_repl_inputs():
+    replies = iter(
+        [
+            '```repl\nprint("created repl")\n```',
+            '```repl\nprint(INPUTS["extra"])\ndone("ok")\n```',
+        ]
+    )
+    flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=5)
+    graph = flow.start("q")
+    graph = flow.step(graph)  # LLMOutput
+    graph = flow.step(graph)  # ExecOutput, root REPL now exists
+    assert "root" in flow.repls
+
+    graph.inputs["extra"] = "synced-from-graph"
+    graph = flow.step(graph)  # LLMOutput
+    graph = flow.step(graph)  # ExecOutput/DoneOutput
+
+    assert graph.result() == "ok"
+    assert "synced-from-graph" in graph.nodes[-1].output
+
+
+def test_followup_query_updates_graph_query_and_repl_inputs():
+    replies = iter(
+        [
+            '```repl\ndone("first")\n```',
+            '```repl\nprint(INPUTS["query"])\ndone("second")\n```',
+        ]
+    )
+    flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=5)
+    graph = run_to_completion(flow, "first task")
+    assert graph.result() == "first"
+
+    graph = flow.step(graph, query="second task")
+    assert graph.query == "second task"
+    while not graph.finished:
+        graph = flow.step(graph)
+
+    assert graph.result() == "second"
+    assert "second task" in graph.nodes[-1].output
+
+
+def test_direct_graph_query_mutation_syncs_repl_inputs():
+    replies = iter(
+        [
+            '```repl\nprint("created repl")\n```',
+            '```repl\nprint(INPUTS["query"])\ndone("ok")\n```',
+        ]
+    )
+    flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=5)
+    graph = flow.start("old query")
+    graph = flow.step(graph)  # LLMOutput
+    graph = flow.step(graph)  # ExecOutput, root REPL now exists
+
+    graph.query = "new query"
+    graph = flow.step(graph)
+    graph = flow.step(graph)
+
+    assert graph.result() == "ok"
+    assert "new query" in graph.nodes[-1].output
+
+
+def test_removed_agent_discards_repl_and_runtime_sync_cache():
+    flow = make_flow(max_depth=1)
+    flow.start("root")
+    handle = flow.spawn_child("root", "child", "child task")
+    child_id = handle.agent_id
+    child = flow.graph[child_id]
+    flow.repl_for(child)
+    assert child_id in flow.repls
+    assert child_id in flow.runtime.repl_env_cache
+    assert child_id in flow.runtime.repl_inputs_cache
+
+    flow.graph.remove_child(child_id)
+    flow.sync_graph_state()
+
+    assert child_id not in flow.repls
+    assert child_id not in flow.runtime.repl_env_cache
+    assert child_id not in flow.runtime.repl_inputs_cache
+
+
 def test_graph_output_schema_round_trips():
     graph = Graph(agent_id="root", output_schema=json_schema_for(Out))
     restored = Graph.from_dict(graph.to_dict())

@@ -15,11 +15,36 @@ The key thing to watch in the output:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import time
 from dataclasses import dataclass, field
 
 import rflow
-from rflow.utils.example_runs import example_run_dir, save_example_graph
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 
 
 @dataclass
@@ -88,11 +113,11 @@ def run_case(*, eager_children: bool) -> None:
         print(f"{t:0.3f}s  {label}")
     print("result:", graph.result())
     suffix = "eager-true" if eager_children else "eager-false"
-    save_example_graph(
+    _save_example_graph(
         graph,
         __file__,
         "eager-children",
-        out_dir=example_run_dir(__file__, "eager-children") / suffix,
+        out_dir=_example_run_dir(__file__, "eager-children") / suffix,
     )
 
 

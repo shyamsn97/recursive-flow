@@ -8,6 +8,7 @@ single_block, eager_children scheduling, token rollups, the drop-in
 from __future__ import annotations
 
 import json
+import threading
 
 from rflow import DoneOutput, Flow, Graph, LLMUsage, UserQuery
 from rflow.utils.pool import CallablePool, SequentialPool, ThreadPool, create_pool
@@ -125,6 +126,32 @@ def test_eager_children_runs_to_completion():
     graph = run_to_completion(flow, "go")
     assert graph.finished
     assert isinstance(flow.pool, ThreadPool)
+
+
+def test_custom_pool_runs_normal_steps_without_eager_children():
+    seen: list[list[str]] = []
+
+    def execute(tasks):
+        seen.append([task_id for task_id, _fn in tasks])
+        return {task_id: fn() for task_id, fn in tasks}
+
+    flow = Flow(StubLLM(), pool=execute, max_depth=0)
+    flow.start("go")
+    flow.step()
+
+    assert seen == [["root"]]
+
+
+def test_thread_pool_executes_single_task_inline():
+    pool = ThreadPool()
+    main_thread_id = threading.get_ident()
+    seen: list[int] = []
+    try:
+        pool.execute([("root", lambda: seen.append(threading.get_ident()))])
+    finally:
+        pool.shutdown()
+
+    assert seen == [main_thread_id]
 
 
 def test_create_pool_resolves_variants():

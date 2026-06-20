@@ -9,11 +9,35 @@ Requires Tinker credentials and optional dependencies:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import argparse
 
 import rflow
-from rflow.utils.example_runs import save_example_graph
 from rflow.utils.viz import live
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
 
 
 def main() -> None:
@@ -54,7 +78,7 @@ def main() -> None:
     graph = flow.start(args.query)
     graph = live(flow, graph)[-1]
     print(graph.result())
-    save_example_graph(graph, __file__, "tinker-agent")
+    _save_example_graph(graph, __file__, "tinker-agent")
     flow.close()
 
 

@@ -16,8 +16,33 @@ Run:
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 import rflow
-from rflow.utils.example_runs import example_run_dir, save_example_graph
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 
 
 def build_graph() -> rflow.Graph:
@@ -87,12 +112,12 @@ def main() -> None:
     print(g.session(include_system=False))
 
     banner("graph.save_html(...) — interactive viewer over the history")
-    out_dir = example_run_dir(__file__, "graph-render")
+    out_dir = _example_run_dir(__file__, "graph-render")
     out_dir.mkdir(parents=True, exist_ok=True)
     html_path = g.save_html(out_dir / "viewer.html")
     print(f"wrote {html_path} ({html_path.stat().st_size:,} bytes)")
     print(f"\nopen with: open {html_path}")
-    save_example_graph(g, __file__, "graph-render")
+    _save_example_graph(g, __file__, "graph-render")
 
 
 if __name__ == "__main__":

@@ -250,13 +250,15 @@ def test_static_system_prompt_content():
     assert "never include a second ```repl fence" in SYSTEM_PROMPT
     assert "act as an orchestrator, not a solver" in SYSTEM_PROMPT
     assert "Do not call `done(...)` on turn 1 without first inspecting `INPUTS`" in SYSTEM_PROMPT
-    # The default prompt ships no worked code examples (matches upstream's live
-    # RLM prompt); the old generic recipes used to leak their shape into runs.
-    assert "chunk and batch long inputs" not in SYSTEM_PROMPT
-    assert "recursive delegation" not in SYSTEM_PROMPT
-    assert "delegated units" not in SYSTEM_PROMPT
+    # The default prompt has a few worked examples, but avoids the old
+    # example-heavy prompt's tendency to prescribe every possible workflow.
+    assert "**Example 1" in SYSTEM_PROMPT
+    assert "**Example 2" in SYSTEM_PROMPT
+    assert "**Example 3" in SYSTEM_PROMPT
+    assert "**Example 4" not in SYSTEM_PROMPT
+    assert "launch_subagents" in SYSTEM_PROMPT
+    assert "verify, repair, re-verify" in SYSTEM_PROMPT
     assert "Repair the integrated result" not in SYSTEM_PROMPT
-    assert "**Example 1" not in SYSTEM_PROMPT
 
 
 def test_flow_implements_base_contract():
@@ -637,6 +639,7 @@ def test_default_builder_section_order():
         "role",
         "strategy",
         "format",
+        "examples",
         "final",
         "structured-output",
         "tools",

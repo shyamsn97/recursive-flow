@@ -11,11 +11,36 @@ Run with:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import dspy
 
 import rflow
 from rflow.integrations.dspy import RecursiveFlowLM
-from rflow.utils.example_runs import save_example_graph
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 
 
 def main() -> None:
@@ -31,7 +56,7 @@ def main() -> None:
     result = qa(question="What is 17 * 23? Show a short calculation.")
     print(result.answer)
     if flow.graph is not None:
-        save_example_graph(flow.graph, __file__, "dspy-drop-in")
+        _save_example_graph(flow.graph, __file__, "dspy-drop-in")
 
     flow.close()
 

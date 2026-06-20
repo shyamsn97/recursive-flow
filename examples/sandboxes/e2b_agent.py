@@ -24,7 +24,30 @@ if str(REPO_ROOT) not in sys.path:
 
 import rflow  # noqa: E402
 from rflow.runtime.sandbox.e2b import E2BRuntime  # noqa: E402
-from rflow.utils.example_runs import save_example_graph  # noqa: E402
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 
 PLATFORMER_QUERY = """\
 Build a simple 2D side-scrolling platformer in plain HTML/CSS/JS under output/.
@@ -107,7 +130,7 @@ def main() -> None:
         while not graph.finished:
             graph = flow.step(graph)
         print(graph.result())
-        save_example_graph(graph, __file__, "sandbox-e2b", out_dir=args.out_dir)
+        _save_example_graph(graph, __file__, "sandbox-e2b", out_dir=args.out_dir)
     finally:
         flow.close()
 

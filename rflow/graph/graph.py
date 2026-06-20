@@ -369,6 +369,10 @@ class Graph:
         """Return a copy of this subtree (deep by default for safe editing)."""
         return deepcopy(self) if deep else _dc_replace(self)
 
+    def repl_inputs(self) -> dict[str, str]:
+        """Public ``INPUTS`` dict for this agent's REPL."""
+        return {"query": self.query, **self.inputs}
+
     def max_global_step(self) -> int | None:
         """Highest ``global_step`` stamped on any node in the subtree, or ``None``."""
         steps = [

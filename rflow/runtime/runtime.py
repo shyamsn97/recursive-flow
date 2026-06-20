@@ -335,6 +335,12 @@ class Runtime(ABC):
         )
         #: name → callable, injected into each agent's REPL by ``Flow``.
         self.tools: dict[str, Callable[..., object]] = {}
+        #: Runtime mirrors of graph-derived state, used to avoid redundant
+        #: prompt renders and remote REPL sync calls. ``Graph`` remains the
+        #: source of truth; these caches are disposable.
+        self.prompt_fingerprints: dict[str, str] = {}
+        self.repl_env_cache: dict[str, dict[str, str]] = {}
+        self.repl_inputs_cache: dict[str, dict[str, str]] = {}
 
     # ── tool registration ─────────────────────────────────────────────
 
@@ -353,6 +359,58 @@ class Runtime(ABC):
         """Register a list of functions as tools (e.g. ``FILE_TOOLS``)."""
         for fn in tools:
             self.register_tool(fn)
+
+    def clear_graph_sync_cache(self) -> None:
+        """Forget graph-derived runtime mirror fingerprints."""
+        self.prompt_fingerprints.clear()
+        self.repl_env_cache.clear()
+        self.repl_inputs_cache.clear()
+
+    def drop_graph_sync_cache(self, agent_id: str) -> None:
+        """Forget graph-derived runtime mirror fingerprints for one agent."""
+        self.prompt_fingerprints.pop(agent_id, None)
+        self.repl_env_cache.pop(agent_id, None)
+        self.repl_inputs_cache.pop(agent_id, None)
+
+    def discard_repl(self, repls: dict[str, ReplBackend], agent_id: str) -> None:
+        """Close and forget an open backend plus its graph-derived caches."""
+        repl = repls.pop(agent_id)
+        self.drop_graph_sync_cache(agent_id)
+        try:
+            repl.close()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+
+    def sync_repl(
+        self,
+        repl: ReplBackend,
+        agent: Graph,
+        *,
+        env: dict[str, str],
+        inputs: dict[str, str],
+    ) -> None:
+        """Bind a live backend to graph-derived runtime metadata.
+
+        ``Graph`` remains the source of truth. This method updates only runtime
+        mirrors: private tool context, public process env, and REPL ``INPUTS``.
+        ``done_result`` is intentionally untouched; execution clears it per turn.
+        """
+        repl.engine_context.agent_id = agent.agent_id
+        if repl.engine_context.output_schema != agent.output_schema:
+            repl.engine_context.output_schema = agent.output_schema
+
+        if self.repl_env_cache.get(agent.agent_id) != env:
+            repl.process_env = dict(env)
+            if isinstance(repl, RemoteRepl):
+                repl.inject_process_env(env)
+            self.repl_env_cache[agent.agent_id] = dict(env)
+
+        if self.repl_inputs_cache.get(agent.agent_id) != inputs:
+            if isinstance(repl, RemoteRepl):
+                repl.inject_literal("INPUTS", inputs)
+            else:
+                repl.namespace["INPUTS"] = inputs
+            self.repl_inputs_cache[agent.agent_id] = dict(inputs)
 
     # ── backend factory (subclasses implement) ────────────────────────
 

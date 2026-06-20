@@ -26,7 +26,30 @@ if str(REPO_ROOT) not in sys.path:
 
 import rflow  # noqa: E402
 from rflow.runtime.sandbox.modal import ModalRuntime  # noqa: E402
-from rflow.utils.example_runs import save_example_graph  # noqa: E402
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 from rflow.utils.viz import live  # noqa: E402
 
 REMOTE_REPO = "/opt/recursive-flow"
@@ -148,7 +171,7 @@ def main() -> None:
     try:
         graph = run_turn(flow, PLATFORMER_QUERY, use_live=not args.no_live)
         print(graph.result())
-        save_example_graph(graph, __file__, "sandbox-modal", out_dir=args.out_dir)
+        _save_example_graph(graph, __file__, "sandbox-modal", out_dir=args.out_dir)
     finally:
         log("closing Flow")
         flow.close()

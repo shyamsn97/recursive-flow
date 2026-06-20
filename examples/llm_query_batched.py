@@ -9,10 +9,35 @@ Run:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import threading
 
 import rflow
-from rflow.utils.example_runs import save_example_graph
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 
 REVIEWS = [
     "The new search UI is fast and surprisingly easy to use.",
@@ -82,7 +107,7 @@ def main() -> None:
 
     print("\nFinal answer:")
     print(graph.result())
-    save_example_graph(graph, __file__, "llm-query-batched")
+    _save_example_graph(graph, __file__, "llm-query-batched")
 
 
 if __name__ == "__main__":

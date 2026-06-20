@@ -29,7 +29,30 @@ from typing import Literal
 from pydantic import BaseModel
 
 import rflow
-from rflow.utils.example_runs import example_run_dir, save_example_graph
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 
 
 class WordHit(BaseModel):
@@ -209,21 +232,21 @@ def main() -> None:
     summarize("Variation A: prompt root.cols to scan columns directly", cols_graph)
     validate_result("Variation A", cols_graph)
     print(f"saved -> {cols_dir}")
-    save_example_graph(
+    _save_example_graph(
         cols_graph,
         __file__,
         "injection-variants",
-        out_dir=example_run_dir(__file__, "injection-variants") / "variant-cols",
+        out_dir=_example_run_dir(__file__, "injection-variants") / "variant-cols",
     )
 
     summarize("Variation B: prompt root to write a direct scanner", root_graph)
     validate_result("Variation B", root_graph)
     print(f"saved -> {root_dir}")
-    save_example_graph(
+    _save_example_graph(
         root_graph,
         __file__,
         "injection-variants",
-        out_dir=example_run_dir(__file__, "injection-variants") / "variant-root",
+        out_dir=_example_run_dir(__file__, "injection-variants") / "variant-root",
     )
 
 

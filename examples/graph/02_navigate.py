@@ -17,8 +17,33 @@ Run:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import rflow
-from rflow.utils.example_runs import save_example_graph
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 
 
 def build_graph() -> rflow.Graph:
@@ -114,7 +139,7 @@ def main() -> None:
             f"{sub.agent_id:<24} parent_id={sub.parent_id!s:<12} "
             f"parent_node_id={(sub.parent_node_id or '-')[:14]}"
         )
-    save_example_graph(g, __file__, "graph-navigate")
+    _save_example_graph(g, __file__, "graph-navigate")
 
 
 if __name__ == "__main__":

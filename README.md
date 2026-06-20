@@ -359,7 +359,8 @@ branch.save("runs/deep_research_repair")
 Controller edits use the same graph surface (`replace_node`, `truncate_after`,
 `inject`, `retrace_steps`) and then continue through `agent.step(graph)`. See
 [`examples/showcase.py`](examples/showcase.py), [`docs/control.md`](docs/control.md),
-and [`docs/injections.md`](docs/injections.md).
+[`docs/injections.md`](docs/injections.md), and the live graph-controller pool
+example in [`examples/control/graph_controller_agent.py`](examples/control/graph_controller_agent.py).
 
 ## Rich visualization
 
@@ -664,6 +665,7 @@ Add `--include-optional`, `--include-live`, `--include-sandbox`, or
 | [`needle/filesystem.py`](examples/needle/filesystem.py) | Needle-in-a-haystack across many files with `FILE_TOOLS` and runtime working directories. |
 | [`summarizer.py`](examples/summarizer.py) | Recursive map-reduce summarization over a long document. |
 | [`eager_children.py`](examples/control/delegation/eager_children.py) | `eager_children=True` vs `False` — how child scheduling overlaps. |
+| [`graph_controller_agent.py`](examples/control/graph_controller_agent.py) | Live controller agent creates a diversified worker pool with `create_worker(...)`, inspects query/graph diversity, advances named worker graphs, and saves all runs under `examples/_runs/graph_controller_runs/`. |
 | [`control/injection/`](examples/control/injection/) | Generate a baseline run, edit copies with graph injection/replacement, and continue variants. |
 | [`fork_repair.py`](examples/control/branching/fork_repair.py) | Fork graph/workdir snapshots into independent repair branches and compare results. |
 | [`best_of_n.py`](examples/control/branching/best_of_n.py) | Run N independent branches and pick the best result. |

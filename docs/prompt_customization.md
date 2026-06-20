@@ -49,7 +49,7 @@ The default builder has seven sections, in order:
 | `role` | Opening contract + REPL namespace. `output_schema` blurbs appear when `enable_structured_output=True`. |
 | `strategy` | Orchestrator principles: probe inputs, decompose/fanout, truncation, fix failures before `done()`. |
 | `format` | One `repl` block per turn; use `print(...)` for inspection. |
-| `examples` | Three core recipes (inspect→act, batched chunks, conditional sub-agent). Structured and orchestrator examples are opt-in. |
+| `examples` | Three core recipes (sub-agent slice fanout, verify→repair→re-verify, local search before `llm_query_batched`). |
 | `final` | `done(...)` contract and repair discipline. |
 | `structured-output` | Per-agent `done(value)` schema when `enable_structured_output=True` and the agent has `output_schema`. |
 | `tools` | Runtime-generated tool list (custom user tools registered with the engine). |

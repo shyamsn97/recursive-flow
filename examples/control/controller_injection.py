@@ -13,8 +13,33 @@ Run:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import rflow
-from rflow.utils.example_runs import example_run_dir, save_example_graph
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 
 OBSERVATION = "Injected controller observation: finalize using this note."
 
@@ -85,11 +110,11 @@ def observation_injection() -> None:
     assert graph.result() == "used the injected controller observation"
     print_states("after adopting + stepping: run reacted and finished", graph)
     print(f"result={graph.result()!r}")
-    save_example_graph(
+    _save_example_graph(
         graph,
         __file__,
         "controller-injection",
-        out_dir=example_run_dir(__file__, "controller-injection")
+        out_dir=_example_run_dir(__file__, "controller-injection")
         / "observation-injection",
     )
 
@@ -106,11 +131,11 @@ def terminate_to_finalize() -> None:
     assert graph.result() == "controller stopped the run"
     print_states("after terminate(): forced a clean done(...)", graph)
     print(f"result={graph.result()!r}")
-    save_example_graph(
+    _save_example_graph(
         graph,
         __file__,
         "controller-injection",
-        out_dir=example_run_dir(__file__, "controller-injection")
+        out_dir=_example_run_dir(__file__, "controller-injection")
         / "terminate-to-finalize",
     )
 

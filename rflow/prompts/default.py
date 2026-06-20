@@ -13,14 +13,8 @@ The prompt is built from headless, swappable sections that render back-to-back:
 1. ``role``     — opening contract + REPL namespace.
 2. ``strategy`` — official-style probe/orchestrator guidance.
 3. ``format``   — REPL block format.
-4. ``final``    — ``done(...)`` contract + closing exhortation.
-
-Following upstream ``alexzhang13/rlm``, the default prompt ships **no worked
-code examples**: the live ``RLM_SYSTEM_PROMPT`` + ``ORCHESTRATOR_ADDENDUM`` there
-carry none (the example-heavy variant is its deprecated ``RLM_SYSTEM_PROMPT_OLD``).
-Inline recipes made models cargo-cult the demonstrated shape (always chunk, always
-delegate-then-repair) instead of fitting the task. Task-specific examples should be
-added by callers via a custom ``PromptBuilder`` section, not baked into the default.
+4. ``examples`` — a few compact recipes for common orchestration moves.
+5. ``final``    — ``done(...)`` contract + closing exhortation.
 
 ``structured-output``, ``tools`` and ``status`` are dynamic sections filled from
 the current ``Flow`` + agent ``Graph`` at build time. Each section is swappable
@@ -92,6 +86,144 @@ Execute Python in fenced `repl` blocks. Use exactly one block per assistant mess
 """
 
 
+EXAMPLES_TEXT = """
+**Example 1 -- fan out slices with launch_subagents.**
+
+Use this when each slice may need tools, iteration, or judgment. Keep payloads
+in child `inputs`; the child `query` should describe the job, not carry the
+whole chunk.
+
+```repl
+query = INPUTS["query"]
+lines = INPUTS["corpus"].splitlines()
+batch_size = 500
+batches = [
+    "\\n".join(lines[i:i + batch_size])
+    for i in range(0, len(lines), batch_size)
+]
+
+results = await launch_subagents([
+    {
+        "name": f"scan-{i}",
+        "query": (
+            "Find evidence in INPUTS['slice'] relevant to INPUTS['question']. "
+            "Return concise findings with line references, or exactly NO_MATCH."
+        ),
+        "inputs": {"question": query, "slice": batch},
+    }
+    for i, batch in enumerate(batches)
+])
+findings = [r.strip() for r in results if r.strip() and r.strip() != "NO_MATCH"]
+done("\\n".join(findings) if findings else "NO_MATCH")
+```
+
+**Example 2 -- verify, repair, re-verify.**
+
+A failing check is work to fix, not a result to report. Re-read the artifact
+each pass, send concrete failures back to the responsible unit, then check
+again before calling `done(...)`.
+
+```repl
+def problems_with(path):
+    text = read_file(path)
+    issues = []
+    if "<script" not in text:
+        issues.append("missing script tag")
+    return issues
+
+issues = problems_with("index.html")
+if issues:
+    [fixed] = await launch_subagents([{
+        "name": "repair-index",
+        "query": "Fix these issues and return ONLY the corrected file contents:\\n" + "\\n".join(issues),
+        "inputs": {"current": read_file("index.html")},
+    }])
+    write_file("index.html", fixed)
+
+issues = problems_with("index.html")
+if not issues:
+    done("index.html built and verified.")
+print("still failing:", issues)
+```
+
+**Example 3 -- local search first, then llm_query_batched.**
+
+First turn: inspect, then use cheap Python search to isolate the passages worth
+sending to the model.
+
+```repl
+import re
+
+doc = INPUTS["doc"]
+print(len(doc), "chars")
+print(doc[:2000])
+
+# Search locally before spending model/context budget on the whole document.
+terms = INPUTS.get("terms", "refund|return|warranty")
+pattern = re.compile(terms, re.I)
+hits = [
+    (i, line)
+    for i, line in enumerate(doc.splitlines(), 1)
+    if pattern.search(line)
+]
+print("hits:", len(hits))
+for i, line in hits[:20]:
+    print(f"{i}: {line[:300]}")
+```
+
+Next turn, after reading the output:
+
+```repl
+# The regex hits identify relevant passages, so pass only those snippets.
+context = "\\n".join(f"{i}: {line}" for i, line in hits[:50])
+[answer] = llm_query_batched([
+    f"Answer {INPUTS['query']!r} using only these matching lines when possible:\\n{context}"
+])
+done(answer)
+```
+"""
+
+
+STRUCTURED_OUTPUT_TEXT = """
+This run requires structured output. When the task is complete, call `done(value)` with a JSON-compatible Python value that matches this JSON Schema exactly:
+
+```json
+{schema_hint}
+```
+
+Rules for `value`:
+- Pass the value itself (a dict / list / number / string per the schema), not a JSON string, prose, or Markdown.
+- Each field holds ONLY the final answer. No prefixes or labels like `Answer:`, `Label:`, `User:`, no units, and no restating the question.
+- Never put reasoning, status notes, or intermediate/debug data (counts, samples, validation output, full records) inside a field - compute those in the REPL and pass only the resolved value.
+- Respect each field's `description` and type, and keep values minimal.
+- `done(...)` is the final answer, not a progress update: only call it once the value is computed and verified.
+
+
+**Example -- launch structured sub-agents for multi-step slices.**
+
+```repl
+finding_schema = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+    "required": ["summary", "confidence"],
+    "additionalProperties": False,
+}
+findings = await launch_subagents([
+    {
+        "name": f"section-{i}",
+        "query": "Inspect INPUTS['section'] for facts relevant to INPUTS['query']. Return a compact finding.",
+        "output_schema": finding_schema,
+    }
+])
+best = [f for f in findings if f["confidence"] >= 0.7]
+done("\\n".join(f["summary"] for f in best))
+```
+"""
+
+
 FINAL_TEXT = """
 Submitting your final answer: when the task is complete, call `done(answer)` inside a ```repl``` block. `answer` must match the original query's requested form. The run terminates immediately.
 
@@ -132,6 +264,10 @@ def role_section(flow: Any = None, graph: Any = None) -> str:
 
 def strategy_section(flow: Any = None, graph: Any = None) -> str:
     return f"{STRATEGY_TEXT}\n{STRUCTURED_STRATEGY_TEXT}".strip()
+
+
+def examples_section(flow: Any = None, graph: Any = None) -> str:
+    return EXAMPLES_TEXT.strip()
 
 
 def tools_section(flow: Any = None, graph: Any = None) -> str:
@@ -194,23 +330,7 @@ def structured_output_section(flow: Any = None, graph: Any = None) -> str:
     if flow is None or graph is None or graph.output_schema is None:
         return ""
     hint = flow.output_parser.system_prompt_hint(graph.output_schema)
-    return (
-        "This run requires structured output. When the task is complete, call "
-        "`done(value)` with a JSON-compatible Python value that matches this JSON "
-        "Schema exactly:\n\n"
-        f"```json\n{hint}\n```\n\n"
-        "Rules for `value`:\n"
-        "- Pass the value itself (a dict / list / number / string per the schema), "
-        "not a JSON string, prose, or Markdown.\n"
-        "- Each field holds ONLY the final answer. No prefixes or labels like "
-        "`Answer:`, `Label:`, `User:`, no units, and no restating the question.\n"
-        "- Never put reasoning, status notes, or intermediate/debug data (counts, "
-        "samples, validation output, full records) inside a field — compute those "
-        "in the REPL and pass only the resolved value.\n"
-        "- Respect each field's `description` and type, and keep values minimal.\n"
-        "- `done(...)` is the final answer, not a progress update: only call it once "
-        "the value is computed and verified."
-    )
+    return STRUCTURED_OUTPUT_TEXT.replace("{schema_hint}", hint).strip()
 
 
 DEFAULT_BUILDER = (
@@ -218,6 +338,7 @@ DEFAULT_BUILDER = (
     .section("role", role_section)
     .section("strategy", strategy_section)
     .section("format", FORMAT_TEXT)
+    .section("examples", examples_section)
     .section("final", FINAL_TEXT)
     .section("structured-output", structured_output_section, title="Structured Output")
     .section("tools", tools_section, title="Tools")
@@ -231,11 +352,14 @@ SYSTEM_PROMPT = DEFAULT_BUILDER.build()
 
 __all__ = [
     "DEFAULT_BUILDER",
+    "EXAMPLES_TEXT",
     "FINAL_TEXT",
     "FORMAT_TEXT",
     "MAX_STATIC_PROMPT_CHARS",
     "STRATEGY_TEXT",
+    "STRUCTURED_OUTPUT_TEXT",
     "SYSTEM_PROMPT",
+    "examples_section",
     "role_section",
     "status_section",
     "structured_output_section",

@@ -10,7 +10,7 @@ The whole tree advances by *synchronized steps*. Each :meth:`Flow.step`:
 
 1. asks the scheduler which agents can move right now (leaves, plus
    supervisors whose awaited children have all finished);
-2. advances each of them by one action in parallel through a thread pool.
+2. advances each of them by one action in parallel through an execution pool.
 
 A "leaf" advance is one of: call the LLM, run the emitted code, or resume a
 suspended coroutine. The graph is held in memory — no persistence, no
@@ -22,8 +22,8 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor
 
+import rflow.prompts.projection as prompt_projection
 from rflow.base import BaseFlow
 from rflow.clients.llm import LLMClient, LLMUsage
 from rflow.clients.llm_channel import LLMChannel
@@ -41,7 +41,6 @@ from rflow.graph import (
     ResumeAction,
     SupervisingOutput,
     UserQuery,
-    append_message,
 )
 from rflow.graph.actions import Action, ActionPlan, CallLLM, Exec, Resume
 from rflow.integrations.structured import (
@@ -172,7 +171,7 @@ class Flow(BaseFlow):
         # LLM routing: "default" is the primary client; named lanes select
         # alternate models per agent (Graph.model) or per llm_query_batched call.
         # A single bounded channel owns the HTTP thread pool for every lane,
-        # kept separate from the per-step agent pool used by dispatch().
+        # kept separate from the per-step agent execution pool.
         self._llm_clients: dict[str, LLMClient] = {
             "default": llm,
             **(llm_clients or {}),
@@ -185,13 +184,7 @@ class Flow(BaseFlow):
         )
         self.output_parser = StructuredOutputParser()
         self.last_usage: LLMUsage | None = None
-        # A long-lived pool is only needed for work-conserving eager scheduling;
-        # the default per-step path uses ``dispatch`` (a throwaway pool).
-        self.pool = (
-            create_pool(pool, max_concurrency=max_concurrency)
-            if (eager_children or pool is not None)
-            else None
-        )
+        self.pool = create_pool(pool, max_concurrency=max_concurrency)
         # Run state, (re)set by start(). One run per Flow at a time.
         self.graph: Graph | None = None
         self.repls: dict[str, ReplBackend] = {}
@@ -208,9 +201,9 @@ class Flow(BaseFlow):
         """Release the LLM channel's HTTP thread pool.
 
         Optional but recommended for long-lived processes / notebooks to avoid
-        leaking idle worker threads. Also tears down any remote REPL backends
-        (Docker containers, cloud sandboxes) created during the run. The flow is
-        single-use afterwards.
+        leaking idle worker threads. Also tears down the agent execution pool
+        and any remote REPL backends (Docker containers, cloud sandboxes)
+        created during the run. The flow is single-use afterwards.
         """
         for repl in self.repls.values():
             try:
@@ -296,16 +289,16 @@ class Flow(BaseFlow):
             ),
         )
         self.repls = {}
+        self.runtime.clear_graph_sync_cache()
         self._step = 0
         self._terminate_requested = set()
-        # The system prompt is constant for an agent's lifetime (it depends only
-        # on fixed depth / output_schema / tools), so render it once and store it
-        # — the graph stays self-describing for serialization and observability.
+        # Store the rendered prompt on the graph so traces are self-describing.
+        # Later schema edits are reconciled from graph state before stepping.
         # The agent's REPL is NOT created here: that stays lazy (first execution,
         # in a worker thread) so heavy backends (Docker/Modal) only boot when the
         # agent actually runs. tools_section reads tool *metadata* via a throwaway
         # build, which creates no REPL/sandbox.
-        self.graph.system_prompt = self.build_system_prompt(self.graph)
+        self._ensure_system_prompt_current(self.graph)
         self._append(
             self.graph, UserQuery(content=self.first_prompt(query, inputs, depth=0))
         )
@@ -327,6 +320,8 @@ class Flow(BaseFlow):
         Omit ``graph`` to advance the flow's own graph in place. ``query=``
         starts a run (no current graph) or appends a follow-up user turn (merged
         into a trailing user node so two user messages never sit in a row).
+        ``output_schema=`` on an existing graph updates the root agent's
+        structured-output contract before the next transition.
 
         A graph loaded/forked while paused mid-delegation (tip
         ``SupervisingOutput``) has no live coroutine to resume, so this raises
@@ -335,13 +330,20 @@ class Flow(BaseFlow):
         """
         if graph is not None:
             self._adopt(graph)
-        if query is not None:
-            if self.graph is None:
-                self.start(query, inputs, output_schema=output_schema)
-            else:
-                self._add_user_turn(query, inputs)
+
         if self.graph is None:
-            raise RuntimeError("step() needs a query to start or a graph to advance")
+            if query is None:
+                raise RuntimeError(
+                    "step() needs a query to start or a graph to advance"
+                )
+            self.start(query, inputs, output_schema=output_schema)
+        else:
+            if output_schema is not None:
+                self._update_root_output_schema(output_schema)
+            if query is not None:
+                self._add_user_turn(query, inputs)
+
+        self.sync_graph_state()
         self._check_resumable(salvage)
         self._step += 1
         plan = self.plan(self.graph)
@@ -352,11 +354,45 @@ class Flow(BaseFlow):
     def _adopt(self, graph: Graph) -> None:
         """Take ``graph`` as run state, deep-copied so the original stays frozen.
 
-        Repls are re-created lazily after adoption; the graph copy becomes the
-        live run state for subsequent planning and execution.
+        If the adopted graph is not the exact same history already bound to
+        this flow, live REPLs are discarded and recreated lazily. A graph can be
+        serialized or edited, but a Python namespace, sandbox process, or
+        suspended coroutine cannot be safely diffed onto a different history.
         """
+        same_history = (
+            self.graph is not None and graph.to_dict() == self.graph.to_dict()
+        )
+        if not same_history:
+            for aid in list(self.repls):
+                self.runtime.discard_repl(self.repls, aid)
+            self._terminate_requested = set()
         self.graph = graph.copy(deep=True)
+        self.runtime.clear_graph_sync_cache()
         self._step = self.graph.max_global_step() or 0
+
+    def _update_root_output_schema(self, output_schema: Schema) -> None:
+        """Set the root graph's structured-output contract."""
+        assert self.graph is not None
+        self.graph.output_schema = json_schema_for(output_schema)
+
+    def sync_graph_state(self) -> Graph:
+        """Refresh runtime mirrors from the current graph without advancing.
+
+        ``Graph`` is the durable source of truth. Cached REPL state exists only
+        so tools and code execution have fast/local access to graph metadata.
+        """
+        if self.graph is None:
+            raise RuntimeError("sync_graph_state() needs a graph")
+        agents = self.graph.agents
+        for agent in agents.values():
+            self._ensure_system_prompt_current(agent)
+        for aid in list(self.repls):
+            agent = agents.get(aid)
+            if agent is None:
+                self.runtime.discard_repl(self.repls, aid)
+            else:
+                self._sync_repl_with_graph(self.repls[aid], agent)
+        return self.graph
 
     def _add_user_turn(self, query: str, inputs: dict[str, str] | None) -> None:
         """Append a follow-up user turn to the root.
@@ -367,6 +403,7 @@ class Flow(BaseFlow):
         """
         root = self.graph
         extra = self._validate_inputs(inputs)
+        root.query = query
         if extra:
             root.inputs = {**root.inputs, **extra}
         self._append(root, UserQuery(content=query))
@@ -425,19 +462,17 @@ class Flow(BaseFlow):
         """Carry out one step's plan by running each action.
 
         Each action is independent — it touches only its own agent's slice of
-        the graph (mutations are guarded by ``self._lock``) — so the default
-        fans them out with :meth:`dispatch`. With ``eager_children=True`` the
-        long-lived pool runs work-conserving: as each task finishes it pulls in
-        a waiting supervisor's newly-runnable descendants. Override to add
-        ordering, batching, per-agent rate limits, etc.
+        the graph (mutations are guarded by ``self._lock``) — so the pool can
+        fan them out. With ``eager_children=True`` the pool runs work-conserving:
+        as each task finishes it pulls in a waiting supervisor's newly-runnable
+        descendants. Override to add ordering, batching, per-agent rate limits,
+        etc.
         """
-        if self.eager_children and self.pool is not None:
-            tasks = [
-                (aid, lambda a=action: self.act(a)) for aid, action in plan.items()
-            ]
+        tasks = [(aid, lambda a=action: self.act(a)) for aid, action in plan.items()]
+        if self.eager_children:
             self.pool.run_until_idle(tasks, self._refill_eager_children)
             return
-        self.dispatch([lambda a=action: self.act(a) for action in plan.values()])
+        self.pool.execute(tasks)
 
     def _refill_eager_children(
         self, _done_id: str, _result: object, active_ids: set[str]
@@ -463,23 +498,6 @@ class Flow(BaseFlow):
                 scheduled.add(aid)
                 tasks.append((aid, lambda a=action: self.act(a)))
         return tasks
-
-    def dispatch(self, tasks: list[Callable[[], None]]) -> None:
-        """Run this step's independent tasks, bounded by ``max_concurrency``.
-
-        This is the one place the engine reaches for a thread pool. Override
-        it to plug in a different executor — a long-lived pool, an asyncio
-        loop, a process pool, Ray, … — without touching the step logic. The
-        default spins up a throwaway pool per step, and runs inline when
-        concurrency is 1 or there is a single task.
-        """
-        if self.max_concurrency <= 1 or len(tasks) <= 1:
-            for task in tasks:
-                task()
-            return
-        with ThreadPoolExecutor(max_workers=self.max_concurrency) as pool:
-            for _ in pool.map(lambda t: t(), tasks):
-                pass
 
     # ── policy: decide what each agent does next (pure) ───────────────
 
@@ -809,7 +827,7 @@ class Flow(BaseFlow):
             # Render + store the child's prompt now (cheap), but leave its REPL
             # lazy — a heavy backend must not boot under this lock; it boots when
             # the child is first stepped, in a worker thread.
-            child.system_prompt = self.build_system_prompt(child)
+            self._ensure_system_prompt_current(child)
             self._append(
                 child,
                 UserQuery(
@@ -842,14 +860,7 @@ class Flow(BaseFlow):
             agent_id=agent.agent_id,
             output_schema=agent.output_schema,
         )
-        repl.process_env.update(
-            agent_process_env(
-                agent_id=agent.agent_id,
-                depth=agent.depth,
-                parent_agent_id=agent.parent_agent_id,
-                max_depth=self.max_depth,
-            )
-        )
+        repl.process_env.update(self._agent_process_env(agent))
 
     def repl_for(self, agent: Graph) -> ReplBackend:
         """Get (creating lazily, on first execution) this agent's REPL backend.
@@ -860,14 +871,29 @@ class Flow(BaseFlow):
         the worker thread that steps the agent rather than under the engine lock.
         :meth:`make_repl` picks the backend (the runtime mints it);
         :meth:`seed_agent_context` seeds per-agent context;
-        :meth:`_seed_repl` binds tools and inputs. Override any seam to customize.
+        this method binds tools and inputs. Override any seam to customize.
         """
         repl = self.repls.get(agent.agent_id)
         if repl is None:
             repl = self.make_repl(agent)
             self.seed_agent_context(repl, agent)
-            self._seed_repl(repl, agent, self.build_tools(repl.engine_context))
+            repl_inputs = agent.repl_inputs()
+            tools = self.build_tools(repl.engine_context)
+            if isinstance(repl, RemoteRepl):
+                repl.seed(tools, repl_inputs)
+            else:
+                repl.namespace.update(tools)
+                if self.show_vars:
+                    repl.namespace["SHOW_VARS"] = make_show_vars(repl.namespace)
+                # Inputs live under a single ``INPUTS`` dict (read as
+                # ``INPUTS["key"]``) rather than as top-level names, so an input
+                # key can never shadow a real REPL variable, tool, or import.
+                repl.namespace["INPUTS"] = repl_inputs
             self.repls[agent.agent_id] = repl
+            self.runtime.repl_env_cache[agent.agent_id] = dict(repl.process_env)
+            self.runtime.repl_inputs_cache[agent.agent_id] = agent.repl_inputs()
+        else:
+            self._sync_repl_with_graph(repl, agent)
         return repl
 
     def make_repl(self, agent: Graph) -> ReplBackend:
@@ -880,26 +906,46 @@ class Flow(BaseFlow):
         """
         return self.runtime.open(agent)
 
-    def _seed_repl(self, repl: ReplBackend, agent: Graph, tools: dict) -> None:
-        """Install ``agent``'s tools and inputs into a freshly created backend.
+    def _agent_process_env(self, agent: Graph) -> dict[str, str]:
+        """Public ``RFLOW_*`` environment, derived from graph + flow config."""
+        return agent_process_env(
+            agent_id=agent.agent_id,
+            depth=agent.depth,
+            parent_agent_id=agent.parent_agent_id,
+            max_depth=self.max_depth,
+        )
 
-        In-process backends get the full tool namespace plus optional
-        ``SHOW_VARS``. Remote backends run code in a sandbox, so ``seed`` copies
-        public ``RFLOW_*`` env vars and routes each tool by kind: host-bound tools
-        are proxied, the rest are shipped in to run locally (see
-        :meth:`RemoteRepl.seed`).
-        """
-        repl_inputs = {"query": agent.query, **agent.inputs}
-        if isinstance(repl, RemoteRepl):
-            repl.seed(tools, repl_inputs)
+    # ── graph-derived prompts ─────────────────────────────────────────
+
+    def _ensure_system_prompt_current(self, agent: Graph) -> None:
+        """Render ``agent.system_prompt`` if its graph projection is stale."""
+        fp = json.dumps(
+            {
+                "output_schema": agent.output_schema,
+                "depth": agent.depth,
+                "max_depth": self.max_depth,
+                "enable_structured_output": self.enable_structured_output,
+                "show_vars": self.show_vars,
+                "runtime_tools": sorted(self.runtime.tools),
+                "prompt_builder": id(self.prompt_builder),
+                "system_prompt": self.system_prompt,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if self.runtime.prompt_fingerprints.get(agent.agent_id) == fp:
             return
-        repl.namespace.update(tools)
-        if self.show_vars:
-            repl.namespace["SHOW_VARS"] = make_show_vars(repl.namespace)
-        # Inputs live under a single ``INPUTS`` dict (read as ``INPUTS["key"]``)
-        # rather than as top-level names, so an input key can never shadow a
-        # real REPL variable, tool, or import.
-        repl.namespace["INPUTS"] = repl_inputs
+        agent.system_prompt = self.build_system_prompt(agent)
+        self.runtime.prompt_fingerprints[agent.agent_id] = fp
+
+    def _sync_repl_with_graph(self, repl: ReplBackend, agent: Graph) -> None:
+        """Ask the runtime to mirror graph metadata into one backend."""
+        self.runtime.sync_repl(
+            repl,
+            agent,
+            env=self._agent_process_env(agent),
+            inputs=agent.repl_inputs(),
+        )
 
     def build_tools(self, engine_context: EngineContext | None = None) -> dict:
         """Assemble the core REPL tools (see :mod:`rflow.tools.builtins`).
@@ -993,35 +1039,25 @@ class Flow(BaseFlow):
     # ── message / output projection (public override seams) ───────────
 
     def build_messages(
-        self, agent: Graph, *, force_final: bool
+        self, graph: Graph, *, force_final: bool
     ) -> list[dict[str, str]]:
-        """Project an agent's trajectory into chat messages for the LLM call.
+        """Project a graph trajectory into chat messages for the LLM call.
 
-        The agent's system prompt (rendered once at creation and stored on the
+        The graph's system prompt (rendered once at creation and stored on the
         graph) plus its trajectory projection and the engine's continue/final
         nudge. Override to reshape what the model sees (ordering,
         truncation/windowing, extra steering turns, …).
         """
-        system = agent.system_prompt or self.build_system_prompt(agent)
-        msgs = agent.messages(system)
-        msgs = self._window_messages(msgs)
-        if force_final:
-            append_message(msgs, "user", self.FINAL)
-        elif not msgs or msgs[-1]["role"] != "user":
-            append_message(msgs, "user", self.CONTINUE)
-        return msgs
-
-    def _window_messages(self, msgs: list[dict[str, str]]) -> list[dict[str, str]]:
-        """Drop the middle of an over-long history, keeping the system + tail."""
-        if self.max_messages is None or len(msgs) <= self.max_messages:
-            return msgs
-        head: list[dict[str, str]] = []
-        body = msgs
-        if msgs and msgs[0]["role"] == "system":
-            head, body = msgs[:1], msgs[1:]
-        keep = max(1, self.max_messages - len(head) - 1)
-        summary = {"role": "user", "content": messages.TRUNCATION_SUMMARY}
-        return [*head, summary, *body[-keep:]]
+        self._ensure_system_prompt_current(graph)
+        system_prompt = graph.system_prompt or self.build_system_prompt(graph)
+        return prompt_projection.build_messages(
+            graph,
+            system_prompt=system_prompt,
+            max_messages=self.max_messages,
+            continue_nudge=self.CONTINUE,
+            final_nudge=self.FINAL,
+            force_final=force_final,
+        )
 
     def build_system_prompt(self, graph: Graph) -> str:
         """The system prompt for one agent's LLM call.
@@ -1034,20 +1070,19 @@ class Flow(BaseFlow):
         in a custom builder or templating.
         """
         if self.system_prompt is not None:
-            system = self.system_prompt
+            schema = None
             if graph.output_schema is not None and self.enable_structured_output:
-                system = f"{system}\n\n{self._schema_instruction(graph.output_schema)}"
-            return system
+                schema = self._schema_instruction(graph.output_schema)
+            return prompt_projection.build_system_prompt(
+                self.system_prompt,
+                schema_instruction=schema,
+            )
         return self.prompt_builder.build(self, graph)
 
     def _schema_instruction(self, schema: Schema) -> str:
         """Render the structured-output instruction block for a schema."""
         hint = self.output_parser.system_prompt_hint(schema)
-        return (
-            "When you finish, call done(value) with a JSON-compatible Python "
-            "value (not a JSON string) that matches this JSON Schema:\n"
-            f"{hint}"
-        )
+        return prompt_projection.schema_instruction(hint)
 
     def format_exec_output(self, output: str) -> str:
         """Wrap captured REPL stdout for the model's next user turn.
@@ -1055,7 +1090,7 @@ class Flow(BaseFlow):
         Override to change how execution output is presented (framing,
         labels, syntax fences, …).
         """
-        return f"REPL output:\n{output or '(no output)'}"
+        return prompt_projection.format_exec_output(output)
 
     def first_prompt(
         self, query: str, inputs: dict[str, str], *, depth: int = 0
@@ -1064,7 +1099,7 @@ class Flow(BaseFlow):
 
         Override to change the bootstrap framing.
         """
-        return messages.first_prompt(
+        return prompt_projection.first_prompt(
             query,
             inputs,
             depth=depth,

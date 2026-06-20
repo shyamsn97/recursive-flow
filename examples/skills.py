@@ -21,7 +21,30 @@ from pathlib import Path
 
 import rflow
 from rflow.prompts import DEFAULT_BUILDER
-from rflow.utils.example_runs import example_run_dir, save_example_graph
+
+
+def _example_run_dir(source_file: str | Path, name: str) -> Path:
+    source = Path(source_file).resolve()
+    for parent in (source.parent, *source.parents):
+        if parent.name == "examples":
+            return parent / "_runs" / name
+    return source.parent / "_runs" / name
+
+
+def _save_example_graph(
+    graph,
+    source_file: str | Path,
+    name: str,
+    *,
+    out_dir: str | Path | None = None,
+    label: str = "Graph saved to",
+) -> Path:
+    path = graph.save(
+        Path(out_dir) if out_dir is not None else _example_run_dir(source_file, name)
+    )
+    print(f"{label} {path}")
+    return path
+
 
 NUMPY_LINEAR_ALGEBRA_SKILL = """\
 # NumPy Linear Algebra
@@ -127,7 +150,7 @@ def main() -> None:
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=example_run_dir(__file__, "skills"),
+        default=_example_run_dir(__file__, "skills"),
         help="Save the final run here (default: examples/_runs/skills/).",
     )
     args = parser.parse_args()
@@ -159,7 +182,7 @@ def main() -> None:
         while not graph.finished:
             graph = flow.step(graph)
         print(graph.result())
-        save_example_graph(graph, __file__, "skills", out_dir=args.out_dir)
+        _save_example_graph(graph, __file__, "skills", out_dir=args.out_dir)
     finally:
         if tmp is not None:
             tmp.cleanup()

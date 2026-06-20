@@ -57,6 +57,11 @@ def test_to_dict_includes_system_prompt():
     assert g.to_dict()["system_prompt"] == "SYS"
 
 
+def test_repl_inputs_projects_query_and_inputs():
+    g = Graph(agent_id="root", query="q", inputs={"doc": "text"})
+    assert g.repl_inputs() == {"query": "q", "doc": "text"}
+
+
 def test_from_dict_round_trips_a_delegated_run():
     g = _delegated_graph()
     restored = Graph.from_dict(g.to_dict())

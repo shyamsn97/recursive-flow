@@ -31,9 +31,9 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _capture = threading.local()
 
 # ``os.chdir`` and ``os.environ`` mutate process-global state, so local REPLs
-# serialize the overlay + execute window whenever either is used. Without this,
-# sibling agents could leak cwd/env changes into each other.
-_PROCESS_STATE_LOCK = threading.Lock()
+# serialize the overlay + execute window whenever either is used. The lock is
+# reentrant so a host tool can synchronously drive another local Flow.
+_PROCESS_STATE_LOCK = threading.RLock()
 
 
 class DoneSignal(BaseException):
@@ -121,6 +121,7 @@ class REPL:
         """
         self._buf = io.StringIO()
         self.errored = False
+        prev_buf = getattr(_capture, "buf", None)
         _capture.buf = self._buf
         prev_cwd: str | None = None
         old_env: dict[str, str] = {}
@@ -150,7 +151,7 @@ class REPL:
             self._buf.write(f"\n{type(exc).__name__}: {exc}")
             self.errored = True
         finally:
-            _capture.buf = None
+            _capture.buf = prev_buf
             if prev_cwd is not None:
                 os.chdir(prev_cwd)
             for key in self.process_env:

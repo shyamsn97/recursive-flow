@@ -22,7 +22,7 @@ Continue using the REPL environment and querying sub-LLMs / sub-agents by writin
 CONTINUE_ACTION = "Continue your next action:"
 
 FIRST_TURN_INSPECTION_NUDGE = """\
-Your first REPL block should usually inspect input names, sizes, and tiny bounded samples (e.g. `print(list(INPUTS))`, `print(len(INPUTS["query"]))`, `print(INPUTS["query"][:500])`). Never print a full large input; keep full chunks in variables and pass focused chunks to subcalls.
+Your first REPL block should usually inspect input names, sizes, and only the short previews needed to understand the task (e.g. `print(list(INPUTS))`, `print({k: len(v) for k, v in INPUTS.items()})`). Never print a full large input; keep full chunks in variables and pass focused chunks to subcalls.
 """
 
 FIRST_TURN_DECOMPOSITION_NUDGE = """\
