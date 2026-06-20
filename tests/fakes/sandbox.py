@@ -21,7 +21,9 @@ which:
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -120,8 +122,19 @@ def run_local(command: str, *, timeout: float | None = None) -> tuple[int, str, 
     if lifecycle is not None:
         return lifecycle
     # The transport's append/poll snippets are pure stdlib (pathlib/sys/time):
-    # run them for real so they read/write the same files the in-thread server
-    # uses, without touching the host process's sys.stdout.
+    # run them with shell=False so CI does not need to exec /bin/sh for every
+    # bridge message. They still run in a child process, so they don't touch the
+    # host process's sys.stdout while the in-thread server is capturing output.
+    argv = shlex.split(command)
+    if len(argv) >= 3 and argv[0] == "python" and argv[1] == "-c":
+        proc = subprocess.run(
+            [sys.executable, "-c", argv[2]],
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+        return proc.returncode, proc.stdout, proc.stderr
     proc = subprocess.run(
         command, shell=True, text=True, capture_output=True, timeout=timeout, check=False
     )
