@@ -55,7 +55,8 @@ python -m benchmarks.eval \
   --model openai:gpt-5-mini \
   --dataset oolong official_longbench_v2 official_livecodebench official_sudoku_extreme \
   --runner vanilla rflow-local official-rlm \
-  --seeds 0:20 \
+  --seed 0 \
+  --limit 50 \
   --executor modal \
   --parallel 20 \
   --best-of-n 1 \

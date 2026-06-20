@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import random
 import re
 from pathlib import Path
 from typing import Any
@@ -32,16 +33,17 @@ class OolongDataset(Dataset):
         rows = self._load(split)
         if not rows:
             raise ValueError("No OOLONG examples fit the configured limits.")
-        start = seed % len(rows)
         count = limit or 1
-        selected = [rows[(start + i) % len(rows)] for i in range(count)]
-        return [self._example(row, index=(start + i) % len(rows)) for i, row in enumerate(selected)]
+        indices = list(range(len(rows)))
+        random.Random(seed).shuffle(indices)
+        selected = indices[: min(count, len(indices))]
+        return [self._example(rows[index], index=index) for index in selected]
 
     def _load(self, split: str) -> list[dict[str, Any]]:
         if self._rows is not None:
             return self._rows
         try:
-            from datasets import load_dataset, load_from_disk
+            from datasets import load_dataset, load_from_disk  # pyright: ignore[reportMissingImports]
         except ImportError as exc:
             raise RuntimeError(
                 "OOLONG requires the eval extra: pip install -e '.[eval]'"

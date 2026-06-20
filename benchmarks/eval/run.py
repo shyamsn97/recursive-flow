@@ -152,6 +152,15 @@ def _run_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
     seed = payload["seed"]
     attempt = int(payload.get("attempt", 0))
     best_of_n = int(payload.get("best_of_n", 1))
+    _log_worker_start(
+        dataset=dataset_name,
+        example=example,
+        runner=runner_name,
+        model=model_spec.name,
+        seed=seed,
+        attempt=attempt,
+        best_of_n=best_of_n,
+    )
     try:
         runner = RUNNERS.make(runner_spec.name, **runner_spec.params)
         model = MODELS.make(model_spec.provider, name=model_spec.name, **model_spec.params)
@@ -198,6 +207,28 @@ def _run_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "attempt": attempt,
             "best_of_n": best_of_n,
         }
+
+
+def _log_worker_start(
+    *,
+    dataset: str,
+    example: Example,
+    runner: str,
+    model: str,
+    seed: int | None,
+    attempt: int,
+    best_of_n: int,
+) -> None:
+    question = " ".join(example.prompt.split())
+    if len(question) > 240:
+        question = question[:237].rstrip() + "..."
+    attempt_label = f" attempt={attempt + 1}/{best_of_n}" if best_of_n > 1 else ""
+    print(
+        "[bench-worker] "
+        f"dataset={dataset} example={example.id} runner={runner} model={model} "
+        f"seed={seed}{attempt_label} question={question!r}",
+        flush=True,
+    )
 
 
 def _best_rows_from_results(jobs: list[dict[str, Any]], results: list[dict[str, Any]]) -> list[Row]:
@@ -378,6 +409,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default="openai:gpt-5-mini")
     parser.add_argument("--logger", "--loggers", nargs="+", default=["jsonl", "console", "report"])
     parser.add_argument("--seeds", default="0:5")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="Single dataset sampling seed. Use with --limit for one shared sample set.",
+    )
     parser.add_argument("--split", default="test")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--out-dir", type=Path, default=Path("benchmarks/eval/runs"))
@@ -453,7 +489,7 @@ def config_from_args(args: argparse.Namespace) -> SuiteConfig:
             ComponentSpec(name=name, params=logger_params.get(name, {}))
             for name in logger_names
         ],
-        seeds=parse_seed_spec(args.seeds),
+        seeds=[args.seed] if args.seed is not None else parse_seed_spec(args.seeds),
         split=args.split,
         limit=args.limit,
         output_root=args.out_dir,

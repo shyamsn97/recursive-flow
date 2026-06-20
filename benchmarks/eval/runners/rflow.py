@@ -17,7 +17,7 @@ class RFlowLocalRunner(Runner):
     def __init__(
         self,
         max_iters: int = 20,
-        max_depth: int = 2,
+        max_depth: int = 1,
         live_save: bool = True,
         max_steps: int | None = None,
     ) -> None:
