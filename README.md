@@ -728,10 +728,8 @@ scaling / label-normalization flags (`--marker-mult`, `--text-mult`,
 `--normalize-labels` / `--no-normalize-labels`).
 
 ## Roadmap
-- [x] OOLONG long-context aggregation harness (`standard` / `rlm` / `rlm_tips`)
-- [x] `LocalRuntime` + `DockerRuntime` — battle-tested
-- [~] `ModalRuntime` / `E2BRuntime` / `DaytonaRuntime` — full support: native SDK file transfer, real-sandbox CI, depth>1 delegation, heavier example
 - [~] OOLONG, LongBench-v2, CodeQA, SWE-bench, etc. benchmarks [benchmarks](benchmarks/eval/)
+- [~] Remote sandbox support (modal, e2b, daytona)
 - [ ] **REPL security (local)**
 - [ ] [RAO library module](docs/research/rao_implementation_plan.md): `rflow.rao` rollout collection, per-node rewards, leave-one-out advantages, depth weighting, trainer export
 - [ ] [DeLM-style coordination](docs/research/delm_vs_rlmflow.md): shared task queue, verified shared context, multi-worker coordinator over `Flow` graphs
