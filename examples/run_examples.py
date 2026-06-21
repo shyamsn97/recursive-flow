@@ -122,6 +122,14 @@ EXAMPLES: list[Example] = [
         note="opens the interactive viewer",
     ),
     Example(
+        "tui-chat",
+        "examples/tui_chat.py",
+        category="manual",
+        env=("OPENAI_API_KEY",),
+        modules=("openai", "textual"),
+        note="opens the live Textual TUI against a real OpenAI-backed Flow",
+    ),
+    Example(
         "drop-in-llm",
         "examples/drop_in_llm.py",
         category="live",

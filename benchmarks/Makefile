@@ -30,6 +30,7 @@ EVAL_MAX_DEPTH ?= 1
 EVAL_EXECUTOR ?= local
 EVAL_PARALLEL ?= 1
 EVAL_BEST_OF_N ?= 1
+EVAL_ATTEMPT_TIMEOUT ?= 900
 EVAL_MODAL_APP_NAME ?= rflow-benchmarks
 EVAL_MODAL_CPU ?= 1
 EVAL_MODAL_TIMEOUT ?= 3600
@@ -74,6 +75,7 @@ eval-run: ## Run real eval harness. Override EVAL_PROVIDER/MODEL/TASKS/RUNNERS/S
 		--executor $(EVAL_EXECUTOR) \
 		--parallel $(EVAL_PARALLEL) \
 		--best-of-n $(EVAL_BEST_OF_N) \
+		--attempt-timeout $(EVAL_ATTEMPT_TIMEOUT) \
 		--modal-app-name $(EVAL_MODAL_APP_NAME) \
 		--modal-cpu $(EVAL_MODAL_CPU) \
 		--modal-timeout $(EVAL_MODAL_TIMEOUT) \
@@ -91,6 +93,7 @@ eval-wandb: ## Run real eval harness with W&B logging enabled.
 		--executor $(EVAL_EXECUTOR) \
 		--parallel $(EVAL_PARALLEL) \
 		--best-of-n $(EVAL_BEST_OF_N) \
+		--attempt-timeout $(EVAL_ATTEMPT_TIMEOUT) \
 		--modal-app-name $(EVAL_MODAL_APP_NAME) \
 		--modal-cpu $(EVAL_MODAL_CPU) \
 		--modal-timeout $(EVAL_MODAL_TIMEOUT) \
@@ -111,6 +114,7 @@ eval-benchmark:
 		--executor $(EVAL_EXECUTOR) \
 		--parallel $(EVAL_PARALLEL) \
 		--best-of-n $(EVAL_BEST_OF_N) \
+		--attempt-timeout $(EVAL_ATTEMPT_TIMEOUT) \
 		--modal-app-name $(EVAL_MODAL_APP_NAME) \
 		--modal-cpu $(EVAL_MODAL_CPU) \
 		--modal-timeout $(EVAL_MODAL_TIMEOUT) \

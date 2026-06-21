@@ -234,6 +234,22 @@ class Flow(BaseFlow):
             self.step()
         return graph.result()
 
+    def tui(
+        self,
+        *,
+        salvage: bool = False,
+        max_steps_per_turn: int | None = None,
+    ) -> Graph | None:
+        """Open the optional full-screen terminal chat UI for this flow."""
+
+        from rflow.tui import run_tui
+
+        return run_tui(
+            self,
+            salvage=salvage,
+            max_steps_per_turn=max_steps_per_turn,
+        )
+
     # ── drop-in LLMClient: treat a whole Flow as one "model" ──────────
     #: A run mutates ``self.graph``; serialize when used as a shared client.
     thread_safe: bool = False

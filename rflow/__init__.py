@@ -85,6 +85,7 @@ from rflow.prompts import (
 from rflow.repl import REPL, DoneSignal
 from rflow.runtime import DockerRuntime, LocalRuntime, Runtime
 from rflow.tools import FILE_TOOLS, get_tool_metadata, tool
+from rflow.tui import tui
 from rflow.utils.trace import Trace, load_trace, save_trace
 
 __all__ = [
@@ -161,4 +162,5 @@ __all__ = [
     "parse_node_obj",
     "retry_transient",
     "tool",
+    "tui",
 ]

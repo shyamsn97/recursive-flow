@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import importlib
 import json
+import multiprocessing as mp
 import os
+import queue
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, replace
@@ -102,6 +104,7 @@ def _build_jobs(config: SuiteConfig, *, seen: set[tuple]) -> list[dict[str, Any]
                                     "job_index": job_index,
                                     "attempt": attempt,
                                     "best_of_n": config.best_of_n,
+                                    "attempt_timeout": config.attempt_timeout,
                                 }
                                 for attempt in range(config.best_of_n)
                             ],
@@ -144,6 +147,45 @@ def _run_jobs(config: SuiteConfig, jobs: list[dict[str, Any]]) -> Iterable[Row]:
 
 
 def _run_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    attempt_timeout = int(payload.get("attempt_timeout") or 0)
+    if attempt_timeout > 0:
+        return _run_job_payload_with_timeout(payload, attempt_timeout)
+    return _run_job_payload_inner(payload)
+
+
+def _run_job_payload_with_timeout(payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+    output: mp.Queue = mp.Queue(maxsize=1)
+    process = mp.Process(target=_run_job_payload_child, args=(payload, output))
+    process.start()
+    process.join(timeout)
+    if process.is_alive():
+        process.terminate()
+        process.join(10)
+        if process.is_alive():
+            process.kill()
+            process.join()
+        return _error_payload_result(
+            payload,
+            error=f"TimeoutError: attempt exceeded {timeout}s",
+            time_seconds=float(timeout),
+        )
+    try:
+        return output.get_nowait()
+    except queue.Empty:
+        return _error_payload_result(
+            payload,
+            error=f"RuntimeError: attempt process exited with code {process.exitcode} and no result",
+        )
+
+
+def _run_job_payload_child(payload: dict[str, Any], output: mp.Queue) -> None:
+    try:
+        output.put(_run_job_payload_inner(payload))
+    except BaseException as exc:
+        output.put(_error_payload_result(payload, error=f"{type(exc).__name__}: {exc}"))
+
+
+def _run_job_payload_inner(payload: dict[str, Any]) -> dict[str, Any]:
     runner_spec = ComponentSpec(**payload["runner"])
     model_spec = ModelSpec(**payload["model"])
     dataset_name = str(payload["dataset_name"])
@@ -193,20 +235,36 @@ def _run_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "best_of_n": best_of_n,
         }
     except Exception as exc:
-        prediction = Prediction(answer="", error=f"{type(exc).__name__}: {exc}")
-        return {
-            "run_id": payload["run_id"],
-            "dataset": dataset_name,
-            "example_id": example.id,
-            "runner": runner_name,
-            "model": model_spec.name,
-            "seed": seed,
-            "prediction": asdict(prediction),
-            "metadata": example.metadata,
-            "job_index": payload.get("job_index"),
-            "attempt": attempt,
-            "best_of_n": best_of_n,
-        }
+        return _error_payload_result(payload, error=f"{type(exc).__name__}: {exc}")
+
+
+def _error_payload_result(
+    payload: dict[str, Any],
+    *,
+    error: str,
+    time_seconds: float = 0.0,
+) -> dict[str, Any]:
+    runner_spec = ComponentSpec(**payload["runner"])
+    model_spec = ModelSpec(**payload["model"])
+    example = Example(**payload["example"])
+    prediction = Prediction(
+        answer="",
+        metrics={"time_seconds": time_seconds, "iterations": 0},
+        error=error,
+    )
+    return {
+        "run_id": payload["run_id"],
+        "dataset": str(payload["dataset_name"]),
+        "example_id": example.id,
+        "runner": runner_spec.name,
+        "model": model_spec.name,
+        "seed": payload["seed"],
+        "prediction": asdict(prediction),
+        "metadata": example.metadata,
+        "job_index": payload.get("job_index"),
+        "attempt": int(payload.get("attempt", 0)),
+        "best_of_n": int(payload.get("best_of_n", 1)),
+    }
 
 
 def _log_worker_start(
@@ -445,6 +503,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Run each logical row N times and keep only the best-scoring attempt.",
     )
+    parser.add_argument(
+        "--attempt-timeout",
+        type=int,
+        default=900,
+        help="Hard timeout in seconds for one runner attempt before recording an error row.",
+    )
     parser.add_argument("--modal-app-name", default="rflow-benchmarks")
     parser.add_argument("--modal-cpu", type=float, default=1.0)
     parser.add_argument("--modal-timeout", type=int, default=3600)
@@ -469,6 +533,7 @@ def config_from_args(args: argparse.Namespace) -> SuiteConfig:
     executor = "modal" if args.modal else args.executor
     parallelism = max(1, args.parallel)
     best_of_n = max(1, args.best_of_n)
+    attempt_timeout = max(0, args.attempt_timeout)
     config = SuiteConfig(
         run_id=args.run_id
         or make_run_id(
@@ -497,6 +562,7 @@ def config_from_args(args: argparse.Namespace) -> SuiteConfig:
         executor=executor,
         parallelism=parallelism,
         best_of_n=best_of_n,
+        attempt_timeout=attempt_timeout,
         modal_app_name=args.modal_app_name,
         modal_cpu=args.modal_cpu,
         modal_timeout=args.modal_timeout,
