@@ -7,29 +7,22 @@
 
 Read the blog post: [Recursive Flow](https://shyamsn97.github.io/blog/rflow/).
 
-As LLMs get better at coding, strict agent harnesses become less important.
-RLMs let the model decide how to view and manipulate context, when to
-delegate pieces of it to sub-agents, and how to combine the results,
-all through the same clean coding interface.
+**recursive-flow** is a Python library for building **recursive agents** — agents
+that spawn other agents — as live execution graphs. Every query, action,
+observation, child call, wait, resume, and result is a typed node you can
+inspect, step through, save, fork, and edit mid-run.
 
-**recursive-flow** turns that recursive run into a live execution graph. Every
-query, action, observation, child call, wait, resume, and result is a
-typed node you can inspect, step, retrace, save, load, fork, and branch into
-new run directories. It is for people building long-context agents, recursive
-coding agents, and research loops where the execution trace needs to be
-as controllable as the final answer is useful. Each `start` / `step`
-returns a fresh `Graph` snapshot: a recursive structure where
-`graph[agent_id]` returns the sub-agent graph for that agent.
+It is built on the original [Recursive Language Models](https://github.com/alexzhang13/rlm) work, where an LLM is equiped with a stateful Python REPL and the ability to spawn agents with fresh context.
 
 <p align="center">
   <img src="docs/rlm_animation.gif" alt="recursive-flow animation" />
 </p>
 
-## RLMs as Graphs
+## Recursive agents as graphs
 
-RLMs delegate subtasks to children, those children can delegate to their
-own children, and results bubble back up. **recursive-flow** represents the
-whole run as one recursive type:
+Recursive agents delegate subtasks to children; those children can delegate
+to their own children, and results bubble back up. **recursive-flow**
+represents the whole run as one recursive type:
 
 - **`Graph`** — one agent snapshot. Carries the agent's run-invariants
   flat on itself (`agent_id`, `depth`, `query`, `system_prompt`,
@@ -47,11 +40,8 @@ whole run as one recursive type:
     `SupervisingOutput`, `ErrorOutput`, `DoneOutput`.
   - Actions: `LLMAction`, `ExecAction`, `ResumeAction`.
 
-The agent has one delegation call: `await launch_subagents([...])`. It always
-takes a list of dict specs and always returns child answers as a `list[str]` in
-the same order. A one-child delegation is just a one-item list. An agent that
-delegates two children and combines their results writes one REPL block like
-this:
+The default delegation interface is `await launch_subagents([...])` — a list
+of child specs in, `list[str]` answers out in the same order:
 
 ```python
 results = await launch_subagents([
@@ -61,26 +51,11 @@ results = await launch_subagents([
 done(combine(results))
 ```
 
-The `await` is the supervision point: it suspends the parent at a single
-`WaitRequest`, the engine runs the children on its pool, then resumes the
-parent with their results. The REPL supports top-level await and the engine
-drives the resulting coroutine, roughly:
+The `await` suspends the parent at a `WaitRequest`, the engine runs children
+on its pool, then resumes with their results. See
+[`docs/internals.md`](docs/internals.md) for the full REPL protocol.
 
-```python
-out = coro.send(None)              # run until the await
-# out is a WaitRequest([search, verify]) -> suspend the parent, run children
-results = [c.result() for c in children]
-coro.send(results)                 # resume; `results` is now the list
-```
-
-The REPL is stateful across blocks, so the next LLM turn can still see
-`results`. The launcher must be awaited; a bare call or a top-level `yield`
-are errors. Agents should use `launch_subagents(...)` for delegation.
-
-See [`docs/internals.md`](docs/internals.md) for the full protocol.
-
-The block above becomes this execution graph (one obs/action pair
-per step):
+That block becomes this execution graph (one obs/action pair per step):
 
 ```text
 UserQuery(root)
@@ -744,9 +719,8 @@ in [`docs/internals.md`](docs/internals.md). Research notes live under
   architecture, step lifecycle, REPL `await` protocol, runtime backends,
   graph persistence, and extension seams. This document is being refreshed
   after the `Flow`/`Graph` rewrite.
-- [Blog post](docs/blog.md): long-form pitch — why recursive language
-  models, why graphs over flat traces, full needle-in-a-haystack
-  walkthrough with the same exports the CLI ships.
+- [Blog post](docs/blog.md): long-form pitch — recursive agents, why graphs
+  beat flat traces, needle-in-a-haystack and autoresearch walkthroughs.
 - [Positioning](docs/positioning.md): when to use recursive-flow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 - [Control](docs/control.md): step loop, save/load resume, rewind,
