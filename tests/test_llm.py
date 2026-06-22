@@ -579,6 +579,47 @@ def test_step_existing_finished_graph_with_new_query_calls_llm_on_followup():
     assert graph.result() == "second"
 
 
+def test_step_existing_finished_graph_with_new_query_and_inputs_updates_repl_inputs():
+    seen_messages: list[list[dict[str, str]]] = []
+    replies = iter(
+        [
+            '```repl\ndone("first")\n```',
+            '```repl\nprint(INPUTS["context"])\ndone(INPUTS["context"])\n```',
+        ]
+    )
+
+    def reply_for(messages: list[dict[str, str]]) -> str:
+        seen_messages.append(messages)
+        return next(replies)
+
+    flow = Flow(ScriptedLLM(reply_for), max_iters=3)
+    graph = run_to_completion(flow, "first task", inputs={"context": "old context"})
+    assert graph.finished
+    assert graph.result() == "first"
+
+    original = graph.copy()
+    graph = flow.step(
+        graph,
+        query="second task",
+        inputs={"context": "fresh context"},
+    )
+
+    assert original.inputs["context"] == "old context"
+    assert graph.query == "second task"
+    assert graph.inputs["context"] == "fresh context"
+    assert graph.nodes[len(original.nodes)].type == "user_query"
+    assert "New user task:\nsecond task" in graph.nodes[len(original.nodes)].content
+    assert "fresh context" not in graph.nodes[len(original.nodes)].content
+    assert seen_messages[-1][-1]["role"] == "user"
+    assert "New user task:\nsecond task" in seen_messages[-1][-1]["content"]
+
+    while not graph.finished:
+        graph = flow.step(graph)
+
+    assert graph.result() == "fresh context"
+    assert "fresh context" in graph.nodes[-1].output
+
+
 def test_query_is_not_mirrored_into_repl_inputs():
     replies = iter(
         [

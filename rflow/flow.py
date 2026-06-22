@@ -559,15 +559,17 @@ class Flow(BaseFlow):
         if isinstance(cur, LLMOutput):
             return Exec(agent.agent_id)
         if isinstance(cur, (UserQuery, ExecOutput, ErrorOutput)):
-            last_user = next(
+            last_terminal = next(
                 (
                     i
                     for i in range(len(agent.nodes) - 1, -1, -1)
-                    if isinstance(agent.nodes[i], UserQuery)
+                    if agent.nodes[i].terminal
                 ),
                 -1,
             )
-            iters = sum(isinstance(n, LLMAction) for n in agent.nodes[last_user + 1 :])
+            iters = sum(
+                isinstance(n, LLMAction) for n in agent.nodes[last_terminal + 1 :]
+            )
             max_iter = (
                 agent.max_iters if agent.max_iters is not None else self.max_iters
             )
