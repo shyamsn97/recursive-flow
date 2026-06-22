@@ -359,9 +359,16 @@ open_viewer("runs/deep_research")
 
 From the CLI: `rlmflow view runs/deep_research --port 7861`.
 
-### Live terminal tree
+### Full-screen TUI
 
 ![rlmflow TUI showing chat, query/context inputs, and execution tree](docs/static/tui.png)
+
+`flow.tui()` opens a Textual chat interface with separate query/context inputs,
+live chat bubbles, and side tabs for the execution tree, agents, counts,
+waiting supervisors, errors, and latest nodes. See
+[`examples/tui_chat.py`](examples/tui_chat.py) for a runnable real-model example.
+
+### Live terminal tree
 
 `rflow.utils.viz.live(agent, graph)` drives the step loop and renders a
 Rich tree as nodes are produced. The boids run (`Create a simple boids
@@ -640,6 +647,7 @@ Add `--include-optional`, `--include-live`, `--include-sandbox`, or
 | Example | What it shows |
 |---|---|
 | [`showcase.py`](examples/showcase.py) | Functional stepping, snapshots, save/load, and live terminal visualization. |
+| [`tui_chat.py`](examples/tui_chat.py) | Full-screen Textual chat UI with query/context inputs and live graph tabs. |
 | [`structured_output.py`](examples/structured_output.py) | Root and child results validated with JSON Schema / Pydantic. |
 | [`drop_in_llm.py`](examples/drop_in_llm.py) | `Flow` as an `LLMClient`, including nested flows. |
 | [`skills.py`](examples/skills.py) | On-disk skill files loaded through a dynamic prompt section. |
