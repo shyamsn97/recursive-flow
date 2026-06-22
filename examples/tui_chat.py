@@ -6,9 +6,10 @@ Requires OpenAI credentials and the TUI optional dependency:
     pip install -e ".[openai,tui]"
     python examples/tui_chat.py
 
-Type or paste prompts directly in the TUI and press Ctrl+S to send (the input is
-multi-line, so pasting a long task works). Press Ctrl+C to quit; the latest graph
-is saved under ``examples/_runs/tui-chat`` by default.
+Type or paste a query directly in the TUI, add optional supporting context in the
+context box, and press Ctrl+Enter to send. Both inputs are multi-line. Press
+Ctrl+C to quit; the latest graph is saved under ``examples/_runs/tui-chat`` by
+default.
 """
 
 from __future__ import annotations
@@ -33,12 +34,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Open a real Flow in the live TUI.")
     parser.add_argument("--model", default="gpt-5-mini")
     parser.add_argument("--max-depth", type=int, default=1)
-    parser.add_argument("--max-iters", type=int, default=8)
-    parser.add_argument("--child-max-iters", type=int, default=6)
+    parser.add_argument(
+        "--max-iters",
+        type=int,
+        default=30,
+        help="Max LLM turns for the root agent before it is forced to finalize.",
+    )
+    parser.add_argument(
+        "--child-max-iters",
+        type=int,
+        default=20,
+        help="Max LLM turns for each child agent before it is forced to finalize.",
+    )
     parser.add_argument(
         "--max-steps-per-turn",
         type=int,
-        default=80,
+        default=240,
         help="Safety cap for each submitted prompt before returning control to the TUI.",
     )
     parser.add_argument(
@@ -70,17 +81,21 @@ def main() -> None:
         child_max_iters=args.child_max_iters,
     )
 
+    graph = None
     try:
         graph = flow.tui(
             max_steps_per_turn=args.max_steps_per_turn,
         )
-        if graph is not None:
-            path = graph.save(out_dir / "graph")
-            print(f"Graph saved to {path}")
-            if graph.result():
-                print(f"Result: {graph.result()}")
     finally:
-        flow.close()
+        try:
+            latest = graph if graph is not None else flow.graph
+            if latest is not None:
+                path = latest.save(out_dir / "graph")
+                print(f"Graph saved to {path}")
+                if latest.result():
+                    print(f"Result: {latest.result()}")
+        finally:
+            flow.close()
 
 
 if __name__ == "__main__":

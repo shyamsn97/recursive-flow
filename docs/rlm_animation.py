@@ -1,7 +1,7 @@
-"""recursive-flow hero animation.
+"""rlmflow hero animation.
 
-Graph-first README animation. This intentionally skips an intro to RLMs:
-the video should immediately show what recursive-flow offers - a recursive agent
+Graph-first README animation. This intentionally skips theory:
+the video should immediately show what rlmflow offers - a recursive agent
 run as a clean, typed execution graph.
 
 Run from the repo root.
@@ -624,7 +624,7 @@ class RecursiveFlowHero(Scene):
 
     def _graph_first_animation(self):
         brand = Text(
-            "recursive-flow", font=CODE_FONT, font_size=26, color=WHITE_C
+            "rlmflow", font=CODE_FONT, font_size=26, color=WHITE_C
         ).to_corner(UP + LEFT, buff=0.30)
         self.play(FadeIn(brand), run_time=0.30)
 

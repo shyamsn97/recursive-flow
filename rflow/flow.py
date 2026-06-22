@@ -94,7 +94,7 @@ class ResumeError(RuntimeError):
 
 
 class Flow(BaseFlow):
-    """A minimal, stateless recursive-flow engine.
+    """A minimal, stateless rlmflow engine.
 
     A :class:`Flow` holds only configuration — the LLM client and the core
     knobs — and never stores the run it's driving. All per-run state (the
@@ -116,8 +116,8 @@ class Flow(BaseFlow):
 
     The text/projection seams below are public on purpose: subclass and
     override ``CONTINUE`` / ``FINAL`` (nudge text), :meth:`format_exec_output`,
-    :meth:`first_prompt`, or :meth:`build_messages` to customize what the model
-    sees without touching the loop.
+    :meth:`first_prompt`, :meth:`followup_prompt`, or :meth:`build_messages` to
+    customize what the model sees without touching the loop.
     """
 
     #: Nudge appended when the latest turn left no pending user message.
@@ -427,7 +427,9 @@ class Flow(BaseFlow):
         root.query = query
         if extra:
             root.inputs = {**root.inputs, **extra}
-        self._append(root, UserQuery(content=query))
+        self._append(
+            root, UserQuery(content=self.followup_prompt(query, depth=root.depth))
+        )
 
     def _check_resumable(self, salvage: bool) -> None:
         """Stop (or salvage) if an adopted graph is paused with no live REPL."""
@@ -557,7 +559,15 @@ class Flow(BaseFlow):
         if isinstance(cur, LLMOutput):
             return Exec(agent.agent_id)
         if isinstance(cur, (UserQuery, ExecOutput, ErrorOutput)):
-            iters = sum(isinstance(n, LLMAction) for n in agent.nodes)
+            last_user = next(
+                (
+                    i
+                    for i in range(len(agent.nodes) - 1, -1, -1)
+                    if isinstance(agent.nodes[i], UserQuery)
+                ),
+                -1,
+            )
+            iters = sum(isinstance(n, LLMAction) for n in agent.nodes[last_user + 1 :])
             max_iter = (
                 agent.max_iters if agent.max_iters is not None else self.max_iters
             )
@@ -1132,6 +1142,14 @@ class Flow(BaseFlow):
         return prompt_projection.first_prompt(
             query,
             inputs,
+            depth=depth,
+            max_depth=self.max_depth,
+        )
+
+    def followup_prompt(self, query: str, *, depth: int = 0) -> str:
+        """Build a follow-up user message for an existing agent trajectory."""
+        return prompt_projection.followup_prompt(
+            query,
             depth=depth,
             max_depth=self.max_depth,
         )

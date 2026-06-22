@@ -71,9 +71,20 @@ def first_prompt(
     )
 
 
+def followup_prompt(
+    query: str,
+    *,
+    depth: int,
+    max_depth: int,
+) -> str:
+    """Build a lightweight user message for a follow-up task."""
+    return messages.followup_prompt(query, depth=depth, max_depth=max_depth)
+
+
 __all__ = [
     "build_messages",
     "build_system_prompt",
+    "followup_prompt",
     "first_prompt",
     "format_exec_output",
     "schema_instruction",

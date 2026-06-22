@@ -1,4 +1,4 @@
-"""recursive-flow local runner."""
+"""rlmflow local runner."""
 
 from __future__ import annotations
 

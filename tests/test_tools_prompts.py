@@ -253,6 +253,15 @@ def test_static_system_prompt_content():
     assert "Use exactly one block per assistant" in SYSTEM_PROMPT
     assert "never include a second ```repl fence" in SYSTEM_PROMPT
     assert "act as an orchestrator, not a solver" in SYSTEM_PROMPT
+    assert "delegate independent branches -> integrate outputs -> verify" in SYSTEM_PROMPT
+    assert "delegate those branches" in SYSTEM_PROMPT
+    assert "keep the root focused on preparing inputs" in SYSTEM_PROMPT
+    assert "Keep an orchestration mindset throughout the run" in SYSTEM_PROMPT
+    assert "Before doing substantial work inline" in SYSTEM_PROMPT
+    assert "Use the root agent for small local steps" in SYSTEM_PROMPT
+    assert "Failed checks are not a final answer" in SYSTEM_PROMPT
+    assert 'done({"status": "failed", ...})' in SYSTEM_PROMPT
+    assert "fix them or delegate a repair, then re-run the checks" in SYSTEM_PROMPT
     assert "Do not call `done(...)` on turn 1 without first inspecting `INPUTS`" in SYSTEM_PROMPT
     # The default prompt has a couple of clean examples that teach parallelization.
     assert "**Example 1 -- fan out slices with launch_subagents" in SYSTEM_PROMPT
@@ -402,6 +411,21 @@ def test_first_prompt_without_inputs_omits_manifest():
     assert "just do it" in msg
 
 
+def test_followup_prompt_wraps_new_task_without_first_turn_language():
+    flow = make_flow(max_depth=3)
+    msg = flow.followup_prompt("convert stuff into python", depth=0)
+
+    assert "New user task:" in msg
+    assert "convert stuff into python" in msg
+    assert "Continue using the REPL environment" in msg
+    assert "delegate them with `await launch_subagents" in msg
+    assert "recursion depth 0" in msg
+    assert "full recursion budget" in msg
+    assert "You have not interacted with the REPL environment" not in msg
+    assert "Your REPL INPUTS contain:" not in msg
+    assert "first REPL block should usually inspect" not in msg
+
+
 def test_large_first_prompt_warns_not_to_print_contents():
     flow = make_flow()
     msg = flow.first_prompt("do a thing", {"doc": "x" * 50_001}, depth=0)
@@ -414,13 +438,15 @@ def test_first_prompt_pushes_batched_delegation_at_all_depths():
         msg = flow.first_prompt("do a thing", {}, depth=depth)
         normalized = " ".join(msg.split())
         assert "await launch_subagents" in normalized
-        assert "route each piece of work" in normalized
+        assert "work can proceed independently" in normalized
+        assert "make the next REPL block launch those branches" in normalized
+        assert "preparing focused inputs" in normalized
 
 
 def test_first_prompt_at_depth_limit_omits_delegation_nudge():
     flow = make_flow(max_depth=1)
     msg = flow.first_prompt("child task", {}, depth=1)
-    assert "route each piece of work" not in msg
+    assert "work can proceed independently" not in msg
     assert "cannot spawn sub-agents" in msg
 
 

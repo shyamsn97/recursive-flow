@@ -50,7 +50,7 @@ def main() -> None:
         max_iters=5,
     )
 
-    dspy.configure(lm=RecursiveFlowLM(flow, model="recursive-flow/gpt-4o-mini"))
+    dspy.configure(lm=RecursiveFlowLM(flow, model="rlmflow/gpt-4o-mini"))
 
     qa = dspy.ChainOfThought("question -> answer")
     result = qa(question="What is 17 * 23? Show a short calculation.")

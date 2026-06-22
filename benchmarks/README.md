@@ -1,6 +1,6 @@
 # benchmarks/
 
-Runnable benchmark harnesses for recursive-flow.
+Runnable benchmark harnesses for rlmflow.
 
 The canonical harness is `benchmarks/eval/`. It is intentionally small and built
 around four components:

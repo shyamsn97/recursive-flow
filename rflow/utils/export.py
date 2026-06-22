@@ -120,7 +120,7 @@ def to_mermaid(graph: Graph, *, include_results: bool = True) -> str:
 
 def to_dot(graph: Graph, *, include_results: bool = True) -> str:
     lines = [
-        'digraph "recursive-flow" {',
+        'digraph "rlmflow" {',
         "    rankdir=TB;",
         '    node [shape=box, style="rounded,filled", fontname="Helvetica"];',
         '    edge [fontname="Helvetica", fontsize=10];',

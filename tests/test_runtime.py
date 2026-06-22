@@ -171,7 +171,7 @@ def test_build_argv_full_options():
 
 
 def test_docker_repl_is_repl_backend_without_booting():
-    repl = DockerRepl("recursive-flow:local", network="none")
+    repl = DockerRepl("rlmflow:local", network="none")
     assert isinstance(repl, ReplBackend)
     assert repl.proc is None  # constructing does not boot a container
     assert repl.argv[:4] == ["docker", "run", "-i", "--rm"]

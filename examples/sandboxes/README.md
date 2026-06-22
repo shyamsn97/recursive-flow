@@ -30,14 +30,14 @@ python examples/sandboxes/modal_agent.py --model gpt-5
 ```
 
 The Modal example builds its image from this local checkout by copying
-the repo into `/opt/recursive-flow` and running `pip install -e /opt/recursive-flow`
+the repo into `/opt/rlmflow` and running `pip install -e /opt/rlmflow`
 inside the image.
 
 Useful Modal sandbox args:
 
 ```bash
 python examples/sandboxes/modal_agent.py \
-  --app-name recursive-flow-dev \
+  --app-name rlmflow-dev \
   --sandbox-timeout 600 \
   --remote-workdir /workspace
 ```
@@ -52,15 +52,15 @@ python examples/sandboxes/e2b_agent.py --model gpt-5
 ```
 
 By default, `E2BRuntime` starts from E2B's base template and runs
-`python -m pip install -q recursive-flow` inside the sandbox. Pass
+`python -m pip install -q rlmflow` inside the sandbox. Pass
 `template=...` and `--skip-setup` if you maintain a prebuilt
-template with `recursive-flow` already installed.
+template with `rlmflow` already installed.
 
 Useful E2B sandbox args:
 
 ```bash
 python examples/sandboxes/e2b_agent.py \
-  --template recursive-flow-dev \
+  --template rlmflow-dev \
   --skip-setup \
   --sandbox-timeout 600 \
   --remote-workdir /workspace
@@ -76,14 +76,14 @@ python examples/sandboxes/daytona_agent.py --model gpt-5
 ```
 
 By default, `DaytonaRuntime` creates a default Python sandbox and runs
-`python -m pip install -q recursive-flow` inside it. Pass provider-specific
+`python -m pip install -q rlmflow` inside it. Pass provider-specific
 create params and `--skip-setup` for a prebuilt snapshot.
 
 Useful Daytona sandbox args:
 
 ```bash
 python examples/sandboxes/daytona_agent.py \
-  --snapshot recursive-flow-dev \
+  --snapshot rlmflow-dev \
   --skip-setup \
   --create-timeout 120 \
   --remote-workdir /workspace

@@ -8,7 +8,7 @@ from collections.abc import Callable
 def optional_dependency_error(provider: str, extra: str) -> str:
     return (
         f"{provider} requires an optional dependency. "
-        f"Install it with `pip install recursive-flow[{extra}]`."
+        f"Install it with `pip install rlmflow[{extra}]`."
     )
 
 

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **recursive-flow** are recorded here. The format follows
+All notable changes to **rlmflow** are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is on `0.x`, breaking changes can land on minor bumps —
@@ -39,7 +39,7 @@ each one is called out under **Breaking** below.
   manual viewer/interactive checks.
 - **Tinker inference client.** `TinkerClient` adapts the Tinker SDK and
   `tinker-cookbook` renderers to the `LLMClient` interface, with an optional
-  `recursive-flow[tinker]` extra and a live-view example in `examples/providers/tinker_agent.py`.
+  `rlmflow[tinker]` extra and a live-view example in `examples/providers/tinker_agent.py`.
 - **Stricter local install checks.** `make install` now runs `ruff check .`
   through the existing lint target before installing the package.
 - **Supervisor injection example.** `examples/control/injection/` generates a
@@ -228,7 +228,7 @@ each one is called out under **Breaking** below.
 - CI workflow (`.github/workflows/ci.yml`): ruff + pytest matrix on
   3.11 / 3.12 / 3.13, runs on every PR and `push: main`. Tag-driven
   publishing remains in `release.yml`.
-- Coverage instrumentation: `pytest-cov` in `[dev]`, `--cov=recursive-flow` in
+- Coverage instrumentation: `pytest-cov` in `[dev]`, `--cov=rlmflow` in
   CI, `[tool.coverage.*]` config in `pyproject.toml`.
 - Early OOLONG benchmark harness for flat-vs-RLM comparison. This has since
   been superseded by the shared `benchmarks/eval/` harness.
@@ -267,11 +267,11 @@ each one is called out under **Breaking** below.
   can't share the same vertical band. Default off for `node.plot`
   (on-screen alternation still looks fine), default on for
   `save_image` / `save_steps` / `save_gif` / `Node.save_image`.
-- CLI: `recursive-flow render <trace> -f steps -o frames/` gains
+- CLI: `rlmflow render <trace> -f steps -o frames/` gains
   `--marker-mult`, `--text-mult`, `--normalize-labels` /
   `--no-normalize-labels` flags (also work with `-f image`). One
   invocation now replaces the per-blog one-off scripts.
-- `[image]` optional extra (`pip install recursive-flow[image]`) — pulls
+- `[image]` optional extra (`pip install rlmflow[image]`) — pulls
   `plotly` and `kaleido` for static image export.
 
 ### Changed
@@ -311,13 +311,13 @@ each one is called out under **Breaking** below.
 
 ## [0.1.2] — 2026-04-29
 
-- Renamed package to `recursive-flow`. Session and context layout consolidated
+- Renamed package to `rlmflow`. Session and context layout consolidated
   under `Workspace` with explicit `fork()`. Major engine refactor toward
   the typed-node graph model.
 
 ## [0.1.1] — 2026-04-23
 
-- `recursive-flow` CLI shipped: `view`, `render`, `version` subcommands;
+- `rlmflow` CLI shipped: `view`, `render`, `version` subcommands;
   `render -f` accepts mermaid / mermaid-flowchart / mermaid-sequence /
   dot / d2 / tree / ascii-boxes / gantt-html / report-md / code-log /
   error-summary / tokens.
@@ -340,12 +340,12 @@ Initial release.
 - Optional extras: `[openai]`, `[anthropic]`, `[viewer]`, `[all]`,
   `[dev]`.
 
-[Unreleased]: https://github.com/shyamsn97/recursive-flow/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/shyamsn97/recursive-flow/compare/v0.3.2...v0.4.0
-[0.3.2]: https://github.com/shyamsn97/recursive-flow/compare/v0.2.1...v0.3.2
-[0.2.1]: https://github.com/shyamsn97/recursive-flow/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/shyamsn97/recursive-flow/compare/v0.1.3...v0.2.0
-[0.1.3]: https://github.com/shyamsn97/recursive-flow/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/shyamsn97/recursive-flow/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/shyamsn97/recursive-flow/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/shyamsn97/recursive-flow/releases/tag/v0.1.0
+[Unreleased]: https://github.com/shyamsn97/rlmflow/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/shyamsn97/rlmflow/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/shyamsn97/rlmflow/compare/v0.2.1...v0.3.2
+[0.2.1]: https://github.com/shyamsn97/rlmflow/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/shyamsn97/rlmflow/compare/v0.1.3...v0.2.0
+[0.1.3]: https://github.com/shyamsn97/rlmflow/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/shyamsn97/rlmflow/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/shyamsn97/rlmflow/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/shyamsn97/rlmflow/releases/tag/v0.1.0

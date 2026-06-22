@@ -412,7 +412,7 @@ def _run_jobs_modal(config: SuiteConfig, payloads: list[dict[str, Any]]):
 
 def _modal_image(modal):
     repo_root = Path(__file__).resolve().parents[2]
-    remote_repo = "/opt/recursive-flow"
+    remote_repo = "/opt/rlmflow"
     return (
         modal.Image.debian_slim()
         .add_local_dir(
@@ -461,7 +461,7 @@ def build_logger(config: SuiteConfig) -> MultiLogger:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run recursive-flow benchmarks.")
+    parser = argparse.ArgumentParser(description="Run rlmflow benchmarks.")
     parser.add_argument("--dataset", "--datasets", nargs="+", default=["oolong"])
     parser.add_argument("--runner", "--runners", nargs="+", default=["rflow-local"])
     parser.add_argument("--model", default="openai:gpt-5-mini")

@@ -1,4 +1,4 @@
-"""Tracing integrations: emit recursive-flow runs into external observability stacks.
+"""Tracing integrations: emit rlmflow runs into external observability stacks.
 
 Today: JSON Lines state logs. Future: OpenTelemetry, LangSmith, W&B.
 """

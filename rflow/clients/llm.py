@@ -262,7 +262,7 @@ class TinkerClient(LLMClient):
             except ImportError as exc:  # pragma: no cover - exercised by optional deps
                 raise ImportError(
                     "TinkerClient requires the optional Tinker SDK. Install it with "
-                    "`pip install tinker tinker-cookbook` or `pip install recursive-flow[tinker]`."
+                    "`pip install tinker tinker-cookbook` or `pip install rlmflow[tinker]`."
                 ) from exc
 
             service_client = service_client or tinker.ServiceClient(**service_kwargs)
@@ -277,7 +277,7 @@ class TinkerClient(LLMClient):
             except ImportError as exc:  # pragma: no cover - exercised by optional deps
                 raise ImportError(
                     "TinkerClient requires tinker-cookbook for chat rendering. Install it with "
-                    "`pip install tinker-cookbook` or `pip install recursive-flow[tinker]`."
+                    "`pip install tinker-cookbook` or `pip install rlmflow[tinker]`."
                 ) from exc
             renderer_obj = renderers.get_renderer(
                 renderer, sampling_client.get_tokenizer()
@@ -305,7 +305,7 @@ class TinkerClient(LLMClient):
         except ImportError as exc:  # pragma: no cover - exercised by optional deps
             raise ImportError(
                 "TinkerClient requires the optional Tinker SDK. Install it with "
-                "`pip install tinker tinker-cookbook` or `pip install recursive-flow[tinker]`."
+                "`pip install tinker tinker-cookbook` or `pip install rlmflow[tinker]`."
             ) from exc
 
         prompt = self.renderer.build_generation_prompt(messages)

@@ -1,4 +1,4 @@
-"""recursive-flow (minimal): an LLM in a loop with a stateful REPL, recursive.
+"""rlmflow (minimal): an LLM in a loop with a stateful REPL, recursive.
 
 Quick start::
 

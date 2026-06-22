@@ -1,6 +1,6 @@
 """Modal REPL backend — run an agent's code in a remote Modal Sandbox.
 
-Requires ``modal`` (``pip install recursive-flow[modal]``). The sandbox runs one
+Requires ``modal`` (``pip install rlmflow[modal]``). The sandbox runs one
 long-lived :mod:`rflow.runtime.repl_server` as its entrypoint; the host talks to
 it over Modal's native Sandbox ``stdin`` / ``stdout`` streams.
 
@@ -11,7 +11,7 @@ Usage::
 
     runtime = ModalRuntime(
         app_name="my-rlm-app",
-        image=modal.Image.debian_slim().pip_install("recursive-flow"),
+        image=modal.Image.debian_slim().pip_install("rlmflow"),
     )
     flow = Flow(llm, runtime=runtime)
 """
@@ -38,7 +38,7 @@ class ModalRepl(RemoteRepl):
 
     def __init__(
         self,
-        app_name: str = "recursive-flow",
+        app_name: str = "rlmflow",
         *,
         remote_workdir: str = "/workspace",
         image=None,
@@ -68,10 +68,10 @@ class ModalRepl(RemoteRepl):
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
             raise ModuleNotFoundError(
                 "ModalRepl requires the optional `modal` dependency. "
-                "Install it with `pip install recursive-flow[modal]`."
+                "Install it with `pip install rlmflow[modal]`."
             ) from exc
         app = modal.App.lookup(self.app_name, create_if_missing=True)
-        image = self.image or modal.Image.debian_slim().pip_install("recursive-flow")
+        image = self.image or modal.Image.debian_slim().pip_install("rlmflow")
         entrypoint = (
             f"mkdir -p {shlex.quote(self.remote_workdir)} && "
             f"exec python -u -c {shlex.quote(_REPL_ENTRYPOINT)} "
@@ -144,7 +144,7 @@ class ModalRepl(RemoteRepl):
         if line is None:
             stderr = "".join(self._stderr_tail).strip()
             raise RuntimeError(
-                f"Modal recursive-flow REPL exited. stderr: {stderr or '<empty>'}"
+                f"Modal rlmflow REPL exited. stderr: {stderr or '<empty>'}"
             )
         return line
 
@@ -161,20 +161,20 @@ class ModalRepl(RemoteRepl):
         except StopIteration as exc:
             stderr = "".join(self._stderr_tail).strip()
             raise RuntimeError(
-                f"Modal recursive-flow REPL exited. stderr: {stderr or '<empty>'}"
+                f"Modal rlmflow REPL exited. stderr: {stderr or '<empty>'}"
             ) from exc
         except Exception as exc:  # noqa: BLE001
             if self._is_expected_stream_close(exc):
                 stderr = "".join(self._stderr_tail).strip()
                 raise RuntimeError(
-                    f"Modal recursive-flow REPL exited. stderr: {stderr or '<empty>'}"
+                    f"Modal rlmflow REPL exited. stderr: {stderr or '<empty>'}"
                 ) from exc
             raise
 
     def _timeout_error(self) -> RuntimeError:
         stderr = "".join(self._stderr_tail).strip()
         return RuntimeError(
-            "Modal recursive-flow REPL did not respond within "
+            "Modal rlmflow REPL did not respond within "
             f"{self.repl_timeout}s. stderr: {stderr or '<empty>'}"
         )
 
@@ -219,7 +219,7 @@ class ModalRuntime(Runtime):
 
     def __init__(
         self,
-        app_name: str = "recursive-flow",
+        app_name: str = "rlmflow",
         *,
         remote_workdir: str = "/workspace",
         image=None,

@@ -2,19 +2,19 @@
 
 Each :class:`DockerRepl` owns one ``docker run -i --rm <image> python -m
 rflow.runtime.repl_server`` subprocess and speaks the JSON-line protocol over its
-stdin/stdout. The image must have ``recursive-flow`` installed.
+stdin/stdout. The image must have ``rlmflow`` installed.
 
 Example::
 
     runtime = DockerRuntime(
-        image="recursive-flow:local",
+        image="rlmflow:local",
         working_directory="./myproject",  # bind-mounted to /workspace
         network="none",                   # air-gap the container
         cpus=1.0, memory="512m",
     )
     flow = Flow(llm, runtime=runtime)
 
-Build a ready image once with ``docker build -t recursive-flow:local .`` (any
+Build a ready image once with ``docker build -t rlmflow:local .`` (any
 image whose entrypoint can run ``python -m rflow.runtime.repl_server`` works).
 :class:`DockerRepl` (the per-agent backend :class:`DockerRuntime` mints) stays
 decoupled from any workspace abstraction: pass ``mounts`` / ``workdir`` / ``cwd``
@@ -153,7 +153,7 @@ class DockerRuntime(Runtime):
 
     Example::
 
-        runtime = DockerRuntime("recursive-flow:local",
+        runtime = DockerRuntime("rlmflow:local",
                                 working_directory="./myproject", network="none")
         flow = Flow(llm, runtime=runtime)
     """

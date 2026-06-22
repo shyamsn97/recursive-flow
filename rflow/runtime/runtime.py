@@ -41,7 +41,7 @@ REMOTE_LAUNCHER = ("flow_wait", "launch_subagents")
 
 
 def serialize(value: Any) -> Any:
-    """Convert recursive-flow objects to JSON-safe structures (recursively).
+    """Convert rlmflow objects to JSON-safe structures (recursively).
 
     Only the two control objects need special handling — everything else is
     JSON-native (the engine enforces ``str`` agent inputs).
@@ -56,7 +56,7 @@ def serialize(value: Any) -> Any:
 
 
 def deserialize(value: Any) -> Any:
-    """Reconstruct recursive-flow objects from JSON structures (recursively)."""
+    """Reconstruct rlmflow objects from JSON structures (recursively)."""
     if isinstance(value, list):
         return [deserialize(v) for v in value]
     if isinstance(value, dict):

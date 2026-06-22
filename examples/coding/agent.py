@@ -6,7 +6,7 @@ and edits files in your working directory using delegation.
 Usage:
     python examples/coding/agent.py --workdir ./myproject
     python examples/coding/agent.py --workdir ./myproject --no-viz
-    python examples/coding/agent.py --workdir ./myproject --docker-image recursive-flow:local
+    python examples/coding/agent.py --workdir ./myproject --docker-image rlmflow:local
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def main():
     parser.add_argument(
         "--docker-image",
         default=None,
-        help="If set, run agent code inside this Docker image (e.g. recursive-flow:local).",
+        help="If set, run agent code inside this Docker image (e.g. rlmflow:local).",
     )
     parser.add_argument("--max-depth", type=int, default=3)
     parser.add_argument("--max-iters", type=int, default=30)

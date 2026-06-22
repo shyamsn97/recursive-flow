@@ -1,4 +1,4 @@
-"""Clean benchmark harness for recursive-flow evaluations."""
+"""Clean benchmark harness for rlmflow evaluations."""
 
 from __future__ import annotations
 

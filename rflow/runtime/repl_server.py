@@ -1,6 +1,6 @@
 """Container-side REPL server — the JSON-over-stdio bridge.
 
-Runs *inside* the sandbox (container image must ``pip install recursive-flow``):
+Runs *inside* the sandbox (container image must ``pip install rlmflow``):
 
     python -m rflow.runtime.repl_server [--workdir DIR]
 
@@ -158,7 +158,7 @@ class ReplServer:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="recursive-flow remote REPL server")
+    parser = argparse.ArgumentParser(description="rlmflow remote REPL server")
     parser.add_argument("--workdir", help="chdir before starting")
     args = parser.parse_args()
     if args.workdir:

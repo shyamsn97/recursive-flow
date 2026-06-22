@@ -9,7 +9,7 @@ Usage:
     python examples/needle/haystack.py
     python examples/needle/haystack.py --num-lines 1000000 --no-viz
     python examples/needle/haystack.py --viewer
-    python examples/needle/haystack.py --docker-image recursive-flow:local
+    python examples/needle/haystack.py --docker-image rlmflow:local
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def main():
     parser.add_argument(
         "--docker-image",
         default=None,
-        help="If set, run agent code inside this Docker image (e.g. recursive-flow:local).",
+        help="If set, run agent code inside this Docker image (e.g. rlmflow:local).",
     )
     parser.add_argument("--max-depth", type=int, default=1)
     parser.add_argument("--max-iters", type=int, default=15)

@@ -223,7 +223,7 @@ prompt = DEFAULT_BUILDER.section("tools", careful_tools, title="Tools")
 ## Callable Sections
 
 The dynamic prompt hook above works, but it is heavier than it needs to be for
-small additions like skills, memory, or project rules. A prompt section can be
+small additions like project rules or runtime notes. A prompt section can be
 either static text or a function:
 
 ```python
@@ -232,67 +232,9 @@ def section(flow: rflow.Flow, graph: rflow.Graph) -> str:
 ```
 
 The signature is intentionally just `flow, graph`. There is no context dict
-and no separate prompt context object. If a section needs file-backed skills,
-runtime tools, model registrations, config, or the current agent id, those are
-already reachable from `flow` and `graph`.
-
-For example, a small tool note can wrap the built-in tools section:
-
-```python
-from rflow.prompts import tools_section
-
-
-def careful_tools(flow, graph):
-    return tools_section(flow, graph) + "
-- Prefer read-only tools before write tools."
-
-
-prompt = DEFAULT_BUILDER.section("tools", careful_tools, title="Tools")
-```
-
-And a dynamic skills section is just a file reader:
-
-```python
-from pathlib import Path
-
-skill_paths = [
-    Path("skills/careful-research/SKILL.md"),
-    Path("skills/coding-style/SKILL.md"),
-]
-
-
-def skills_section(flow, graph):
-    blocks = []
-    for path in skill_paths:
-        if not path.exists():
-            continue
-        body = path.read_text(encoding="utf-8").strip()
-        blocks.append(f"### `{path}`
-
-{body}")
-    return "
-
-".join(blocks)
-```
-
-Then the builder setup stays simple:
-
-```python
-flow = rflow.Flow(llm)
-flow.prompt_builder = (
-    DEFAULT_BUILDER
-    .section("skills", skills_section, title="Skills", before="tools")
-    .section("tools", tools_section, title="Tools")
-    .section("status", status_section, title="Status")
-)
-```
-
-With callable sections, skills are not an engine config knob. They are ordinary
-files plus a prompt section that decides what to include for the current
-`flow, graph`.
-
-See [`examples/skills.py`](../examples/skills.py) for a runnable version with a
-concrete NumPy linear-algebra `SKILL.md`.
+and no separate prompt context object. If a section needs runtime tools, model
+registrations, config, or the current agent id, those are already reachable
+from `flow` and `graph`.
 
 ## Child-Specific Prompts
 

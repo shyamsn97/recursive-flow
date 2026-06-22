@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "recursive-flow"
+name = "rlmflow"
 version = "0.4.2"
-description = "Build Recursive Language Models as inspectable execution graphs."
+description = "Build recursive agents as inspectable execution graphs."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -51,7 +51,7 @@ eval = [
 ]
 sandbox = ["modal", "e2b", "daytona-sdk"]
 # Gradio viewer pulls plotly transitively (used by the interactive timeline).
-# `rich` powers the live terminal tree (`LiveView`) and `recursive-flow view` output.
+# `rich` powers the live terminal tree (`LiveView`) and `rlmflow view` output.
 viewer = ["gradio>=4.29", "plotly>=5.0", "rich>=13.0"]
 tui = ["textual>=0.70", "rich>=13.0"]
 # Static image export of `node.plot()` (PNG/SVG/PDF). Used by
@@ -92,12 +92,12 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/shyamsn97/recursive-flow"
-Repository = "https://github.com/shyamsn97/recursive-flow"
-Issues = "https://github.com/shyamsn97/recursive-flow/issues"
+Homepage = "https://github.com/shyamsn97/rlmflow"
+Repository = "https://github.com/shyamsn97/rlmflow"
+Issues = "https://github.com/shyamsn97/rlmflow/issues"
 
 [project.scripts]
-recursive-flow = "rflow.cli:main"
+rlmflow = "rflow.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rflow"]

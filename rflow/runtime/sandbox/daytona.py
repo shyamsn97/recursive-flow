@@ -1,6 +1,6 @@
 """Daytona REPL backend — run an agent's code inside a Daytona Sandbox.
 
-Requires ``daytona`` (``pip install recursive-flow[daytona]``) and Daytona
+Requires ``daytona`` (``pip install rlmflow[daytona]``) and Daytona
 credentials configured for the SDK. Uses the :class:`RemoteFileRuntime` file
 bridge: one persistent :mod:`rflow.runtime.repl_server` process, driven through
 remote files via Daytona's ``process.exec``.

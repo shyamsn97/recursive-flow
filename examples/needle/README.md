@@ -8,7 +8,7 @@ Two variants of the same search task:
 ```bash
 python examples/needle/haystack.py --num-lines 1000000 --no-viz
 python examples/needle/filesystem.py --num-files 500 --no-viz
-python examples/needle/haystack.py --docker-image recursive-flow:local
+python examples/needle/haystack.py --docker-image rlmflow:local
 ```
 
 Runs save to `examples/_runs/needle-haystack/` and `examples/_runs/needle-filesystem/` by default.

@@ -1,6 +1,6 @@
 # Eval Harness
 
-Clean benchmark harness for recursive-flow. The core components are:
+Clean benchmark harness for rlmflow. The core components are:
 
 - `Dataset` - examples and scoring.
 - `Model` - inference.
@@ -48,7 +48,7 @@ python -m benchmarks.eval \
 ## Modal Parallelism
 
 The unit of parallelism is one benchmark row: `(dataset example, runner, seed)`.
-Each row runs sequentially inside its worker, so recursive-flow graph execution
+Each row runs sequentially inside its worker, so rlmflow graph execution
 is unchanged. To fan rows out to cheap one-CPU Modal workers:
 
 ```bash

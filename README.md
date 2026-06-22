@@ -1,91 +1,119 @@
-# recursive-flow
+# rlmflow
 
 <p align="center">
-  <a href="https://pypi.org/project/recursive-flow/"><img src="https://img.shields.io/pypi/v/recursive-flow.svg?label=pypi" alt="PyPI" /></a>
-  <a href="https://github.com/shyamsn97/recursive-flow/pkgs/container/recursive-flow"><img src="https://img.shields.io/badge/ghcr.io-recursive-flow-2496ED?logo=docker&logoColor=white" alt="Docker" /></a>
+  <a href="https://pypi.org/project/rlmflow/"><img src="https://img.shields.io/pypi/v/rlmflow.svg?label=pypi" alt="PyPI" /></a>
+  <a href="https://github.com/shyamsn97/rlmflow/pkgs/container/rlmflow"><img src="https://img.shields.io/badge/ghcr.io-rlmflow-2496ED?logo=docker&logoColor=white" alt="Docker" /></a>
 </p>
 
-Read the blog post: [Recursive Flow](https://shyamsn97.github.io/blog/rflow/).
+Read the blog post: [rlmflow](https://shyamsn97.github.io/blog/rflow/).
 
-**recursive-flow** is a Python library for building **recursive agents** — agents
+**rlmflow** is a Python library for building **recursive agents** — agents
 that spawn other agents — as live execution graphs. Every query, action,
 observation, child call, wait, resume, and result is a typed node you can
 inspect, step through, save, fork, and edit mid-run.
 
-It is built on the original [Recursive Language Models](https://github.com/alexzhang13/rlm) work, where an LLM is equiped with a stateful Python REPL and the ability to spawn agents with fresh context.
+It gives an LLM a stateful Python REPL and a graph-native way to spawn agents
+with fresh context.
 
 <p align="center">
-  <img src="docs/rlm_animation.gif" alt="recursive-flow animation" />
+  <img src="docs/rlm_animation.gif" alt="rlmflow animation" />
 </p>
 
 ## Recursive agents as graphs
 
-Recursive agents delegate subtasks to children; those children can delegate
-to their own children, and results bubble back up. **recursive-flow**
-represents the whole run as one recursive type:
+Recursive agents let a model split work across fresh sub-agents, each with its
+own context, tools, and execution history. Those sub-agents can delegate again,
+so one root task can quickly become a tree of parallel work.
 
-- **`Graph`** — one agent snapshot. Carries the agent's run-invariants
-  flat on itself (`agent_id`, `depth`, `query`, `system_prompt`,
-  `config`, `runtime`, `model`, `parent_agent_id`, `parent_node_id`),
-  plus its `nodes` trajectory
-  and a `children: dict[str, Graph]` of sub-agents. Cross-agent
-  navigation is `graph[other_aid]`; subtree views are `graph.agents`,
-  `graph.all_nodes`, `graph.edges`.
-- **`Node`** — one immutable node in an agent's trajectory. The
-  trajectory is a strict alternation of **observations** (inputs the
-  system received) and **actions** (work the system did). Nine leaf
-  types live under four base classes — see
-  [`docs/node_model.md`](docs/node_model.md):
-  - Observations: `UserQuery`, `LLMOutput`, `ExecOutput`,
-    `SupervisingOutput`, `ErrorOutput`, `DoneOutput`.
-  - Actions: `LLMAction`, `ExecAction`, `ResumeAction`.
-
-The default delegation interface is `await launch_subagents([...])` — a list
-of child specs in, `list[str]` answers out in the same order:
+For example, the root agent can split a haystack into chunks:
 
 ```python
 results = await launch_subagents([
-    {"name": "search", "query": "Find evidence", "inputs": {"chunk": chunk_a}},
-    {"name": "verify", "query": "Check the answer", "inputs": {"chunk": chunk_b}},
+    {"name": "chunk_0", "query": "scan first third", "inputs": {"chunk": chunk_0}},
+    {"name": "chunk_1", "query": "scan middle third", "inputs": {"chunk": chunk_1}},
+    {"name": "chunk_2", "query": "scan final third", "inputs": {"chunk": chunk_2}},
 ])
-done(combine(results))
+done(extract_answer(results))
 ```
 
-The `await` suspends the parent at a `WaitRequest`, the engine runs children
-on its pool, then resumes with their results. See
-[`docs/internals.md`](docs/internals.md) for the full REPL protocol.
+Then `chunk_2` can recursively delegate again:
 
-That block becomes this execution graph (one obs/action pair per step):
+```python
+hits = find_candidate_windows(INPUTS["chunk"])
+results = await launch_subagents([
+    {"name": "candidate_a", "query": "inspect window A", "inputs": {"window": hits[0]}},
+    {"name": "candidate_b", "query": "inspect window B", "inputs": {"window": hits[1]}},
+])
+done(select_candidate(results))
+```
+
+That code creates an agent graph:
 
 ```text
-UserQuery(root)
-  -> LLMAction -> LLMOutput(code="await launch_subagents([search, verify])")
-  -> ExecAction -> SupervisingOutput(waiting_on=[root.search, root.verify])
-      -> UserQuery(root.search)  -> ... -> DoneOutput(root.search)
-      -> UserQuery(root.verify)  -> ... -> DoneOutput(root.verify)
-  -> ResumeAction -> ExecOutput(resumed_from=[root.search, root.verify])
-  -> LLMAction -> LLMOutput(code="done(combine(...))")
-  -> ExecAction -> DoneOutput(root)
+root  "Find the code in the haystack"
+├── chunk_0      "scan first third"   -> "not found"
+├── chunk_1      "scan middle third"  -> "decoy, no code"
+└── chunk_2      "scan final third"   -> "candidate code 84721"
+    ├── candidate_a  "inspect window A" -> "decoy"
+    └── candidate_b  "inspect window B" -> "code 84721"
 ```
+
+That parent API is useful: children return simple values the parent can compose.
+The problem is when those return values are the only surviving record of the
+work:
+
+```text
+results == ["not found", "decoy, no code", "candidate code 84721"]
+```
+
+If `chunk_2` launched `candidate_a` and `candidate_b` internally, the parent can
+still receive `"candidate code 84721"` as its normal result. But for debugging,
+evaluation, supervision, or reuse, you also want the execution state that
+produced it: which agents ran, what they saw, where they waited, what failed,
+and where you could intervene.
+
+**rlmflow** keeps that structure alive. Every recursive call is a
+sub-`Graph`, and every turn inside an agent is a typed `Node`:
+
+<p align="center">
+  <img src="docs/recursive_agents_graph.svg" alt="rlmflow graph showing root, child agents, grandchild agents, supervision, resume, and final result states" />
+</p>
+
+The graph is the run itself:
+
+```python
+graph = agent.start(query)
+while not graph.finished:
+    graph = agent.step(graph)
+    print(graph.tree())
+```
+
+Each `step` returns a fresh `Graph` snapshot, keeping execution and trace in one
+data structure. You can inspect a branch, save a checkpoint, fork from an old
+snapshot, inject controller feedback, replace a bad node, and continue from the
+edited graph.
+
+See [`docs/internals.md`](docs/internals.md), [`docs/node_model.md`](docs/node_model.md),
+and [`docs/control.md`](docs/control.md) for the full engine and graph API.
 
 ## Install
 
 ```
-pip install recursive-flow               # core
-pip install recursive-flow[openai]       # + OpenAI client
-pip install recursive-flow[anthropic]    # + Anthropic client
-pip install recursive-flow[tinker]       # + Tinker inference client
-pip install recursive-flow[dspy]         # + DSPy adapter
-pip install recursive-flow[sandbox]      # + Modal, E2B, and Daytona runtimes
-pip install recursive-flow[viewer]       # + Gradio viewer (plotly)
-pip install recursive-flow[image]        # + static image / GIF export (kaleido)
-pip install recursive-flow[all]          # all of the above
+pip install rlmflow               # core
+pip install rlmflow[openai]       # + OpenAI client
+pip install rlmflow[anthropic]    # + Anthropic client
+pip install rlmflow[tinker]       # + Tinker inference client
+pip install rlmflow[dspy]         # + DSPy adapter
+pip install rlmflow[sandbox]      # + Modal, E2B, and Daytona runtimes
+pip install rlmflow[viewer]       # + Gradio viewer (plotly)
+pip install rlmflow[image]        # + static image / GIF export (kaleido)
+pip install rlmflow[all]          # all of the above
 ```
 
 From source:
 
 ```
-git clone https://github.com/shyamsn97/recursive-flow && cd recursive-flow
+git clone https://github.com/shyamsn97/rlmflow && cd rlmflow
 pip install -e .
 ```
 
@@ -121,9 +149,9 @@ runtime = rflow.LocalRuntime(working_directory=workdir)
 runtime.register_tools(FILE_TOOLS)
 
 # Sandbox agent code inside Docker instead: drop-in replacement, same interface.
-# Build the image once with `docker build -t recursive-flow:local .`.
+# Build the image once with `docker build -t rlmflow:local .`.
 # runtime = rflow.DockerRuntime(
-#     "recursive-flow:local",
+#     "rlmflow:local",
 #     working_directory=workdir,
 #     mounts={workdir: "/workspace"},
 #     workdir="/workspace",
@@ -196,39 +224,9 @@ ask(rflow.Flow(rflow.OpenAIClient(model="gpt-4o-mini")), "2+2?")  # full agent l
 Nest agents by passing one `Flow` as another's `llm`. See
 [`examples/drop_in_llm.py`](examples/drop_in_llm.py).
 
-## Prompt sections and skills
-
-The default system prompt is built from named sections. Sections can be static
-text or callables with the signature `section(flow, graph) -> str`. That makes
-project memory or skills ordinary files plus a prompt section that decides when
-to include them:
-
-```python
-from pathlib import Path
-
-from rflow.prompts import DEFAULT_BUILDER
-
-skill_path = Path("skills/numpy-linear-algebra/SKILL.md")
-
-def skills_section(flow, graph):
-    if not skill_path.exists():
-        return ""
-    return skill_path.read_text()
-
-flow = rflow.Flow(rflow.OpenAIClient(model="gpt-4o-mini"))
-flow.prompt_builder = DEFAULT_BUILDER.section(
-    "skills",
-    skills_section,
-    title="Skills",
-    before="tools",
-)
-```
-
-See [`examples/skills.py`](examples/skills.py) for a runnable version.
-
 ## Step and inspect
 
-`step(graph) -> graph'` is one atomic graph transition. Every step
+`step(graph) -> graph` is one atomic graph transition. Every step
 returns a fresh `Graph` snapshot, so the live tree is just `graph.tree()`:
 
 ```python
@@ -359,9 +357,11 @@ from rflow.utils.viewer import open_viewer
 open_viewer("runs/deep_research")
 ```
 
-From the CLI: `recursive-flow view runs/deep_research --port 7861`.
+From the CLI: `rlmflow view runs/deep_research --port 7861`.
 
 ### Live terminal tree
+
+![rlmflow TUI showing chat, query/context inputs, and execution tree](docs/static/tui.png)
 
 `rflow.utils.viz.live(agent, graph)` drives the step loop and renders a
 Rich tree as nodes are produced. The boids run (`Create a simple boids
@@ -384,7 +384,7 @@ because `.` is the parent/child delimiter in the agent tree.
 
 ### Static renders
 
-`recursive-flow render <path> -f F` writes a static visualization in any of:
+`rlmflow render <path> -f F` writes a static visualization in any of:
 
 ```text
 mermaid             # stateDiagram-v2 (default topology)
@@ -403,10 +403,10 @@ steps               # one image per snapshot, written as step_NN.{png,svg,pdf}
 ```
 
 ```bash
-recursive-flow render ./myproject -f mermaid-flowchart
-recursive-flow render ./myproject -f gantt-html -o run.html
-recursive-flow render ./myproject -f report-md  -o run.md
-recursive-flow render ./myproject -f tokens
+rlmflow render ./myproject -f mermaid-flowchart
+rlmflow render ./myproject -f gantt-html -o run.html
+rlmflow render ./myproject -f report-md  -o run.md
+rlmflow render ./myproject -f tokens
 ```
 
 GitHub renders mermaid inline, so the output drops straight into a doc.
@@ -488,9 +488,10 @@ graph.save_html("viewer.html")
 
 The Plotly viewer, static image export, GIF export, and HTML stepper now
 share the same default element scale (`element_mult=1.0`), so a saved
-PNG looks much closer to the Gradio/Jupyter view. Dense graphs still
-adaptively cap marker and label sizes to avoid turning large runs into
-solid blobs.
+PNG looks much closer to the Gradio/Jupyter view. Default renders of dense
+graphs adaptively cap marker and label sizes to avoid turning large runs into
+solid blobs, but explicit `element_mult`, `marker_mult`, or `text_mult` values
+are respected when you need a different export balance.
 
 Use these knobs only when a target medium needs a different balance:
 
@@ -541,7 +542,7 @@ slide indicators. Open it in any browser, attach it to an email,
 upload it as a CI artifact — it works offline once the CDN script
 is cached.
 
-**Animated GIF** — needs `pip install recursive-flow[image] pillow`:
+**Animated GIF** — needs `pip install rlmflow[image] pillow`:
 
 ```python
 save_gif(
@@ -559,21 +560,21 @@ Every knob above maps 1:1 to a CLI flag:
 
 ```bash
 # blog slideshow recipe (matches the dense-tree recipe above)
-recursive-flow render ./myproject \
+rlmflow render ./myproject \
   -f steps -o blog/frames/ \
   --width 1600 --height 1200 --scale 2.0 \
   --marker-mult 3.5 --text-mult 2.2
 
 # self-contained interactive stepper
-recursive-flow render ./myproject \
+rlmflow render ./myproject \
   -f html  -o stepper.html --title "boids walkthrough"
 
 # single hero PNG with default scaling
-recursive-flow render ./myproject \
+rlmflow render ./myproject \
   -f image -o hero.png
 
 # opt out of label normalization (matches Gradio viewer defaults)
-recursive-flow render ./myproject \
+rlmflow render ./myproject \
   -f html  -o stepper.html --no-normalize-labels
 ```
 
@@ -586,9 +587,9 @@ marker size. Override with `--element-mult`, `--marker-mult`, or
 #### Dependencies
 
 - `save_image` / `save_steps` need `kaleido`. Install with
-  `pip install recursive-flow[image]` or just `pip install kaleido`.
+  `pip install rlmflow[image]` or just `pip install kaleido`.
 - `save_gif` additionally needs `Pillow`
-  (`pip install recursive-flow[image] pillow`).
+  (`pip install rlmflow[image] pillow`).
 - `save_html` and `render_html` have **no static-image dependency** —
   they emit a single HTML file that embeds Plotly from CDN.
 
@@ -608,21 +609,32 @@ flow = rflow.Flow(
     max_iters=5,
 )
 
-dspy.configure(lm=RecursiveFlowLM(flow, model="recursive-flow/gpt-4o-mini"))
+dspy.configure(lm=RecursiveFlowLM(flow, model="rlmflow/gpt-4o-mini"))
 qa = dspy.ChainOfThought("question -> answer")
 print(qa(question="What is 17 * 23?").answer)
 ```
 
-Install it with `pip install recursive-flow[openai,dspy]`. See
+Install it with `pip install rlmflow[openai,dspy]`. See
 [`examples/providers/dspy_drop_in.py`](examples/providers/dspy_drop_in.py) for the runnable
 version.
+
+## Customizable skills
+
+Give agents reusable know-how without baking it into the core prompt. Put
+project conventions, domain playbooks, child-agent contracts, benchmark
+heuristics, or lessons from previous runs in `SKILL.md` files, then load the
+right ones for each root or child agent.
+
+See [`docs/skills.md`](docs/skills.md) for examples of always-on skills,
+query-selected skills, child-only skills, and run-memory skills.
+[`examples/skills.py`](examples/skills.py) is the runnable minimal version.
 
 ## Examples
 
 Run the offline smoke suite with `python examples/run_examples.py`.
 Add `--include-optional`, `--include-live`, `--include-sandbox`, or
 `--include-manual` as needed. Most live examples share flags like `--no-viz`,
-`--docker-image recursive-flow:local`, `--max-depth`, and `--max-iters`; see
+`--docker-image rlmflow:local`, `--max-depth`, and `--max-iters`; see
 [`examples/README.md`](examples/README.md).
 
 | Example | What it shows |
@@ -664,17 +676,6 @@ including per-question JSON files with prompt, inputs, expected answer, and each
 runner's solution.
 
 ```bash
-python -m benchmarks.eval \
-  --provider fake \
-  --model fake \
-  --tasks sniah \
-  --runners fake vanilla rflow \
-  --seeds 0:3
-```
-
-To run the full RLM-Bench-style table sweep with W&B logging:
-
-```bash
 make eval-benchmark EVAL_MODEL=gpt-5-mini
 ```
 
@@ -684,13 +685,13 @@ extension points and W&B usage.
 ## CLI
 
 ```
-recursive-flow view ./myproject
-recursive-flow render ./myproject -f mermaid
-recursive-flow render ./myproject -f gantt-html -o run1.html
-recursive-flow render ./myproject -f html       -o stepper.html
-recursive-flow render ./myproject -f steps      -o frames/  --marker-mult 3.5 --text-mult 2.2
-recursive-flow render ./myproject -f image      -o graph.png
-recursive-flow version
+rlmflow view ./myproject
+rlmflow render ./myproject -f mermaid
+rlmflow render ./myproject -f gantt-html -o run1.html
+rlmflow render ./myproject -f html       -o stepper.html
+rlmflow render ./myproject -f steps      -o frames/  --marker-mult 3.5 --text-mult 2.2
+rlmflow render ./myproject -f image      -o graph.png
+rlmflow version
 ```
 
 `view` and `render` accept a workspace directory.
@@ -721,10 +722,12 @@ in [`docs/internals.md`](docs/internals.md). Research notes live under
   after the `Flow`/`Graph` rewrite.
 - [Blog post](docs/blog.md): long-form pitch — recursive agents, why graphs
   beat flat traces, needle-in-a-haystack and autoresearch walkthroughs.
-- [Positioning](docs/positioning.md): when to use recursive-flow vs
+- [Positioning](docs/positioning.md): when to use rlmflow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 - [Control](docs/control.md): step loop, save/load resume, rewind,
   forks, `INPUTS`, `launch_subagents`, inline-first strategy, custom tools.
+- [Skills](docs/skills.md): workspace `SKILL.md` files, query-selected
+  skills, child-only skills, and run-memory skills.
 - [Node injection](docs/injections.md): append typed controller events to a
   running graph and commit them through `agent.step(graph)`.
 - [Observability](docs/observability.md): querying the `Graph`,
@@ -733,18 +736,18 @@ in [`docs/internals.md`](docs/internals.md). Research notes live under
 - [Runtimes](docs/runtimes.md): `Runtime` protocol, shipped runtimes
   (Local / Docker / Modal / E2B / Daytona), writing your own.
 - [Prompt customization](docs/prompt_customization.md): `PromptBuilder`
-  sections, callable dynamic sections, workspace-backed skills/memory,
-  deriving from the default prompt, full replacement.
+  sections, callable dynamic sections, deriving from the default prompt,
+  full replacement.
 - [Security](docs/security.md): trust model, Docker isolation knobs,
   engine-level caps, proxied tools, approval gates.
 - [Changelog](CHANGELOG.md): release-by-release changes.
 
 ## References
 
-- [Recursive Language Models](https://github.com/alexzhang13/rlm): the
-  original RLM paper and implementation.
+- [Original recursive-agent work](https://github.com/alexzhang13/rlm): the
+  paper and implementation that inspired this project.
 - [rlm-minimal](https://github.com/alexzhang13/rlm-minimal): the
-  single-file reference recursive-flow grew from.
+  single-file reference rlmflow grew from.
 - [Scaling Managed Agents: Decoupling the brain from the hands](https://www.anthropic.com/engineering/managed-agents):
   Anthropic's writeup on separating harness, session, and sandbox
   interfaces for long-horizon agents.
@@ -760,12 +763,12 @@ See [LICENSE](LICENSE).
 ## Citation
 
 ```bibtex
-@misc{sudhakaran2025recursive-flow,
+@misc{sudhakaran2025rlmflow,
   author = {Sudhakaran, Shyam},
-  title = {recursive-flow},
+  title = {rlmflow},
   year = {2025},
   publisher = {GitHub},
   journal = {GitHub repository},
-  howpublished = {\url{https://github.com/shyamsn97/recursive-flow}},
+  howpublished = {\url{https://github.com/shyamsn97/rlmflow}},
 }
 ```

@@ -27,8 +27,8 @@ _REPL_ENTRYPOINT = "from rflow.runtime.repl_server import main; main()"
 class RemoteFileRuntime(RemoteRepl):
     """Base for provider SDKs with ``exec(command) -> stdout`` semantics."""
 
-    #: First-boot commands for providers that don't ship recursive-flow.
-    DEFAULT_SETUP_COMMANDS = ("python -m pip install -q recursive-flow",)
+    #: First-boot commands for providers that don't ship rlmflow.
+    DEFAULT_SETUP_COMMANDS = ("python -m pip install -q rlmflow",)
 
     def __init__(
         self,
@@ -42,7 +42,7 @@ class RemoteFileRuntime(RemoteRepl):
         self.repl_timeout = repl_timeout
         self.setup_commands = self._resolve_setup_commands(setup_commands)
         self._run_id = uuid.uuid4().hex
-        self._remote_dir = f"/tmp/recursive-flow-{self._run_id}"
+        self._remote_dir = f"/tmp/rlmflow-{self._run_id}"
         self._input_path = f"{self._remote_dir}/in.jsonl"
         self._output_path = f"{self._remote_dir}/out.jsonl"
         self._stderr_path = f"{self._remote_dir}/stderr.log"
@@ -139,7 +139,7 @@ class RemoteFileRuntime(RemoteRepl):
             "        sys.exit(0)\n"
             "    time.sleep(0.05)\n"
             "stderr = err.read_text()[-4000:] if err.exists() else ''\n"
-            "raise SystemExit('timed out waiting for recursive-flow REPL output\\n' + stderr)\n"
+            "raise SystemExit('timed out waiting for rlmflow REPL output\\n' + stderr)\n"
         )
         line = self.exec(
             f"python -c {shlex.quote(script)}", timeout=self.repl_timeout + 5

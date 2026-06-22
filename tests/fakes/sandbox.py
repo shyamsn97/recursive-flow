@@ -31,7 +31,7 @@ from rflow.clients.llm import LLMClient
 from rflow.runtime.repl_server import ReplServer
 
 _REPL_DETECT = "from rflow.runtime.repl_server import main"
-_REMOTE_DIR_RE = re.compile(r"mkdir -p (/[^\s]*recursive-flow-[a-f0-9]+)\s+(\S+)")
+_REMOTE_DIR_RE = re.compile(r"mkdir -p (/[^\s]*rlmflow-[a-f0-9]+)\s+(\S+)")
 _KILL_PID_RE = re.compile(r"kill \$\(cat ([^)]+)/pid\)")
 
 _sessions: dict[str, "_BridgeSession"] = {}

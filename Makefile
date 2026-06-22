@@ -152,7 +152,7 @@ examples-all: ## Run every example category.
 	python examples/run_examples.py --all $(EXAMPLES_ARGS)
 
 build-docker-image:
-	docker build -t recursive-flow:local .
+	docker build -t rlmflow:local .
 
 # ── Eval harness ─────────────────────────────────────────────────────
 # Eval/benchmark targets now live in benchmarks/Makefile. Run them with
@@ -165,9 +165,9 @@ ANIMATION_SRC := docs/rlm_animation.py
 ANIMATION_SCENE := RecursiveFlowHero
 ANIMATION_OUT_DIR := media/videos/rlm_animation/1080p60
 
-animation: animation-mp4 animation-gif-small ## Render the recursive-flow animation: MP4 + share-friendly GIF.
+animation: animation-mp4 animation-gif-small ## Render the rlmflow animation: MP4 + share-friendly GIF.
 
-animation-preview: ## Quick low-res manim preview of the recursive-flow animation.
+animation-preview: ## Quick low-res manim preview of the rlmflow animation.
 	manim -pql $(ANIMATION_SRC) $(ANIMATION_SCENE)
 
 animation-mp4: ## Render docs/rlm_animation.mp4 (1080p60).

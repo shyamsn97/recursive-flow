@@ -215,7 +215,7 @@ def gantt(source: ViewSource) -> None:
     Console().print(table)
 
 
-def gantt_html(source: ViewSource, *, title: str = "recursive-flow gantt") -> str:
+def gantt_html(source: ViewSource, *, title: str = "rlmflow gantt") -> str:
     """Render the per-step swimlane as a self-contained HTML page."""
     graphs = _resolve_graphs(source)
     agents, rows = _gantt_per_step(graphs)
@@ -322,7 +322,7 @@ def code_log(source: ViewSource, agent_id: str | None = None) -> str:
     return "\n".join(out).rstrip() or "(no code blocks)"
 
 
-def report_md(source: ViewSource, *, title: str = "recursive-flow run") -> str:
+def report_md(source: ViewSource, *, title: str = "rlmflow run") -> str:
     """Render a Markdown summary of a run: stats + tree + errors + result."""
     graphs = _resolve_graphs(source)
     if not graphs:

@@ -17,6 +17,7 @@ from rflow import (
     UserQuery,
 )
 from rflow.tui import (
+    _context_inputs,
     agent_table,
     chat_bubbles,
     error_table,
@@ -127,12 +128,22 @@ def test_tui_tables_include_core_run_state():
     assert "none" in rendered or "0" in rendered
 
 
-def test_tui_full_tree_panel_shows_whole_graph():
+def test_tui_full_tree_panel_shows_nested_execution_tree():
     rendered = _text(render_full_tree_panel(_sample_graph()))
 
     assert "execution tree" in rendered
     assert "root.lookup" in rendered
-    assert "done -> child answer" in rendered
+    assert "waiting on root.lookup" in rendered
+    assert "done - child answer" in rendered
+    assert "├" in rendered or "└" in rendered
+
+
+def test_tui_context_box_maps_to_context_input():
+    assert _context_inputs("") is None
+    assert _context_inputs("  \n  ") is None
+    assert _context_inputs(" supporting material \n") == {
+        "context": "supporting material"
+    }
 
 
 def test_rflow_import_exports_tui_without_textual_import():

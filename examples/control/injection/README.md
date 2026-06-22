@@ -19,7 +19,7 @@ truncate the now-obsolete children, adopt the edited graph on a fresh
 Inspect the baseline with:
 
 ```bash
-recursive-flow view examples/_runs/word-search/baseline
+rlmflow view examples/_runs/word-search/baseline
 ```
 
 ## Flow

@@ -8,7 +8,7 @@ Usage:
     python examples/needle/filesystem.py
     python examples/needle/filesystem.py --no-viz
     python examples/needle/filesystem.py --viewer
-    python examples/needle/filesystem.py --docker-image recursive-flow:local
+    python examples/needle/filesystem.py --docker-image rlmflow:local
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def main():
     parser.add_argument(
         "--docker-image",
         default=None,
-        help="If set, run agent code inside this Docker image (e.g. recursive-flow:local).",
+        help="If set, run agent code inside this Docker image (e.g. rlmflow:local).",
     )
     parser.add_argument(
         "--workdir",

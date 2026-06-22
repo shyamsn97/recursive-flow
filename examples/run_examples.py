@@ -360,7 +360,7 @@ def main() -> int:
     skipped: list[str] = []
     passed = 0
 
-    with tempfile.TemporaryDirectory(prefix="recursive-flow-example-runs-") as raw_tmpdir:
+    with tempfile.TemporaryDirectory(prefix="rlmflow-example-runs-") as raw_tmpdir:
         tmpdir = Path(raw_tmpdir)
         print(f"Running {len(selected)} selected examples. temp outputs: {tmpdir}")
         for example in selected:

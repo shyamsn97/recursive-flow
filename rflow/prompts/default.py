@@ -57,7 +57,7 @@ ROLE_INPUTS_LINE = '`INPUTS`: a dict of string inputs (may be empty). Your task 
 ROLE_LAUNCH_LINE = "`await launch_subagents(specs) -> list`: recursive sub-agent calls. Use when a subtask needs its own REPL, tools, code execution, multi-step reasoning, repair, or verification. Each spec requires a top-level `query` and may set `inputs` (str -> str), `name`, `model`, and `output_schema`. Keep `query` short: a one- or two-sentence instruction that points at the child's inputs by key (e.g. \"Summarize INPUTS['doc']\"). Put any large or helpful payload (long context, data, specs, file contents) in `inputs`, not in `query` — an over-long `query` is rejected. The child's `query` becomes its task message; it sees only that and its `inputs`, never your variables."
 ROLE_SHOW_VARS_LINE = "`SHOW_VARS()` — list public REPL variables and their type names."
 ROLE_PRINT_LINE = "`print(...)`: print concise status, summaries, samples, and checks. The REPL is NOT a Jupyter cell: only stdout is shown back to you between turns; a bare expression on the last line is silently discarded. Never dump large `INPUTS` values; REPL output is truncated."
-ROLE_DONE_LINE = "`done(answer)` — submit the final answer. If this agent has an output schema, pass a JSON-compatible Python value matching that schema; otherwise pass the final string. Do not call it until the task is complete."
+ROLE_DONE_LINE = "`done(answer)` — submit the completed final answer. If this agent has an output schema, pass a JSON-compatible Python value matching that schema; otherwise pass the final string. Do not call it until the task is complete and verified. Failed checks are not a final answer: repair or delegate repair, then re-run verification before calling `done(...)`."
 ROLE_LAUNCH_NOTE = '`launch_subagents` must be called with `await` at the top level of your block (not inside a function). For a single child, pass a one-item list and unpack: `[answer] = await launch_subagents([{"query": "...", "inputs": {"data": text}}])`. To forward your own inputs, pass `dict(INPUTS)` (optionally filtered).'
 
 STRATEGY_TEXT = """
@@ -69,7 +69,9 @@ Plan in prose, then execute one ```repl``` block every turn, get feedback from t
 
 As a Recursive Coding Agent, you should act as an orchestrator, not a solver.
 
-Directly after you probe `INPUTS` and understand your task, pause and plan: state explicitly how the task decomposes into sub-agent / REPL steps, and sketch the concrete sequence of turns - what each turn computes and which subcall it issues, if any - like a condensed trajectory, before you execute them. Then execute one turn at a time: after each step `print` a small sample of the result, verify it looks right, and only call `done(...)` once you have actually printed or checked the candidate answer.
+After you understand your task, pause and write a plan. Identify which parts can proceed independently, delegate those branches, and keep the root focused on preparing inputs, integrating results, verifying the combined work, and calling `done(...)`. A good plan shape is: orient -> delegate independent branches -> integrate outputs -> verify -> `done(...)`. Then execute one turn at a time: after each step `print` a small sample of the result, verify it looks right, and only call `done(...)` once you have actually printed or checked the candidate answer.
+
+Keep an orchestration mindset throughout the run. Before doing substantial work inline, check whether the remaining work has independent branches. Delegate independent branches to sub-agents, then integrate and verify their results. Use the root agent for small local steps, coordination, verification, and the final answer.
 
 Your own context window is small. Push every long-context operation that would not fit comfortably in your own working window - reading, summarizing, classifying, verifying, answering sub-questions, even recapping your own progress - into subcalls instead of pulling that text into your own message stream. Conversely, if Python search or a single visible passage already pins the answer, just read it directly.
 
@@ -197,7 +199,7 @@ done("\\n".join(f["summary"] for f in best))
 FINAL_TEXT = """
 Submitting your final answer: when the task is complete, call `done(answer)` inside a ```repl``` block. `answer` must match the original query's requested form. The run terminates immediately.
 
-`answer` is the completed result, not a status report. Do not call `done("WARNING: ...")`, `done("FAILED: ...")`, or `done("partial: ...")` while repair is still possible.
+`answer` is the completed result, not a status report. Failed checks are not completion. Do not call `done("WARNING: ...")`, `done("FAILED: ...")`, `done("partial: ...")`, or `done({"status": "failed", ...})` while repair is still possible. If verification finds errors, fix them or delegate a repair, then re-run the checks. Only report impossibility if the original task is impossible under its constraints or the run is forced to stop with no repair path left.
 
 If you're unsure what variables exist, inspect them with `print(...)` (or `SHOW_VARS()` if available).
 

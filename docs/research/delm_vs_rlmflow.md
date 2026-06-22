@@ -1,19 +1,19 @@
 # DeLM vs. RecursiveFlow: Research and Adoption Plan
 
 This note compares DeLM, "Decentralized Language Models with shared context",
-against the current `recursive-flow` architecture and sketches what it would take to
+against the current `rlmflow` architecture and sketches what it would take to
 make DeLM-style coordination a first-class approach in this repo.
 
 Sources:
 
 - DeLM repository: <https://github.com/yuzhenmao/DeLM>
 - DeLM paper: <https://arxiv.org/abs/2606.10662>
-- Local `recursive-flow` architecture docs: `README.md`, `docs/internals.md`,
+- Local `rlmflow` architecture docs: `README.md`, `docs/internals.md`,
   `docs/control.md`, and the core implementation under `rflow/`.
 
 ## Short Answer
 
-It is very feasible to add DeLM-style coordination to `recursive-flow`, but it should
+It is very feasible to add DeLM-style coordination to `rlmflow`, but it should
 not replace the RLM graph model.
 
 DeLM is best understood as a coordination layer: many workers operate
@@ -346,7 +346,7 @@ Needed additions:
 - cost accounting and ablations
 - manual audit workflow for verifier false accepts/rejects
 
-This is the level required before claiming that `recursive-flow` has meaningfully
+This is the level required before claiming that `rlmflow` has meaningfully
 adopted DeLM as a research approach.
 
 ## Recommended Architecture
@@ -492,7 +492,7 @@ This is the most important hard part. DeLM works only if shared context is more
 reliable than raw chat messages. Bad lessons are worse than no lessons because
 they become global state.
 
-For `recursive-flow`, a verifier should check each proposed lesson against:
+For `rlmflow`, a verifier should check each proposed lesson against:
 
 - the worker's `Graph`
 - relevant `ExecOutput` / `ErrorOutput`
@@ -825,7 +825,7 @@ unfolding should be part of the real design, not a later afterthought.
 
 ## Recommendation
 
-Make DeLM-style coordination a first-class optional layer in `recursive-flow`, but keep
+Make DeLM-style coordination a first-class optional layer in `rlmflow`, but keep
 RecursiveFlow's recursive graph semantics intact.
 
 The best near-term milestone is:

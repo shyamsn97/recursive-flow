@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import rflow
 
 from rflow import Flow, Graph
 from rflow.code import find_code_blocks, replace_code_block
@@ -130,7 +131,7 @@ def test_to_mermaid_has_nodes_edges_and_result(final_graph):
 
 def test_to_dot_marks_spawn_and_flow_edges(final_graph):
     out = export.to_dot(final_graph)
-    assert out.startswith('digraph "recursive-flow"')
+    assert out.startswith('digraph "rlmflow"')
     assert 'label="spawns"' in out
     assert 'label="flows_to"' in out
 
@@ -258,6 +259,57 @@ def test_graph_plot_figure_builds(final_graph):
     assert fig.data  # has traces
 
 
+def test_graph_plot_marker_mult_overrides_dense_cap():
+    pytest.importorskip("plotly")
+    root_q = rflow.UserQuery(agent_id="root", seq=0, content="fan out")
+    root_wait = rflow.SupervisingOutput(
+        agent_id="root",
+        seq=1,
+        waiting_on=[f"root.child_{i}" for i in range(25)],
+    )
+    children = {
+        f"root.child_{i}": rflow.Graph.from_meta_dict(
+            {
+                "agent_id": f"root.child_{i}",
+                "depth": 1,
+                "parent_agent_id": "root",
+                "parent_node_id": root_wait.id,
+                "query": f"child {i}",
+            },
+            nodes=[
+                rflow.UserQuery(
+                    agent_id=f"root.child_{i}",
+                    seq=0,
+                    content=f"child {i}",
+                ),
+                rflow.DoneOutput(
+                    agent_id=f"root.child_{i}",
+                    seq=1,
+                    result="ok",
+                ),
+            ],
+        )
+        for i in range(25)
+    }
+    graph = rflow.Graph.from_meta_dict(
+        {"agent_id": "root", "depth": 0, "query": "fan out"},
+        nodes=[root_q, root_wait],
+        children=children,
+    )
+
+    default_fig = viewer.graph_plot(graph, "graph")
+    default_marker_trace = next(
+        trace for trace in default_fig.data if getattr(trace, "customdata", None)
+    )
+    assert max(default_marker_trace.marker.size) < 24
+
+    fig = viewer.graph_plot(graph, "graph", marker_mult=3.0)
+    marker_trace = next(trace for trace in fig.data if getattr(trace, "customdata", None))
+    sizes = list(marker_trace.marker.size)
+
+    assert max(sizes) == 72
+
+
 def test_save_image_writes_png(final_graph, tmp_path):
     pytest.importorskip("plotly")
     pytest.importorskip("kaleido")
@@ -297,7 +349,7 @@ def test_cli_render_text_formats(run_snapshots, tmp_path, capsys):
     for fmt, needle in [
         ("mermaid", "stateDiagram-v2"),
         ("tree", "● root"),
-        ("report-md", "# recursive-flow run"),
+        ("report-md", "# rlmflow run"),
         ("error-summary", "no errors"),
     ]:
         rc, captured = _run_cli(["render", path, "-f", fmt], capsys)
@@ -310,7 +362,7 @@ def test_cli_render_to_file(run_snapshots, tmp_path, capsys):
     out = tmp_path / "g.dot"
     rc, _ = _run_cli(["render", path, "-f", "dot", "-o", str(out)], capsys)
     assert rc == 0
-    assert out.read_text().startswith('digraph "recursive-flow"')
+    assert out.read_text().startswith('digraph "rlmflow"')
 
 
 def test_cli_image_requires_out(run_snapshots, tmp_path, capsys):
@@ -322,7 +374,7 @@ def test_cli_image_requires_out(run_snapshots, tmp_path, capsys):
 def test_cli_version_reports_environment(capsys):
     rc, captured = _run_cli(["version"], capsys)
     assert rc == 0
-    assert "recursive-flow" in captured.out
+    assert "rlmflow" in captured.out
     assert "python" in captured.out
 
 

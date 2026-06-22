@@ -1,24 +1,26 @@
-# recursive-flow docs
+# rlmflow docs
 
 Pick the doc that matches what you're trying to do.
 
 ## Get oriented
 
-- [Blog post](blog.md) — long-form pitch. Why recursive language
-  models, why graphs over flat traces, full needle-in-a-haystack
+- [Blog post](blog.md) — long-form pitch. Why recursive agents,
+  why graphs over flat traces, full needle-in-a-haystack
   walkthrough with the same exports the CLI ships.
-- [Minimal](minimal.md) — recursive-flow stripped to its ~90-line core,
+- [Minimal](minimal.md) — rlmflow stripped to its ~90-line core,
   plus an honest accounting of which subsystems are essential vs. the
   price of parallelism and durability. **Start here if the codebase
   feels too complicated.**
-- [Positioning](positioning.md) — when to use recursive-flow vs
+- [Positioning](positioning.md) — when to use rlmflow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 
-## Use recursive-flow
+## Use rlmflow
 
 - [Control](control.md) — step loop, save/load resume, rewind,
   forks, `INPUTS`, delegation via `launch_subagents`,
   inline-first strategy, custom tools.
+- [Skills](skills.md) — workspace `SKILL.md` files, always-on skills,
+  query-selected skills, child-only skills, run-memory skills.
 - [Node injection](injections.md) — append typed controller events to a
   running graph, then commit them through `agent.step(graph)`.
 - [Observability](observability.md) — querying the `Graph`,
@@ -29,14 +31,14 @@ Pick the doc that matches what you're trying to do.
 - [Runtimes](runtimes.md) — `Runtime` protocol, shipped runtimes
   (Local / Docker / Modal / E2B / Daytona), writing your own.
 - [Prompt customization](prompt_customization.md) — `PromptBuilder`
-  sections, callable dynamic sections, file-backed skills/memory,
-  deriving from the default prompt, full replacement.
+  sections, callable dynamic sections, deriving from the default prompt,
+  full replacement.
 - [Security](security.md) — trust model, Docker isolation knobs,
   engine-level caps, proxied tools, approval gates.
 - [Example smoke runner](../examples/run_examples.py) — run the offline
   examples and opt into optional, live, sandbox, or manual checks.
 
-## Extend recursive-flow
+## Extend rlmflow
 
 - [**Internals**](internals.md) — engine architecture, step lifecycle, REPL await protocol,
   runtime backends, graph persistence, and extension seams. **This deep dive
@@ -47,5 +49,5 @@ Pick the doc that matches what you're trying to do.
 - [RAO implementation plan](research/rao_implementation_plan.md) — how to
   implement Recursive Agent Optimization as a first-class `rflow.rao` module
   over `Flow` rollouts.
-- [DeLM vs. recursive-flow](research/delm_vs_rlmflow.md) — how DeLM-style
+- [DeLM vs. rlmflow](research/delm_vs_rlmflow.md) — how DeLM-style
   coordination could sit on top of recursive execution graphs.

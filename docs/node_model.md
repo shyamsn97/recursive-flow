@@ -1,6 +1,6 @@
 # Node Model
 
-`recursive-flow` records every agent run as a typed trajectory. The trajectory is a
+`rlmflow` records every agent run as a typed trajectory. The trajectory is a
 strict alternation of **observations** and **actions**:
 
 - **Observations** are inputs the system received or observed: a user query, an

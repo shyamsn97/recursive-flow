@@ -1,6 +1,6 @@
 """Rendering a Graph: text trees, transcripts, HTML viewer.
 
-Several read-only renderers ship with recursive-flow:
+Several read-only renderers ship with rlmflow:
 
 - ``graph.tree()``                 — ASCII tree of agents + states
 - ``graph.session(...)``           — full chat-style transcript across the run

@@ -1,10 +1,10 @@
-"""``recursive-flow`` command-line entry point.
+"""``rlmflow`` command-line entry point.
 
 Three sub-commands, all operating on paths — no agent construction:
 
-    recursive-flow view     <path>              open the Gradio viewer
-    recursive-flow render   <path> --format F   write a static render
-    recursive-flow version                      print package + environment info
+    rlmflow view     <path>              open the Gradio viewer
+    rlmflow render   <path> --format F   write a static render
+    rlmflow version                      print package + environment info
 
 ``<path>`` may be a ``trace.json`` (``{"steps": [...]}``), a standalone
 ``Graph`` JSON snapshot, a JSON list of snapshots, or a directory containing
@@ -33,7 +33,7 @@ def _load(path: Path) -> list[Graph]:
     try:
         return resolve_graphs(path)
     except (TypeError, ValueError) as exc:
-        raise SystemExit(f"recursive-flow: {exc}") from None
+        raise SystemExit(f"rlmflow: {exc}") from None
 
 
 # ── commands ─────────────────────────────────────────────────────────
@@ -93,7 +93,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     elif fmt == "error-summary":
         out = error_summary(topo)
     else:
-        raise SystemExit(f"recursive-flow: unknown format {fmt!r}")
+        raise SystemExit(f"rlmflow: unknown format {fmt!r}")
 
     if args.out:
         Path(args.out).write_text(out, encoding="utf-8")
@@ -112,15 +112,15 @@ def _render_figure(
 
     if fmt == "html":
         if not args.out:
-            raise SystemExit("recursive-flow: --format html requires --out PATH")
-        path = save_html(graphs, args.out, title=args.title or "recursive-flow run")
+            raise SystemExit("rlmflow: --format html requires --out PATH")
+        path = save_html(graphs, args.out, title=args.title or "rlmflow run")
         print(f"wrote {path}", file=sys.stderr)
         return 0
 
     if fmt == "image":
         if not args.out:
             raise SystemExit(
-                "recursive-flow: --format image requires --out PATH (e.g. graph.png)"
+                "rlmflow: --format image requires --out PATH (e.g. graph.png)"
             )
         path = save_image(
             topo, args.out, width=args.width, height=args.height, scale=args.scale
@@ -130,7 +130,7 @@ def _render_figure(
 
     if fmt == "steps":
         if not args.out:
-            raise SystemExit("recursive-flow: --format steps requires --out DIR")
+            raise SystemExit("rlmflow: --format steps requires --out DIR")
         path = save_steps(
             graphs,
             args.out,
@@ -142,7 +142,7 @@ def _render_figure(
         print(f"wrote images under {path}", file=sys.stderr)
         return 0
 
-    raise SystemExit(f"recursive-flow: unknown figure format {fmt!r}")
+    raise SystemExit(f"rlmflow: unknown figure format {fmt!r}")
 
 
 def cmd_version(_args: argparse.Namespace) -> int:
@@ -151,7 +151,7 @@ def cmd_version(_args: argparse.Namespace) -> int:
     try:
         from importlib.metadata import version as _pkg_version
 
-        pkg = _pkg_version("recursive-flow")
+        pkg = _pkg_version("rlmflow")
     except Exception:
         pkg = "unknown"
 
@@ -160,7 +160,7 @@ def cmd_version(_args: argparse.Namespace) -> int:
 
         return "available" if importlib.util.find_spec(mod) else "not installed"
 
-    print(f"recursive-flow  {pkg}")
+    print(f"rlmflow  {pkg}")
     print(f"python  {platform.python_version()} ({sys.platform})")
     print(f"rich    {_status('rich')}")
     print(f"plotly  {_status('plotly')}")
@@ -170,8 +170,8 @@ def cmd_version(_args: argparse.Namespace) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="recursive-flow",
-        description="recursive-flow command-line tools",
+        prog="rlmflow",
+        description="rlmflow command-line tools",
     )
     sub = p.add_subparsers(dest="cmd", required=True, metavar="<command>")
 

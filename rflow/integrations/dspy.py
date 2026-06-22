@@ -1,6 +1,6 @@
 """DSPy integration for using an RecursiveFlow agent as a DSPy language model.
 
-Install with ``pip install recursive-flow[dspy]``.
+Install with ``pip install rlmflow[dspy]``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - depends on optional ext
         raise
     raise ModuleNotFoundError(
         "The DSPy integration requires the optional `dspy` dependency. "
-        "Install it with `pip install recursive-flow[dspy]`."
+        "Install it with `pip install rlmflow[dspy]`."
     ) from exc
 
 
@@ -84,7 +84,7 @@ class RecursiveFlowLM(dspy.BaseLM):
         self,
         agent: LLMClient,
         *,
-        model: str = "recursive-flow",
+        model: str = "rlmflow",
         model_type: str = "chat",
         **kwargs: Any,
     ) -> None:

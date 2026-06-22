@@ -10,7 +10,7 @@ Usage:
     python examples/summarizer.py
     python examples/summarizer.py --sections 40 --no-viz
     python examples/summarizer.py --input-file path/to/doc.txt
-    python examples/summarizer.py --docker-image recursive-flow:local --viewer
+    python examples/summarizer.py --docker-image rlmflow:local --viewer
 """
 
 from __future__ import annotations
@@ -118,7 +118,7 @@ def main() -> None:
     parser.add_argument(
         "--docker-image",
         default=None,
-        help="If set, run agent code inside this Docker image (e.g. recursive-flow:local).",
+        help="If set, run agent code inside this Docker image (e.g. rlmflow:local).",
     )
     parser.add_argument("--max-depth", type=int, default=1)
     parser.add_argument("--max-iters", type=int, default=15)

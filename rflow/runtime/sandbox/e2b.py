@@ -1,6 +1,6 @@
 """E2B REPL backend — run an agent's code inside an E2B Sandbox.
 
-Requires ``e2b`` (``pip install recursive-flow[e2b]``) and an ``E2B_API_KEY``
+Requires ``e2b`` (``pip install rlmflow[e2b]``) and an ``E2B_API_KEY``
 (unless passed via ``sandbox_kwargs``). Uses the :class:`RemoteFileRuntime` file
 bridge: one persistent :mod:`rflow.runtime.repl_server` process, driven through
 remote files via E2B's ``commands.run``.

@@ -49,7 +49,7 @@ Most compute examples (`summarizer.py`, `needle/haystack.py`, `showcase.py`,
 |---|---|---|
 | `--model MODEL` | varies | Main LLM. Prefix decides client (`claude*` → Anthropic, else OpenAI). |
 | `--fast-model MODEL` | varies | Optional cheap secondary model registered as `fast` for delegates. |
-| `--docker-image IMAGE` | unset | If set, run agent code inside this Docker image via a `DockerRuntime`. Must have `recursive-flow` installed. Leaving this unset uses the in-process `LocalRuntime`. |
+| `--docker-image IMAGE` | unset | If set, run agent code inside this Docker image via a `DockerRuntime`. Must have `rlmflow` installed. Leaving this unset uses the in-process `LocalRuntime`. |
 | `--max-depth N` | `3` | Max delegation depth. |
 | `--max-iters N` | `15` | Max LLM turns per agent. |
 | `--no-viz` | off | Disable the live terminal visualization. |
@@ -60,16 +60,16 @@ Most compute examples (`summarizer.py`, `needle/haystack.py`, `showcase.py`,
 Build the image once:
 
 ```bash
-docker build -t recursive-flow:local .
+docker build -t rlmflow:local .
 ```
 
-Then pass `--docker-image recursive-flow:local` to any example that supports it:
+Then pass `--docker-image rlmflow:local` to any example that supports it:
 
 ```bash
-python examples/summarizer.py                 --docker-image recursive-flow:local
-python examples/needle/haystack.py            --docker-image recursive-flow:local
-python examples/needle/filesystem.py          --docker-image recursive-flow:local
-python examples/coding/agent.py --workdir ./proj --docker-image recursive-flow:local
+python examples/summarizer.py                 --docker-image rlmflow:local
+python examples/needle/haystack.py            --docker-image rlmflow:local
+python examples/needle/filesystem.py          --docker-image rlmflow:local
+python examples/coding/agent.py --workdir ./proj --docker-image rlmflow:local
 ```
 
 Examples that use file tools register them on the runtime
@@ -80,8 +80,8 @@ A finished run is saved automatically under `_runs/`; reopen it with:
 
 ```bash
 python examples/summarizer.py        # saves to examples/_runs/summarizer/
-recursive-flow view examples/_runs/summarizer
-recursive-flow render examples/_runs/summarizer --format html -o viewer.html
+rlmflow view examples/_runs/summarizer
+rlmflow render examples/_runs/summarizer --format html -o viewer.html
 ```
 
 The saved directory holds `graph.json` (and optionally `trace.json` when you
@@ -99,8 +99,8 @@ python examples/sandboxes/e2b_agent.py --model gpt-5
 python examples/sandboxes/daytona_agent.py --model gpt-5
 ```
 
-Install the matching extra first: `recursive-flow[modal]`, `recursive-flow[e2b]`,
-`recursive-flow[daytona]`, or `recursive-flow[sandbox]` for all three.
+Install the matching extra first: `rlmflow[modal]`, `rlmflow[e2b]`,
+`rlmflow[daytona]`, or `rlmflow[sandbox]` for all three.
 
 For fully locked-down local runs, pass a `DockerRuntime`:
 
@@ -108,7 +108,7 @@ For fully locked-down local runs, pass a `DockerRuntime`:
 from rflow import Flow, DockerRuntime
 from rflow.clients import OpenAIClient
 
-runtime = DockerRuntime("recursive-flow:local", working_directory="./proj")
+runtime = DockerRuntime("rlmflow:local", working_directory="./proj")
 flow = Flow(OpenAIClient(model="gpt-4o"), runtime=runtime)
 ```
 

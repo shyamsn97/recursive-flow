@@ -850,17 +850,21 @@ def _scale_figure_elements(
     fig: Any,
     marker_mult: float,
     text_mult: float | None = None,
+    *,
+    cap_dense_markers: bool = True,
 ) -> None:
     """Multiply marker and font pixel sizes in-place."""
     if text_mult is None:
         text_mult = marker_mult
-    if marker_mult == 1.0 and text_mult == 1.0:
+    if marker_mult == 1.0 and text_mult == 1.0 and not cap_dense_markers:
         return
     if fig is None:
         return
     node_count = _visible_node_count(fig)
     dense_graph = node_count >= _DENSE_NODE_THRESHOLD
-    dense_marker_cap = _dense_marker_cap(fig) if dense_graph else None
+    dense_marker_cap = (
+        _dense_marker_cap(fig) if dense_graph and cap_dense_markers else None
+    )
 
     def scale_marker_size(size: Any) -> Any:
         scaled = size * marker_mult
@@ -880,7 +884,9 @@ def _scale_figure_elements(
             if mline is not None and getattr(mline, "width", None) is not None:
                 scaled = mline.width * marker_mult
                 mline.width = (
-                    min(scaled, _DENSE_MAX_MARKER_LINE_WIDTH) if dense_graph else scaled
+                    min(scaled, _DENSE_MAX_MARKER_LINE_WIDTH)
+                    if dense_graph and cap_dense_markers
+                    else scaled
                 )
         textfont = getattr(trace, "textfont", None)
         if textfont is not None and getattr(textfont, "size", None) is not None:
@@ -901,7 +907,9 @@ def _scale_figure_elements(
         if font is not None and getattr(font, "size", None) is not None:
             scaled = font.size * text_mult
             font.size = (
-                min(scaled, _DENSE_MAX_AGENT_LABEL_SIZE) if dense_graph else scaled
+                min(scaled, _DENSE_MAX_AGENT_LABEL_SIZE)
+                if dense_graph and cap_dense_markers
+                else scaled
             )
 
 
@@ -951,7 +959,7 @@ def graph_plot(
     if fmt in {"gantt", "swimlane", "swimlanes"}:
         from rflow.utils.viz import gantt_html
 
-        return gantt_html(resolve_graphs(source), title=title or "recursive-flow gantt")
+        return gantt_html(resolve_graphs(source), title=title or "rlmflow gantt")
 
     graph = _resolve_latest_graph(source)
     if fmt in {"mermaid", "state", "state_diagram"}:
@@ -992,13 +1000,24 @@ def graph_plot(
     )
     if fig is None:
         raise ImportError(
-            "Graph.plot() requires the viewer extra: `pip install recursive-flow[viewer]`."
+            "Graph.plot() requires the viewer extra: `pip install rlmflow[viewer]`."
         )
     if normalize_labels:
         _normalize_label_positions(fig)
     resolved_marker = marker_mult if marker_mult is not None else element_mult
     resolved_text = text_mult if text_mult is not None else element_mult
-    _scale_figure_elements(fig, resolved_marker, resolved_text)
+    # Dense graphs get conservative default caps so ordinary renders do not turn
+    # into solid blobs. If the caller explicitly asks for larger elements through
+    # marker_mult/text_mult/element_mult, respect that request.
+    cap_dense_markers = (
+        marker_mult is None and text_mult is None and element_mult == 1.0
+    )
+    _scale_figure_elements(
+        fig,
+        resolved_marker,
+        resolved_text,
+        cap_dense_markers=cap_dense_markers,
+    )
     return fig
 
 
@@ -1311,7 +1330,7 @@ def _state_table_html(graph: Graph) -> str:
 def render_html(
     source: ViewSource,
     *,
-    title: str = "recursive-flow run",
+    title: str = "rlmflow run",
     height: int = 720,
     include_plotlyjs: str | bool = "cdn",
     element_mult: float = 1.0,
@@ -1584,9 +1603,9 @@ def open_viewer(source: ViewSource, **launch_kwargs: Any):
 
     total_nodes = sum(len(g.all_nodes) for g in graphs)
 
-    with gr.Blocks(title="recursive-flow viewer", fill_height=True) as demo:
+    with gr.Blocks(title="rlmflow viewer", fill_height=True) as demo:
         gr.Markdown(
-            f"### recursive-flow viewer · {n_steps} steps · "
+            f"### rlmflow viewer · {n_steps} steps · "
             f"{total_nodes} nodes\n"
             "Drag the slider to scrub the graph through time. "
             "Click any node to see its step-local payload + conversation."
@@ -1619,7 +1638,7 @@ def open_viewer(source: ViewSource, **launch_kwargs: Any):
             outputs=None,
             js=(
                 "(step) => { window.dispatchEvent("
-                "new CustomEvent('recursive-flow-step-change', {detail: step})); "
+                "new CustomEvent('rlmflow-step-change', {detail: step})); "
                 "return step; }"
             ),
         )
@@ -1631,119 +1650,119 @@ def open_viewer(source: ViewSource, **launch_kwargs: Any):
 
 
 _GRAPH_HTML_TEMPLATE = """
-<div class="recursive-flow-shell" data-initial-step="${initial_step}">
-  <div class="recursive-flow-plot"></div>
-  <div class="recursive-flow-detail">${initial_detail}</div>
-  <script type="application/json" class="recursive-flow-bootstrap">${initial_fig_json}</script>
+<div class="rlmflow-shell" data-initial-step="${initial_step}">
+  <div class="rlmflow-plot"></div>
+  <div class="rlmflow-detail">${initial_detail}</div>
+  <script type="application/json" class="rlmflow-bootstrap">${initial_fig_json}</script>
 </div>
 """.strip()
 
 _GRAPH_CSS = """
-.recursive-flow-shell { display: flex; flex-direction: column; gap: 12px; }
-.recursive-flow-plot {
+.rlmflow-shell { display: flex; flex-direction: column; gap: 12px; }
+.rlmflow-plot {
     width: 100%; height: 420px;
     background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
 }
-.recursive-flow-detail {
+.rlmflow-detail {
     background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
     padding: 14px; color: #e6edf3;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
 }
-.recursive-flow-detail .header {
+.rlmflow-detail .header {
     display: flex; justify-content: space-between; gap: 8px;
     color: #8b949e; font-size: 11px; margin-bottom: 8px;
 }
-.recursive-flow-detail h4 {
+.rlmflow-detail h4 {
     margin: 0 0 6px 0; color: #e6edf3; font-size: 13px;
     font-family: -apple-system, system-ui, sans-serif;
 }
-.recursive-flow-detail h5 {
+.rlmflow-detail h5 {
     margin: 12px 0 4px 0; color: #8b949e; font-size: 11px;
     text-transform: uppercase; letter-spacing: 0.05em;
     font-family: -apple-system, system-ui, sans-serif;
 }
-.recursive-flow-detail pre {
+.rlmflow-detail pre {
     background: #161b22; border: 1px solid #30363d; border-radius: 4px;
     padding: 10px; margin: 0; overflow: auto;
     color: #e6edf3; font-size: 11px; line-height: 1.4;
     white-space: pre-wrap; word-break: break-word;
     max-height: 320px;
 }
-.recursive-flow-detail .pill {
+.rlmflow-detail .pill {
     display: inline-block; padding: 1px 6px; border-radius: 3px;
     background: #161b22; border: 1px solid #30363d; font-size: 10px;
     color: #8b949e; margin-right: 4px;
 }
-.recursive-flow-detail .pill.type-query       { color: #58a6ff; border-color: #58a6ff; }
-.recursive-flow-detail .pill.type-llm         { color: #bc8cff; border-color: #bc8cff; }
-.recursive-flow-detail .pill.type-exec        { color: #ff9e64; border-color: #ff9e64; }
-.recursive-flow-detail .pill.type-supervising { color: #ffd33d; border-color: #ffd33d; }
-.recursive-flow-detail .pill.type-resume      { color: #56d4dd; border-color: #56d4dd; }
-.recursive-flow-detail .pill.type-done        { color: #56d364; border-color: #56d364; }
-.recursive-flow-detail .pill.type-errored     { color: #ff7b72; border-color: #ff7b72; }
-.recursive-flow-detail .payload-block {
+.rlmflow-detail .pill.type-query       { color: #58a6ff; border-color: #58a6ff; }
+.rlmflow-detail .pill.type-llm         { color: #bc8cff; border-color: #bc8cff; }
+.rlmflow-detail .pill.type-exec        { color: #ff9e64; border-color: #ff9e64; }
+.rlmflow-detail .pill.type-supervising { color: #ffd33d; border-color: #ffd33d; }
+.rlmflow-detail .pill.type-resume      { color: #56d4dd; border-color: #56d4dd; }
+.rlmflow-detail .pill.type-done        { color: #56d364; border-color: #56d364; }
+.rlmflow-detail .pill.type-errored     { color: #ff7b72; border-color: #ff7b72; }
+.rlmflow-detail .payload-block {
     margin: 8px 0; padding: 8px 10px;
     background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
 }
-.recursive-flow-detail .payload-block pre {
+.rlmflow-detail .payload-block pre {
     margin-top: 6px; background: #161b22;
 }
-.recursive-flow-detail .payload-label {
+.rlmflow-detail .payload-label {
     color: #8b949e; font-size: 10px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.06em;
     font-family: -apple-system, system-ui, sans-serif;
 }
-.recursive-flow-detail .state-blocks {
+.rlmflow-detail .state-blocks {
     display: flex; flex-direction: column; gap: 10px;
 }
-.recursive-flow-detail .state-block {
+.rlmflow-detail .state-block {
     border: 1px solid #30363d; border-left: 3px solid #30363d;
     border-radius: 6px;
     background: #0d1117; padding: 10px 12px;
 }
-.recursive-flow-detail .state-block-query       { border-left-color: #58a6ff; background: #58a6ff0a; }
-.recursive-flow-detail .state-block-llm         { border-left-color: #bc8cff; background: #bc8cff0a; }
-.recursive-flow-detail .state-block-llm_call    { border-left-color: #a98a2a; background: #a98a2a0a; }
-.recursive-flow-detail .state-block-exec        { border-left-color: #ff9e64; background: #ff9e640a; }
-.recursive-flow-detail .state-block-exec_call   { border-left-color: #b87650; background: #b876500a; }
-.recursive-flow-detail .state-block-supervising { border-left-color: #ffd33d; background: #ffd33d0a; }
-.recursive-flow-detail .state-block-resume      { border-left-color: #56d4dd; background: #56d4dd0a; }
-.recursive-flow-detail .state-block-resume_call { border-left-color: #3a8a5d; background: #3a8a5d0a; }
-.recursive-flow-detail .state-block-done        { border-left-color: #56d364; background: #56d3640a; }
-.recursive-flow-detail .state-block-errored     { border-left-color: #ff7b72; background: #ff7b720a; }
-.recursive-flow-detail .state-block-selected {
+.rlmflow-detail .state-block-query       { border-left-color: #58a6ff; background: #58a6ff0a; }
+.rlmflow-detail .state-block-llm         { border-left-color: #bc8cff; background: #bc8cff0a; }
+.rlmflow-detail .state-block-llm_call    { border-left-color: #a98a2a; background: #a98a2a0a; }
+.rlmflow-detail .state-block-exec        { border-left-color: #ff9e64; background: #ff9e640a; }
+.rlmflow-detail .state-block-exec_call   { border-left-color: #b87650; background: #b876500a; }
+.rlmflow-detail .state-block-supervising { border-left-color: #ffd33d; background: #ffd33d0a; }
+.rlmflow-detail .state-block-resume      { border-left-color: #56d4dd; background: #56d4dd0a; }
+.rlmflow-detail .state-block-resume_call { border-left-color: #3a8a5d; background: #3a8a5d0a; }
+.rlmflow-detail .state-block-done        { border-left-color: #56d364; background: #56d3640a; }
+.rlmflow-detail .state-block-errored     { border-left-color: #ff7b72; background: #ff7b720a; }
+.rlmflow-detail .state-block-selected {
     box-shadow: 0 0 0 1px currentColor;
     border-top-color: currentColor;
     border-right-color: currentColor;
     border-bottom-color: currentColor;
 }
-.recursive-flow-detail .state-block-query.state-block-selected       { color: #58a6ff; }
-.recursive-flow-detail .state-block-llm.state-block-selected         { color: #bc8cff; }
-.recursive-flow-detail .state-block-llm_call.state-block-selected    { color: #a98a2a; }
-.recursive-flow-detail .state-block-exec.state-block-selected        { color: #ff9e64; }
-.recursive-flow-detail .state-block-exec_call.state-block-selected   { color: #b87650; }
-.recursive-flow-detail .state-block-supervising.state-block-selected { color: #ffd33d; }
-.recursive-flow-detail .state-block-resume.state-block-selected      { color: #56d4dd; }
-.recursive-flow-detail .state-block-resume_call.state-block-selected { color: #3a8a5d; }
-.recursive-flow-detail .state-block-done.state-block-selected        { color: #56d364; }
-.recursive-flow-detail .state-block-errored.state-block-selected     { color: #ff7b72; }
-.recursive-flow-detail .state-block-head {
+.rlmflow-detail .state-block-query.state-block-selected       { color: #58a6ff; }
+.rlmflow-detail .state-block-llm.state-block-selected         { color: #bc8cff; }
+.rlmflow-detail .state-block-llm_call.state-block-selected    { color: #a98a2a; }
+.rlmflow-detail .state-block-exec.state-block-selected        { color: #ff9e64; }
+.rlmflow-detail .state-block-exec_call.state-block-selected   { color: #b87650; }
+.rlmflow-detail .state-block-supervising.state-block-selected { color: #ffd33d; }
+.rlmflow-detail .state-block-resume.state-block-selected      { color: #56d4dd; }
+.rlmflow-detail .state-block-resume_call.state-block-selected { color: #3a8a5d; }
+.rlmflow-detail .state-block-done.state-block-selected        { color: #56d364; }
+.rlmflow-detail .state-block-errored.state-block-selected     { color: #ff7b72; }
+.rlmflow-detail .state-block-head {
     display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;
 }
-.recursive-flow-detail .state-block .payload-block {
+.rlmflow-detail .state-block .payload-block {
     margin: 6px 0 0; background: #161b22;
 }
-.recursive-flow-detail .payload-empty {
+.rlmflow-detail .payload-empty {
     color: #6e7681; font-style: italic; font-size: 11px;
 }
 """.strip()
 
 _GRAPH_JS_ON_LOAD = r"""
 (async () => {
-    const plot = element.querySelector('.recursive-flow-plot');
-    const detail = element.querySelector('.recursive-flow-detail');
-    const bootstrap = element.querySelector('.recursive-flow-bootstrap');
-    const shell = element.querySelector('.recursive-flow-shell');
+    const plot = element.querySelector('.rlmflow-plot');
+    const detail = element.querySelector('.rlmflow-detail');
+    const bootstrap = element.querySelector('.rlmflow-bootstrap');
+    const shell = element.querySelector('.rlmflow-shell');
     let currentStep = parseInt(shell?.dataset.initialStep || '0', 10) || 0;
 
     async function ensurePlotly() {
@@ -1793,7 +1812,7 @@ _GRAPH_JS_ON_LOAD = r"""
     const initial = bootstrap ? bootstrap.textContent : '{}';
     await drawFig(initial, false);
 
-    window.addEventListener('recursive-flow-step-change', async (ev) => {
+    window.addEventListener('rlmflow-step-change', async (ev) => {
         const step = parseInt(ev.detail, 10);
         if (Number.isNaN(step)) return;
         try {
@@ -1801,7 +1820,7 @@ _GRAPH_JS_ON_LOAD = r"""
             const figJson = await server.get_step_fig(step);
             await drawFig(figJson, true);
         } catch (err) {
-            console.error('recursive-flow step refresh failed', err);
+            console.error('rlmflow step refresh failed', err);
         }
     });
 })();

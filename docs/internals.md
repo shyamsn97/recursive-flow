@@ -8,7 +8,7 @@
 A deep reference for the engine's mechanics: data model, step
 lifecycle, REPL/await protocol, resume semantics, persistence, and
 the extension seams on `RecursiveFlow`. If you want to subclass the
-engine, debug a weird run, or write something on top of recursive-flow,
+engine, debug a weird run, or write something on top of rlmflow,
 this is the doc.
 
 User-facing topic guides ([control](control.md), [observability](observability.md),

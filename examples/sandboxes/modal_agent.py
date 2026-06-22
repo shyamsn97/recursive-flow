@@ -52,7 +52,7 @@ def _save_example_graph(
 
 from rflow.utils.viz import live  # noqa: E402
 
-REMOTE_REPO = "/opt/recursive-flow"
+REMOTE_REPO = "/opt/rlmflow"
 
 PLATFORMER_QUERY = """\
 Build a simple 2D side-scrolling platformer in plain HTML/CSS/JS under output/.
@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Recursive sub-agent depth. Defaults to 1 so delegation is enabled.",
     )
-    parser.add_argument("--app-name", default="recursive-flow")
+    parser.add_argument("--app-name", default="rlmflow")
     parser.add_argument(
         "--sandbox-timeout",
         type=int,
@@ -120,7 +120,7 @@ def run_turn(flow: rflow.Flow, query: str, *, use_live: bool) -> rflow.Graph:
     return graph
 
 
-def local_recursive_flow_image() -> modal.Image:
+def local_rlmflow_image() -> modal.Image:
     log(f"preparing Modal image from local checkout: {REPO_ROOT} -> {REMOTE_REPO}")
     return (
         modal.Image.debian_slim()
@@ -145,7 +145,7 @@ def local_recursive_flow_image() -> modal.Image:
 
 def main() -> None:
     args = parse_args()
-    image = local_recursive_flow_image()
+    image = local_rlmflow_image()
 
     # One sandbox per agent; created lazily when the agent first runs code.
     runtime = ModalRuntime(

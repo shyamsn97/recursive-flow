@@ -29,18 +29,17 @@ If you have any `INPUTS`, your first REPL block should usually inspect their nam
 def build_decomposition_nudge() -> str:
     """Orchestrator routing hint for the bootstrap turn.
 
-    Frames the agent as a router, not a solver: delegate units that need to act
-    (tools, code, iteration, repair, verification) and only do trivial work
-    inline.
+    Frames the agent as a router, not a solver: split independent work into
+    sub-agents, then integrate and verify before finalizing.
     """
     return (
-        "You are this task's orchestrator. After inspecting `INPUTS`, route each "
-        "piece of work by what it needs:\n"
-        "- needs to run code, use tools, take several turns, verify/repair, or "
-        "decompose further -> `await launch_subagents([...])`\n"
-        "If a unit doesn't need that -- the answer is already in a variable or "
-        "one quick search away -- just do it yourself. Then integrate the "
-        "results and verify before calling done()."
+        "You are this task's orchestrator. After inspecting `INPUTS`, ask what "
+        "work can proceed independently. When there are separable pieces, launch "
+        "them as sub-agents in parallel with `await launch_subagents([...])`; "
+        "when your plan identifies independent branches, make the next REPL block "
+        "launch those branches. Use the root for preparing focused inputs, "
+        "integrating child results, verifying the combined work, and calling "
+        "done(...)."
     )
 
 
@@ -140,3 +139,29 @@ def first_prompt(
         parts.append(build_decomposition_nudge())
     parts.append(depth_note(depth, max_depth))
     return "\n\n".join(p for p in parts if p)
+
+
+def followup_prompt(
+    query: str,
+    *,
+    depth: int = 0,
+    max_depth: int = 0,
+) -> str:
+    """Build a lightweight user message for a follow-up task.
+
+    Follow-ups happen inside an existing REPL trajectory, so they do not repeat
+    first-turn inspection language. They still restate the task boundary,
+    orchestration behavior, and recursion budget.
+    """
+    parts = [
+        f"New user task:\n{query}",
+        (
+            "Continue using the REPL environment. After you understand the new "
+            "task, write a short plan. If the remaining work has independent "
+            "branches, delegate them with `await launch_subagents([...])`; use "
+            "the root for coordination, integration, verification, and "
+            "`done(...)`."
+        ),
+        depth_note(depth, max_depth),
+    ]
+    return "\n\n".join(parts)

@@ -85,13 +85,13 @@ def parse_args() -> argparse.Namespace:
         action="append",
         help=(
             "Command to run before starting the REPL. Repeat for multiple commands. "
-            "Defaults to installing recursive-flow from PyPI."
+            "Defaults to installing rlmflow from PyPI."
         ),
     )
     parser.add_argument(
         "--skip-setup",
         action="store_true",
-        help="Skip setup commands, useful for snapshots with recursive-flow preinstalled.",
+        help="Skip setup commands, useful for snapshots with rlmflow preinstalled.",
     )
     parser.add_argument(
         "--out-dir",

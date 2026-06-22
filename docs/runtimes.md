@@ -55,7 +55,7 @@ working directory. The same shape works for Docker and cloud sandboxes.
 Build the local image once:
 
 ```bash
-docker build -t recursive-flow:local .
+docker build -t rlmflow:local .
 ```
 
 Then pass a Docker runtime:
@@ -67,7 +67,7 @@ import rflow
 
 host_project = Path("./project").resolve()
 runtime = rflow.DockerRuntime(
-    "recursive-flow:local",
+    "rlmflow:local",
     mounts={host_project: "/workspace"},
     workdir="/workspace",
     network="none",
@@ -84,10 +84,10 @@ agent = rflow.Flow(rflow.OpenAIClient(model="gpt-5"), runtime=runtime)
 Install provider extras as needed:
 
 ```bash
-pip install recursive-flow[modal]
-pip install recursive-flow[e2b]
-pip install recursive-flow[daytona]
-pip install recursive-flow[sandbox]   # all three
+pip install rlmflow[modal]
+pip install rlmflow[e2b]
+pip install rlmflow[daytona]
+pip install rlmflow[sandbox]   # all three
 ```
 
 ```python

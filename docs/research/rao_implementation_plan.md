@@ -1,12 +1,12 @@
 # Recursive Agent Optimization: Implementation Plan
 
 This note sketches how to implement Recursive Agent Optimization (RAO) on top of
-`recursive-flow`.
+`rlmflow`.
 
 Sources:
 
 - RAO project page: <https://apga.github.io/RAO/>
-- Local `recursive-flow` architecture docs: `README.md`, `docs/control.md`,
+- Local `rlmflow` architecture docs: `README.md`, `docs/control.md`,
   `docs/internals.md`, `docs/node_model.md`, and `docs/observability.md`.
 
 ## Short Answer
@@ -15,7 +15,7 @@ RAO is a natural fit for this repo, but it should be implemented as a
 first-class `rflow.rao` library module around `RecursiveFlow`, not as a rewrite
 of the runtime.
 
-`recursive-flow` already has most of the inference substrate RAO assumes:
+`rlmflow` already has most of the inference substrate RAO assumes:
 
 - one recursive agent policy used at every tree depth;
 - a Python REPL action loop;
@@ -326,7 +326,7 @@ preference pairs, or an external provider's expected format.
 
 ## Trainer Boundary
 
-Do not make `recursive-flow` own model training at first. Different users will
+Do not make `rlmflow` own model training at first. Different users will
 train through different systems: TRL, OpenRLHF, verl, Tinker, internal APIs, or
 provider-specific fine-tuning.
 
@@ -624,7 +624,7 @@ Start with offline dataset export and a synthetic crafting benchmark.
 That gives us the RAO core without premature trainer coupling:
 
 ```text
-recursive-flow already gives us recursive inference trees.
+rlmflow already gives us recursive inference trees.
 RAO first needs reliable rollout scoring and export.
 Only after that should we wire in policy updates.
 ```

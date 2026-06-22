@@ -1,4 +1,4 @@
-"""Let one live recursive-flow agent repair another live agent's graph.
+"""Let one live rlmflow agent repair another live agent's graph.
 
 This example uses live LLM clients:
 
@@ -256,7 +256,7 @@ Assigned approach: {approach}
 
 
 CONTROLLER_POLICY_TEXT = """\
-You are a graph controller supervising a pool of separate worker recursive-flow runs.
+You are a graph controller supervising a pool of separate worker rlmflow runs.
 Do not solve the worker's task yourself. Your only job is to inspect and edit
 the worker graph through the provided host-side tools.
 

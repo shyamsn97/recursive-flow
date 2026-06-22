@@ -210,7 +210,7 @@ save_steps(
 Image export needs `kaleido`:
 
 ```
-pip install recursive-flow[image]
+pip install rlmflow[image]
 ```
 
 For an animated GIF instead of separate frames, add Pillow:
@@ -222,7 +222,7 @@ save_gif(graphs, "trace.gif", duration=400)    # ~2.5 fps
 ```
 
 ```
-pip install recursive-flow[image] pillow
+pip install rlmflow[image] pillow
 ```
 
 The HTML stepper has no static-image dependency — it embeds Plotly
@@ -238,7 +238,7 @@ open_viewer(graph)                             # single snapshot
 open_viewer(graphs)                            # explicit in-memory history
 ```
 
-Requires `recursive-flow[viewer]`.
+Requires `rlmflow[viewer]`.
 
 ## CLI
 
@@ -246,11 +246,11 @@ The same helpers are reachable from a shell. `view` and `render` take saved run
 directories, graph JSON files, or trace files.
 
 ```
-recursive-flow view   runs/deep_research/
-recursive-flow view   runs/deep_research/ --port 7861
-recursive-flow render runs/deep_research/ -f gantt-html -o run1.html
-recursive-flow render runs/deep_research/ -f mermaid          # stdout
-recursive-flow render runs/deep_research/ -f dot -o graph.dot
-recursive-flow render runs/deep_research/ -f tree
-recursive-flow version
+rlmflow view   runs/deep_research/
+rlmflow view   runs/deep_research/ --port 7861
+rlmflow render runs/deep_research/ -f gantt-html -o run1.html
+rlmflow render runs/deep_research/ -f mermaid          # stdout
+rlmflow render runs/deep_research/ -f dot -o graph.dot
+rlmflow render runs/deep_research/ -f tree
+rlmflow version
 ```

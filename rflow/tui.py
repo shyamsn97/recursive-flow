@@ -67,7 +67,7 @@ def run_tui(
         from textual import work
         from textual.app import App, ComposeResult
         from textual.binding import Binding
-        from textual.containers import Horizontal, Vertical
+        from textual.containers import Horizontal, Vertical, VerticalScroll
         from textual.widgets import (
             Footer,
             Header,
@@ -79,13 +79,13 @@ def run_tui(
         )
     except ImportError as exc:  # pragma: no cover - exercised by environments
         raise ImportError(
-            "flow.tui() requires the TUI extra: " "`pip install recursive-flow[tui]`."
+            "flow.tui() requires the TUI extra: " "`pip install rlmflow[tui]`."
         ) from exc
 
     class FlowTUI(App[None]):
         """Live chat + graph dashboard around one Flow instance."""
 
-        TITLE = "recursive-flow TUI"
+        TITLE = "rlmflow TUI"
         CSS = """
         Screen {
             layout: vertical;
@@ -111,20 +111,30 @@ def run_tui(
         }
         #prompt {
             margin-top: 1;
-            height: 6;
+            height: 5;
+            border: round $primary;
+        }
+        #context {
+            margin-top: 1;
+            height: 5;
             border: round $primary;
         }
         TabPane {
             padding: 0 1;
         }
-        #overview, #tree, #agents, #counts, #waiting, #errors, #latest {
+        #overview-scroll, #tree-scroll, #agents-scroll,
+        #counts-scroll, #waiting-scroll, #errors-scroll, #latest-scroll {
             height: 1fr;
             overflow-y: auto;
+        }
+        #overview, #tree, #agents, #counts, #waiting, #errors, #latest {
+            height: auto;
+            width: 100%;
         }
         """
         BINDINGS = [
             ("ctrl+c", "quit", "Quit"),
-            Binding("ctrl+s", "submit_prompt", "Send", priority=True),
+            Binding("ctrl+enter", "submit_prompt", "Send", priority=True),
             ("ctrl+r", "run_until_done", "Run"),
             ("ctrl+t", "step_once", "Step"),
         ]
@@ -148,33 +158,47 @@ def run_tui(
                         id="prompt",
                         soft_wrap=True,
                         placeholder=(
-                            "Ask recursive-flow anything... "
-                            "(paste multi-line is fine; Ctrl+S to send)"
+                            "Query... " "(what should the agent do? Ctrl+Enter to send)"
+                        ),
+                    )
+                    yield TextArea(
+                        id="context",
+                        soft_wrap=True,
+                        placeholder=(
+                            "Context... "
+                            "(optional supporting text, passed as INPUTS['context'])"
                         ),
                     )
                 with Vertical(id="side-column"):
                     with TabbedContent(initial="overview-tab", id="tabs"):
                         with TabPane("Overview", id="overview-tab"):
-                            yield Static(id="overview")
+                            with VerticalScroll(id="overview-scroll"):
+                                yield Static(id="overview")
                         with TabPane("Tree", id="tree-tab"):
-                            yield Static(id="tree")
+                            with VerticalScroll(id="tree-scroll"):
+                                yield Static(id="tree")
                         with TabPane("Agents", id="agents-tab"):
-                            yield Static(id="agents")
+                            with VerticalScroll(id="agents-scroll"):
+                                yield Static(id="agents")
                         with TabPane("Counts", id="counts-tab"):
-                            yield Static(id="counts")
+                            with VerticalScroll(id="counts-scroll"):
+                                yield Static(id="counts")
                         with TabPane("Waiting", id="waiting-tab"):
-                            yield Static(id="waiting")
+                            with VerticalScroll(id="waiting-scroll"):
+                                yield Static(id="waiting")
                         with TabPane("Errors", id="errors-tab"):
-                            yield Static(id="errors")
+                            with VerticalScroll(id="errors-scroll"):
+                                yield Static(id="errors")
                         with TabPane("Latest", id="latest-tab"):
-                            yield Static(id="latest")
+                            with VerticalScroll(id="latest-scroll"):
+                                yield Static(id="latest")
             yield Footer()
 
         def on_mount(self) -> None:
             self._refresh()
             self.query_one("#chat", RichLog).write(
                 Panel(
-                    "Type or paste a prompt below, then press Ctrl+S to send. "
+                    "Type a query below, add optional context, then press Ctrl+Enter. "
                     "Ctrl+R continues a paused run.",
                     title="ready",
                     border_style="cyan",
@@ -182,12 +206,17 @@ def run_tui(
             )
 
         def action_submit_prompt(self) -> None:
-            area = self.query_one("#prompt", TextArea)
-            value = area.text.strip()
-            if not value:
+            query_area = self.query_one("#prompt", TextArea)
+            context_area = self.query_one("#context", TextArea)
+            query = query_area.text.strip()
+            if not query:
                 return
-            area.text = ""
-            self._queue(value, None, None)
+            context = context_area.text.strip()
+            query_area.text = ""
+            turn_inputs = _context_inputs(context)
+            if turn_inputs is None and self.graph is not None:
+                turn_inputs = {"context": ""}
+            self._queue(query, turn_inputs, None)
 
         def action_run_until_done(self) -> None:
             if self.graph is None:
@@ -302,7 +331,7 @@ def run_tui(
             if graph is None:
                 empty = Panel(
                     "No run yet. Type a prompt in the chat input.",
-                    title="recursive-flow",
+                    title="rlmflow",
                     border_style="dim",
                 )
                 for wid in (
@@ -383,6 +412,11 @@ def chat_bubbles(
     return out
 
 
+def _context_inputs(context: str) -> dict[str, str] | None:
+    text = context.strip()
+    return {"context": text} if text else None
+
+
 def render_tree_panel(graph: Graph) -> Any:
     """Render the live Rich tree used by the side panel."""
 
@@ -394,18 +428,98 @@ def render_tree_panel(graph: Graph) -> Any:
 
 
 def render_full_tree_panel(graph: Graph) -> Any:
-    """Render the full graph tree, including every visible node."""
+    """Render the full graph as a scrollable Rich tree diagram."""
 
     from rich.panel import Panel
-    from rich.text import Text
-
-    from rflow.utils.viewer import graph_tree
 
     return Panel(
-        Text(graph_tree(graph), style="dim"),
+        _render_execution_diagram(graph),
         title="execution tree",
         border_style="green",
     )
+
+
+def _render_execution_diagram(graph: Graph) -> Any:
+    from rich.text import Text
+    from rich.tree import Tree
+
+    from rflow.utils.viewer import _model_label
+
+    def agent_label(sub: Graph) -> Text:
+        label = Text()
+        label.append(sub.agent_id or "root", style="bold")
+        model = _model_label(sub)
+        if model:
+            label.append(f" ({model})", style="cyan")
+        if sub.query:
+            label.append(f" - {_clip_one_line(sub.query, 56)}", style="dim")
+        return label
+
+    def node_label(node: Node) -> Text:
+        label = Text()
+        step = "-" if node.global_step is None else str(node.global_step)
+        kind = _kind(node)
+        label.append(f"[{node.seq:>2} | step {step}] ", style="dim")
+        label.append(kind, style=_node_style(node))
+        summary = _diagram_summary(node)
+        if summary:
+            label.append(f" - {summary}", style="dim")
+        return label
+
+    def add_agent(sub: Graph, parent: Tree | None = None) -> Tree:
+        branch = (
+            Tree(agent_label(sub), guide_style="green")
+            if parent is None
+            else parent.add(agent_label(sub), guide_style="green")
+        )
+        state_ids = {node.id for node in sub.nodes}
+        sup_for_agent: dict[str, str] = {}
+        for node in sub.nodes:
+            if isinstance(node, SupervisingOutput):
+                for child_id in node.waiting_on:
+                    sup_for_agent[child_id] = node.id
+
+        attach_at: dict[str, list[Graph]] = {}
+        unplaced: list[Graph] = []
+        for child in sub.children.values():
+            key = sup_for_agent.get(child.agent_id) or (
+                child.parent_node_id if child.parent_node_id in state_ids else None
+            )
+            if key:
+                attach_at.setdefault(key, []).append(child)
+            else:
+                unplaced.append(child)
+
+        if not sub.nodes:
+            branch.add(Text("(no nodes)", style="dim"), guide_style="dim")
+
+        for node in sub.nodes:
+            node_branch = branch.add(node_label(node), guide_style="dim")
+            for child in attach_at.get(node.id, []):
+                add_agent(child, node_branch)
+        for child in unplaced:
+            add_agent(child, branch)
+        return branch
+
+    return add_agent(graph)
+
+
+def _diagram_summary(node: Node) -> str:
+    if isinstance(node, SupervisingOutput):
+        return "waiting on " + (", ".join(node.waiting_on) or "-")
+    if isinstance(node, DoneOutput):
+        return _clip_one_line(node.result or node.output, 60)
+    if isinstance(node, ErrorOutput):
+        return _clip_one_line(node.error or node.content or node.output, 60)
+    if isinstance(node, UserQuery):
+        return _clip_one_line(node.content, 60)
+    if isinstance(node, LLMOutput):
+        return _clip_one_line(_assistant_body(node), 60)
+    if isinstance(node, ExecOutput):
+        return _clip_one_line(node.content or node.output, 60)
+    if isinstance(node, ResumeAction):
+        return "resumed from " + (", ".join(node.resumed_from) or "-")
+    return ""
 
 
 def run_stats_table(graph: Graph, *, busy: bool = False) -> Any:
@@ -664,6 +778,13 @@ def _clip(value: str, limit: int = 4000) -> str:
         return text
     omitted = len(text) - limit
     return text[:limit].rstrip() + f"\n...[truncated {omitted} chars]"
+
+
+def _clip_one_line(value: str, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 
 __all__ = [
