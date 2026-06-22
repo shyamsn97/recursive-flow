@@ -29,6 +29,11 @@ if TYPE_CHECKING:
 
     from rflow.graph import Graph
 
+#: Default ceiling (in characters) for a child agent's ``query`` string. The
+#: ``query`` is a short task instruction; large payloads belong in ``inputs``.
+#: Configurable per run via ``Flow(max_query_chars=...)``.
+DEFAULT_MAX_QUERY_CHARS = 2_000
+
 
 def make_done(flow: BaseFlow, engine_context: EngineContext):
     """Build ``done(answer)``; enforces the schema in ``engine_context``.
@@ -107,13 +112,21 @@ def make_delegate(flow: BaseFlow, engine_context: EngineContext):
     return flow_delegate
 
 
-def make_launch_subagents(flow_delegate, flow_wait):
-    """Build the public ``launch_subagents(specs)`` launcher from primitives."""
+def make_launch_subagents(
+    flow_delegate, flow_wait, *, max_query_chars: int = DEFAULT_MAX_QUERY_CHARS
+):
+    """Build the public ``launch_subagents(specs)`` launcher from primitives.
+
+    ``max_query_chars`` bounds each spec's ``query`` so a model cannot route a
+    large payload through the child's task message; oversized queries raise
+    before any child is spawned.
+    """
 
     @tool(
         "Launch one or many sub-agents in parallel and wait for all. Must be "
-        "awaited at the top level. specs is a list of dicts; each requires "
-        "'query' and may set 'name', 'model', 'inputs', and 'output_schema'. "
+        "awaited at the top level. specs is a list of dicts; each requires a "
+        "short 'query' (the child's task; put bulk data in 'inputs', not here) "
+        "and may set 'name', 'model', 'inputs', and 'output_schema'. "
         "Returns child results in spec order."
     )
     async def launch_subagents(specs):
@@ -128,6 +141,21 @@ def make_launch_subagents(flow_delegate, flow_wait):
                 )
             if "query" not in spec:
                 raise KeyError("launch_subagents(...) spec missing required 'query'")
+            query = spec["query"]
+            if not isinstance(query, str):
+                raise TypeError(
+                    "launch_subagents(...) spec 'query' must be a str; got "
+                    f"{type(query).__name__}"
+                )
+            if len(query) > max_query_chars:
+                raise ValueError(
+                    f"launch_subagents(...) spec 'query' is too long "
+                    f"({len(query)} chars > {max_query_chars} limit). 'query' "
+                    "must be a short instruction. Move the large/helpful payload "
+                    "(context, data, specs, file contents) into 'inputs' (a "
+                    "str -> str dict) and have 'query' refer to it by key, e.g. "
+                    "\"Answer INPUTS['question'] using INPUTS['corpus']\"."
+                )
             inputs = spec.get("inputs")
             if isinstance(inputs, dict) and "query" in inputs:
                 raise ValueError(
@@ -247,6 +275,7 @@ class History:
 
 
 __all__ = [
+    "DEFAULT_MAX_QUERY_CHARS",
     "History",
     "make_delegate",
     "make_done",

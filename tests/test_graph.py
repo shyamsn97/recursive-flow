@@ -57,9 +57,10 @@ def test_to_dict_includes_system_prompt():
     assert g.to_dict()["system_prompt"] == "SYS"
 
 
-def test_repl_inputs_projects_query_and_inputs():
+def test_repl_inputs_excludes_query():
     g = Graph(agent_id="root", query="q", inputs={"doc": "text"})
-    assert g.repl_inputs() == {"query": "q", "doc": "text"}
+    # The query is delivered as the first user message, not mirrored into INPUTS.
+    assert g.repl_inputs() == {"doc": "text"}
 
 
 def test_from_dict_round_trips_a_delegated_run():

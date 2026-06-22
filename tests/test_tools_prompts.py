@@ -113,13 +113,13 @@ def test_file_tools_collection_decorated():
 
 
 def test_partition_repl_namespace_hides_control_tools():
-    flow = make_flow()
+    flow = make_flow(include_llm_query=False)
     flow.start("q")
     namespace = flow.build_tools()
     visible, hidden = partition_repl_namespace(namespace)
     assert set(hidden) == set(HIDDEN_REPL_TOOL_NAMES)
     assert "done" in visible and "launch_subagents" in visible
-    assert "llm_query_batched" in visible
+    assert "llm_query_batched" not in visible
     assert "flow_delegate" not in visible
 
 
@@ -153,13 +153,17 @@ def test_make_launch_subagents_spec_validation():
     async def fake_wait(*handles):
         return [h.agent_id for h in handles]
 
-    launch = make_launch_subagents(fake_delegate, fake_wait)
+    launch = make_launch_subagents(fake_delegate, fake_wait, max_query_chars=2_000)
     with pytest.raises(TypeError, match="list of dict"):
         asyncio.run(launch("notalist"))
     with pytest.raises(TypeError, match="every spec to be a dict"):
         asyncio.run(launch([123]))
     with pytest.raises(KeyError, match="query"):
         asyncio.run(launch([{"name": "x"}]))
+    with pytest.raises(TypeError, match="'query' must be a str"):
+        asyncio.run(launch([{"name": "x", "query": 123}]))
+    with pytest.raises(ValueError, match="'query' is too long"):
+        asyncio.run(launch([{"name": "x", "query": "x" * 2_001}]))
     with pytest.raises(ValueError, match="inputs must not contain reserved key 'query'"):
         asyncio.run(launch([{"name": "x", "query": "q", "inputs": {"query": "bad"}}]))
     out = asyncio.run(launch([{"name": "a", "query": "q"}, {"name": "b", "query": "q"}]))
@@ -201,8 +205,8 @@ def test_history_over_finished_run():
     assert all(m["role"] != "system" for m in msgs)
     assert hist.last(1) == [msgs[-1]]
     assert hist.read(0) == msgs[0]
-    assert "query: str, 14 chars" in hist.text()
-    assert hist.grep("query: str")
+    assert "summarize this" in hist.text()  # query is delivered as the message
+    assert hist.grep("summarize")
 
 
 def test_history_not_injected_into_repl_namespace_by_default():
@@ -240,25 +244,36 @@ def test_make_history_tracks_live_graph_across_functional_adopt():
 
 def test_static_system_prompt_content():
     assert "CONTEXT" not in SYSTEM_PROMPT
-    assert "llm_query_batched" in SYSTEM_PROMPT
+    assert "llm_query_batched" not in SYSTEM_PROMPT
     assert "HISTORY" not in SYSTEM_PROMPT
     assert "launch_subagents" in SYSTEM_PROMPT
-    assert "Never put a `query` key inside `inputs`" in SYSTEM_PROMPT
+    assert "an over-long `query` is rejected" in SYSTEM_PROMPT
     assert "Never dump large `INPUTS` values" in SYSTEM_PROMPT
     assert 'INPUTS["query"][:' not in SYSTEM_PROMPT
     assert "Use exactly one block per assistant" in SYSTEM_PROMPT
     assert "never include a second ```repl fence" in SYSTEM_PROMPT
     assert "act as an orchestrator, not a solver" in SYSTEM_PROMPT
     assert "Do not call `done(...)` on turn 1 without first inspecting `INPUTS`" in SYSTEM_PROMPT
-    # The default prompt has a few worked examples, but avoids the old
-    # example-heavy prompt's tendency to prescribe every possible workflow.
-    assert "**Example 1" in SYSTEM_PROMPT
-    assert "**Example 2" in SYSTEM_PROMPT
-    assert "**Example 3" in SYSTEM_PROMPT
-    assert "**Example 4" not in SYSTEM_PROMPT
+    # The default prompt has a couple of clean examples that teach parallelization.
+    assert "**Example 1 -- fan out slices with launch_subagents" in SYSTEM_PROMPT
+    assert "**Example 2 -- verify, repair, re-verify" in SYSTEM_PROMPT
+    # No llm_query_batched example; it's documented as a plain builtin tool.
+    assert "**Example 3" not in SYSTEM_PROMPT
+    # The fanout example covers every batch, not a capped sample.
+    assert "for i, batch in enumerate(batches)" in SYSTEM_PROMPT
     assert "launch_subagents" in SYSTEM_PROMPT
-    assert "verify, repair, re-verify" in SYSTEM_PROMPT
-    assert "Repair the integrated result" not in SYSTEM_PROMPT
+    assert "Delegate everything else" in SYSTEM_PROMPT
+    assert "Push every long-context operation" in SYSTEM_PROMPT
+
+
+def test_static_system_prompt_can_include_llm_query():
+    # llm_query_batched is now a plain builtin tool: it adds no bespoke prompt
+    # prose. It surfaces only as a Tools-section line in the live prompt (covered
+    # by test_build_system_prompt_can_include_llm_query_tool); the static builder
+    # has no agent graph, so its Tools section is empty regardless.
+    prompt = DEFAULT_BUILDER.build(make_flow(include_llm_query=True))
+    assert "Route by capability, not habit" not in prompt
+    assert "**Example 3" not in prompt
 
 
 def test_flow_implements_base_contract():
@@ -290,17 +305,27 @@ def test_enable_structured_output_false_skips_schema_section():
 
 
 def test_build_system_prompt_has_dynamic_tool_docs():
-    flow = make_flow()
+    flow = make_flow(include_llm_query=False)
     agent = flow.start("q")
     prompt = flow.build_system_prompt(agent)
     assert "\n## Tools\n\n" not in prompt
     assert "`done(" in prompt
     assert "launch_subagents" in prompt
-    assert "llm_query_batched" in prompt
+    assert "llm_query_batched" not in prompt
     # hidden control tools are not advertised
     assert "`flow_delegate(" not in prompt
     # recursion status
     assert "recursion depth" in prompt
+
+
+def test_build_system_prompt_can_include_llm_query_tool():
+    flow = make_flow(include_llm_query=True)
+    agent = flow.start("q")
+    prompt = flow.build_system_prompt(agent)
+    assert "\n## Tools\n\n" in prompt
+    tools_section = prompt.split("\n## Tools\n\n", 1)[1].split("\n\n## ", 1)[0]
+    # Surfaced as a plain builtin tool line, not bespoke prompt prose.
+    assert "- `llm_query_batched(" in tools_section
 
 
 def test_build_system_prompt_structured_section():
@@ -355,40 +380,48 @@ def test_tool_section_lists_models_when_multimodel():
 # ── first_prompt / depth notes / no-code error ──────────────────────────
 
 
-def test_first_prompt_has_manifest_and_depth_note():
+def test_first_prompt_has_query_message_manifest_and_depth_note():
     flow = make_flow()
     msg = flow.first_prompt("do a thing", {"doc": "abc"}, depth=0)
     assert "Your REPL INPUTS contain:" in msg
-    assert "- query: str, 10 chars" in msg
-    assert "- doc: str, 3 chars" in msg
-    assert "Total input chars: 13." in msg
-    assert 'INPUTS["query"]' in msg
+    assert "query: str" not in msg  # query is the message, not an input
+    assert "doc: str, 3 chars" in msg
+    assert "Total input chars: 3" in msg
+    assert "`INPUTS`" in msg
     assert "recursion depth 0" in msg
-    assert "do a thing" not in msg  # query is injected into INPUTS, not dumped
-    assert "abc" not in msg  # values are never dumped
-    assert 'INPUTS["query"][:500]' in msg
-    assert 'INPUTS["query"][:2000]' not in msg
+    assert "do a thing" in msg  # query is delivered as the message now
+    assert "abc" not in msg  # input values are never dumped
     assert "Print only small bounded samples" in msg
-    assert "Never print a full large input" in msg
+    assert "Think step-by-step" in msg
+
+
+def test_first_prompt_without_inputs_omits_manifest():
+    flow = make_flow()
+    msg = flow.first_prompt("just do it", {}, depth=0)
+    assert "Your REPL INPUTS contain:" not in msg
+    assert "just do it" in msg
 
 
 def test_large_first_prompt_warns_not_to_print_contents():
     flow = make_flow()
-    msg = flow.first_prompt("x" * 50_001, {}, depth=0)
-    assert "Print only tiny samples" in msg
-    assert 'INPUTS["query"][:500]' in msg
-    assert 'INPUTS["query"][:2000]' not in msg
+    msg = flow.first_prompt("do a thing", {"doc": "x" * 50_001}, depth=0)
+    assert "process the pieces in parallel" in msg
 
 
-def test_first_prompt_treats_separate_files_as_delegation_signal():
-    flow = make_flow()
-    msg = flow.first_prompt("write separate files: index.html, style.css, app.js", {}, depth=0)
-    normalized = " ".join(msg.split())
-    assert "independent units that need tools" in normalized
-    assert "parent should coordinate" in normalized
-    assert "Do not start producing multiple final artifacts inline" in normalized
-    assert "await launch_subagents" in normalized
-    assert 'Never put `"query"` inside a child `inputs` dict' in normalized
+def test_first_prompt_pushes_batched_delegation_at_all_depths():
+    flow = make_flow(max_depth=3)
+    for depth in (0, 1):
+        msg = flow.first_prompt("do a thing", {}, depth=depth)
+        normalized = " ".join(msg.split())
+        assert "await launch_subagents" in normalized
+        assert "route each piece of work" in normalized
+
+
+def test_first_prompt_at_depth_limit_omits_delegation_nudge():
+    flow = make_flow(max_depth=1)
+    msg = flow.first_prompt("child task", {}, depth=1)
+    assert "route each piece of work" not in msg
+    assert "cannot spawn sub-agents" in msg
 
 
 def test_repl_output_truncated_by_default():
@@ -437,7 +470,8 @@ def test_show_vars_opt_in():
     repl = flow.repl_for(agent)
     assert "SHOW_VARS" in repl.namespace
     # Inputs live under INPUTS now, not as a top-level `doc` variable.
-    assert repl.namespace["INPUTS"] == {"query": "q", "doc": "hello"}
+    # The query is the first message, not mirrored into INPUTS.
+    assert repl.namespace["INPUTS"] == {"doc": "hello"}
     assert "doc" not in repl.namespace
     show = repl.namespace["SHOW_VARS"]
     out = show()
@@ -623,7 +657,7 @@ def test_launch_subagents_mixes_refusal_strings_and_handles():
     async def fake_wait(*handles):
         return [f"result:{h.agent_id}" for h in handles]
 
-    launch = make_launch_subagents(fake_delegate, fake_wait)
+    launch = make_launch_subagents(fake_delegate, fake_wait, max_query_chars=2_000)
     out = asyncio.run(
         launch([{"query": "a"}, {"query": "b"}])
     )

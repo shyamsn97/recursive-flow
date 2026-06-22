@@ -19,6 +19,10 @@ The prompt is built from headless, swappable sections that render back-to-back:
 ``structured-output``, ``tools`` and ``status`` are dynamic sections filled from
 the current ``Flow`` + agent ``Graph`` at build time. Each section is swappable
 via ``DEFAULT_BUILDER.update(name, ...)`` without mutating the original builder.
+
+``llm_query_batched`` is a plain builtin tool: when the live ``Flow`` registers
+it (``include_llm_query=True``) it shows up in the ``tools`` section with its own
+one-line description, like any other tool — no dedicated prompt prose.
 """
 
 from __future__ import annotations
@@ -40,23 +44,21 @@ PROMPT_DOCUMENTED_TOOL_NAMES = frozenset(
     {
         "done",
         "launch_subagents",
-        "llm_query_batched",
     }
 )
 
 ROLE_OPENING = """You are a Recursive Coding Agent: a language model with a prompt, and very important inputs stored in a Python REPL related to that prompt.
 
-You can iteratively interact with the Python REPL, which has access to LLM calls and recursive sub-agent calls as functions. You will be queried turn-by-turn until you have an answer to the query.
+You can iteratively interact with the Python REPL, which has access to recursive sub-agent calls as functions. You will be queried turn-by-turn until you have an answer to the query.
 
 To use the REPL, write code in ```repl``` blocks; the REPL persists across turns."""
 
-ROLE_INPUTS_LINE = '`INPUTS`: a dict of string inputs. `INPUTS["query"]` is always the current prompt. Every other key is caller-defined; inspect `list(INPUTS)` instead of assuming names. Use `len(...)`, `.splitlines()`, and short slices for orientation. JSON inputs can be parsed with `json.loads(INPUTS["key"])`. Keys never shadow REPL variables or tools.'
-ROLE_LLM_QUERY_LINE = '`llm_query_batched(prompts, *, model="default", output_schema=None, temperature=None, top_p=None, max_tokens=None, stop=None) -> list`: concurrent one-shot LLM calls. Use for extraction, summarization, classification, or Q&A over independent chunks. Without `output_schema`, returns `list[str]`; with a JSON Schema dict, validates each response and returns JSON-compatible values.'
-ROLE_LAUNCH_LINE = "`await launch_subagents(specs) -> list`: recursive sub-agent calls. Use when a subtask needs its own REPL, tools, code execution, multi-step reasoning, repair, or verification. Each spec requires top-level `query` and may set `inputs` (str -> str), `name`, `model`, and `output_schema`. Never put a `query` key inside `inputs`; the spec's top-level `query` becomes the child's `INPUTS[\"query\"]`. A child sees only its query and inputs, not your variables."
+ROLE_INPUTS_LINE = '`INPUTS`: a dict of string inputs (may be empty). Your task arrives as the user message, not in `INPUTS`. Every key is caller-defined; inspect `list(INPUTS)` instead of assuming names. Use `len(...)`, `.splitlines()`, and short slices for orientation. JSON inputs can be parsed with `json.loads(INPUTS["key"])`. Keys never shadow REPL variables or tools.'
+ROLE_LAUNCH_LINE = "`await launch_subagents(specs) -> list`: recursive sub-agent calls. Use when a subtask needs its own REPL, tools, code execution, multi-step reasoning, repair, or verification. Each spec requires a top-level `query` and may set `inputs` (str -> str), `name`, `model`, and `output_schema`. Keep `query` short: a one- or two-sentence instruction that points at the child's inputs by key (e.g. \"Summarize INPUTS['doc']\"). Put any large or helpful payload (long context, data, specs, file contents) in `inputs`, not in `query` — an over-long `query` is rejected. The child's `query` becomes its task message; it sees only that and its `inputs`, never your variables."
 ROLE_SHOW_VARS_LINE = "`SHOW_VARS()` — list public REPL variables and their type names."
 ROLE_PRINT_LINE = "`print(...)`: print concise status, summaries, samples, and checks. The REPL is NOT a Jupyter cell: only stdout is shown back to you between turns; a bare expression on the last line is silently discarded. Never dump large `INPUTS` values; REPL output is truncated."
 ROLE_DONE_LINE = "`done(answer)` — submit the final answer. If this agent has an output schema, pass a JSON-compatible Python value matching that schema; otherwise pass the final string. Do not call it until the task is complete."
-ROLE_LAUNCH_NOTE = '`launch_subagents` must be called with `await` at the top level of your block (not inside a function). For a single child, pass a one-item list and unpack: `[answer] = await launch_subagents([{"query": "...", "inputs": {"data": text}}])`. If forwarding your own inputs, use `{k: v for k, v in INPUTS.items() if k != "query"}`.'
+ROLE_LAUNCH_NOTE = '`launch_subagents` must be called with `await` at the top level of your block (not inside a function). For a single child, pass a one-item list and unpack: `[answer] = await launch_subagents([{"query": "...", "inputs": {"data": text}}])`. To forward your own inputs, pass `dict(INPUTS)` (optionally filtered).'
 
 STRATEGY_TEXT = """
 REPL outputs are truncated, so for longer payloads slice `INPUTS` values and pass slices through subcalls rather than printing them whole. Always wrap inspections in `print(...)`.
@@ -67,18 +69,17 @@ Plan in prose, then execute one ```repl``` block every turn, get feedback from t
 
 As a Recursive Coding Agent, you should act as an orchestrator, not a solver.
 
-Directly after you probe `INPUTS` and understand your task, pause and plan: state explicitly how the task decomposes into sub-LLM / sub-agent / REPL steps, and sketch the concrete sequence of turns - what each turn computes and which subcall it issues, if any - like a condensed trajectory, before you execute them. Then execute one turn at a time: after each step `print` a small sample of the result, verify it looks right, and only call `done(...)` once you have actually printed or checked the candidate answer.
+Directly after you probe `INPUTS` and understand your task, pause and plan: state explicitly how the task decomposes into sub-agent / REPL steps, and sketch the concrete sequence of turns - what each turn computes and which subcall it issues, if any - like a condensed trajectory, before you execute them. Then execute one turn at a time: after each step `print` a small sample of the result, verify it looks right, and only call `done(...)` once you have actually printed or checked the candidate answer.
 
-Your own context window is small. Push every long-context operation that would not fit comfortably in your own working window - reading, summarizing, classifying, verifying, answering sub-questions, even recapping your own progress - into `llm_query_batched(...)` or `launch_subagents(...)` instead of pulling that text into your own message stream. Conversely, if Python search or a single visible passage already pins the answer, just read it directly.
+Your own context window is small. Push every long-context operation that would not fit comfortably in your own working window - reading, summarizing, classifying, verifying, answering sub-questions, even recapping your own progress - into subcalls instead of pulling that text into your own message stream. Conversely, if Python search or a single visible passage already pins the answer, just read it directly.
 
-Subcalls only see the prompt and inputs you pass them. Hand them clean, focused inputs and ask for terse, structured outputs you can manipulate programmatically.
+Subcalls only see the task message and inputs you pass them. Keep each child `query` to a short instruction that names the inputs it should read; put the bulk (long context, data, specs, file contents) in `inputs`, not in `query` (an over-long `query` is rejected). Hand them clean, focused inputs and ask for terse, structured outputs you can manipulate programmatically.
 
 Reserve your own tokens for high-level decisions: what to ask next, how to combine subcall outputs, when to finalize. Delegate everything else.
 """
 
 STRUCTURED_STRATEGY_TEXT = """
 **Use child output schemas when shape matters:** Add `output_schema` to a `launch_subagents` spec when the parent needs a validated dictionary/list back from that child instead of prose.
-**Use batched output schemas for simple extraction:** Add `output_schema` to `llm_query_batched(...)` when each one-shot prompt should return the same validated JSON shape.
 """
 
 FORMAT_TEXT = """
@@ -94,7 +95,8 @@ in child `inputs`; the child `query` should describe the job, not carry the
 whole chunk.
 
 ```repl
-query = INPUTS["query"]
+# Your task is the message above; the data to search is in INPUTS.
+question = "the specific thing the task asks you to find"
 lines = INPUTS["corpus"].splitlines()
 batch_size = 500
 batches = [
@@ -105,11 +107,12 @@ batches = [
 results = await launch_subagents([
     {
         "name": f"scan-{i}",
+        # short query: names the inputs to read, carries no payload itself
         "query": (
             "Find evidence in INPUTS['slice'] relevant to INPUTS['question']. "
             "Return concise findings with line references, or exactly NO_MATCH."
         ),
-        "inputs": {"question": query, "slice": batch},
+        "inputs": {"question": question, "slice": batch},
     }
     for i, batch in enumerate(batches)
 ])
@@ -145,42 +148,6 @@ if not issues:
     done("index.html built and verified.")
 print("still failing:", issues)
 ```
-
-**Example 3 -- local search first, then llm_query_batched.**
-
-First turn: inspect, then use cheap Python search to isolate the passages worth
-sending to the model.
-
-```repl
-import re
-
-doc = INPUTS["doc"]
-print(len(doc), "chars")
-print(doc[:2000])
-
-# Search locally before spending model/context budget on the whole document.
-terms = INPUTS.get("terms", "refund|return|warranty")
-pattern = re.compile(terms, re.I)
-hits = [
-    (i, line)
-    for i, line in enumerate(doc.splitlines(), 1)
-    if pattern.search(line)
-]
-print("hits:", len(hits))
-for i, line in hits[:20]:
-    print(f"{i}: {line[:300]}")
-```
-
-Next turn, after reading the output:
-
-```repl
-# The regex hits identify relevant passages, so pass only those snippets.
-context = "\\n".join(f"{i}: {line}" for i, line in hits[:50])
-[answer] = llm_query_batched([
-    f"Answer {INPUTS['query']!r} using only these matching lines when possible:\\n{context}"
-])
-done(answer)
-```
 """
 
 
@@ -211,12 +178,15 @@ finding_schema = {
     "required": ["summary", "confidence"],
     "additionalProperties": False,
 }
+sections = INPUTS["doc"].split("\\n\\n")
 findings = await launch_subagents([
     {
         "name": f"section-{i}",
-        "query": "Inspect INPUTS['section'] for facts relevant to INPUTS['query']. Return a compact finding.",
+        "query": "Inspect INPUTS['section'] for facts relevant to INPUTS['topic']. Return a compact finding.",
+        "inputs": {"section": section, "topic": "<what to look for>"},
         "output_schema": finding_schema,
     }
+    for i, section in enumerate(sections)
 ])
 best = [f for f in findings if f["confidence"] >= 0.7]
 done("\\n".join(f["summary"] for f in best))
@@ -236,15 +206,11 @@ Think step by step carefully, plan, and execute this plan immediately in your re
 
 
 def _show_vars_enabled(flow: Any) -> bool:
-    return bool(getattr(flow, "show_vars", False))
+    return flow is not None and bool(flow.show_vars)
 
 
 def role_section(flow: Any = None, graph: Any = None) -> str:
-    entries = [
-        ROLE_INPUTS_LINE,
-        ROLE_LLM_QUERY_LINE,
-        ROLE_LAUNCH_LINE,
-    ]
+    entries = [ROLE_INPUTS_LINE, ROLE_LAUNCH_LINE]
     if _show_vars_enabled(flow):
         entries.append(ROLE_SHOW_VARS_LINE)
     entries += [ROLE_PRINT_LINE, ROLE_DONE_LINE]
@@ -263,7 +229,8 @@ def role_section(flow: Any = None, graph: Any = None) -> str:
 
 
 def strategy_section(flow: Any = None, graph: Any = None) -> str:
-    return f"{STRATEGY_TEXT}\n{STRUCTURED_STRATEGY_TEXT}".strip()
+    parts = [STRATEGY_TEXT, STRUCTURED_STRATEGY_TEXT]
+    return "\n".join(part.strip() for part in parts if part.strip())
 
 
 def examples_section(flow: Any = None, graph: Any = None) -> str:

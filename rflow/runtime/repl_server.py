@@ -35,7 +35,11 @@ from typing import TextIO
 
 from rflow.repl import REPL, DoneSignal
 from rflow.runtime.runtime import deserialize, serialize
-from rflow.tools.builtins import make_launch_subagents, make_wait
+from rflow.tools.builtins import (
+    DEFAULT_MAX_QUERY_CHARS,
+    make_launch_subagents,
+    make_wait,
+)
 
 
 class ReplServer:
@@ -133,7 +137,11 @@ class ReplServer:
             ns = self.repl.namespace
             wait = make_wait()
             ns["flow_wait"] = wait
-            ns["launch_subagents"] = make_launch_subagents(ns["flow_delegate"], wait)
+            ns["launch_subagents"] = make_launch_subagents(
+                ns["flow_delegate"],
+                wait,
+                max_query_chars=msg.get("max_query_chars") or DEFAULT_MAX_QUERY_CHARS,
+            )
             return {"ok": True}
         if cmd == "reset":
             self.repl = REPL()

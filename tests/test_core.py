@@ -216,9 +216,9 @@ def test_tight_delegation_records_supervising_then_resume():
 def test_launch_subagents_fans_out_in_order():
     def reply_for(messages):
         task = first_user_text(messages)
-        if "query: str, 6 chars" in task:
+        if "task a" in task:
             return '```repl\ndone("A")\n```'
-        if "query: str, 7 chars" in task:
+        if "task bb" in task:
             return '```repl\ndone("B")\n```'
         return (
             "```repl\n"

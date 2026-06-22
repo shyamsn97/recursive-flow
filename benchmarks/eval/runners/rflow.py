@@ -20,11 +20,13 @@ class RFlowLocalRunner(Runner):
         max_depth: int = 1,
         live_save: bool = True,
         max_steps: int | None = None,
+        include_llm_query: bool = False,
     ) -> None:
         self.max_iters = max_iters
         self.max_depth = max_depth
         self.live_save = live_save
         self.max_steps = max_steps
+        self.include_llm_query = include_llm_query
 
     def run(self, example: Example, model: Model, ctx: RunContext) -> Prediction:
         graph_dir = ctx.artifact_dir / "graph"
@@ -36,6 +38,7 @@ class RFlowLocalRunner(Runner):
             max_depth=self.max_depth,
             runtime=LocalRuntime(working_directory=work_dir),
             enable_structured_output=False,
+            include_llm_query=self.include_llm_query,
         )
         start = time.perf_counter()
         graph = None

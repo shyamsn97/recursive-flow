@@ -56,7 +56,11 @@ def format_exec_output(output: str) -> str:
 
 
 def first_prompt(
-    query: str, inputs: dict[str, str], *, depth: int, max_depth: int
+    query: str,
+    inputs: dict[str, str],
+    *,
+    depth: int,
+    max_depth: int,
 ) -> str:
     """Build an agent's bootstrap user message."""
     return messages.first_prompt(

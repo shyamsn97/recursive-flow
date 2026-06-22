@@ -66,15 +66,16 @@ def run_tui(
         from rich.text import Text
         from textual import work
         from textual.app import App, ComposeResult
+        from textual.binding import Binding
         from textual.containers import Horizontal, Vertical
         from textual.widgets import (
             Footer,
             Header,
-            Input,
             RichLog,
             Static,
             TabbedContent,
             TabPane,
+            TextArea,
         )
     except ImportError as exc:  # pragma: no cover - exercised by environments
         raise ImportError(
@@ -110,6 +111,8 @@ def run_tui(
         }
         #prompt {
             margin-top: 1;
+            height: 6;
+            border: round $primary;
         }
         TabPane {
             padding: 0 1;
@@ -121,8 +124,9 @@ def run_tui(
         """
         BINDINGS = [
             ("ctrl+c", "quit", "Quit"),
-            ("ctrl+s", "step_once", "Step"),
+            Binding("ctrl+s", "submit_prompt", "Send", priority=True),
             ("ctrl+r", "run_until_done", "Run"),
+            ("ctrl+t", "step_once", "Step"),
         ]
 
         def __init__(self) -> None:
@@ -140,8 +144,13 @@ def run_tui(
             with Horizontal(id="main"):
                 with Vertical(id="chat-column"):
                     yield RichLog(id="chat", wrap=True, markup=False, highlight=True)
-                    yield Input(
-                        placeholder="Ask recursive-flow anything...", id="prompt"
+                    yield TextArea(
+                        id="prompt",
+                        soft_wrap=True,
+                        placeholder=(
+                            "Ask recursive-flow anything... "
+                            "(paste multi-line is fine; Ctrl+S to send)"
+                        ),
                     )
                 with Vertical(id="side-column"):
                     with TabbedContent(initial="overview-tab", id="tabs"):
@@ -165,17 +174,19 @@ def run_tui(
             self._refresh()
             self.query_one("#chat", RichLog).write(
                 Panel(
-                    "Type a prompt below. Press Ctrl+R to continue a paused run.",
+                    "Type or paste a prompt below, then press Ctrl+S to send. "
+                    "Ctrl+R continues a paused run.",
                     title="ready",
                     border_style="cyan",
                 )
             )
 
-        def on_input_submitted(self, event: Input.Submitted) -> None:
-            value = event.value.strip()
-            event.input.value = ""
+        def action_submit_prompt(self) -> None:
+            area = self.query_one("#prompt", TextArea)
+            value = area.text.strip()
             if not value:
                 return
+            area.text = ""
             self._queue(value, None, None)
 
         def action_run_until_done(self) -> None:

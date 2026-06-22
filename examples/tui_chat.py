@@ -6,8 +6,9 @@ Requires OpenAI credentials and the TUI optional dependency:
     pip install -e ".[openai,tui]"
     python examples/tui_chat.py
 
-Type prompts directly in the TUI. Press Ctrl+C to quit; the latest graph is
-saved under ``examples/_runs/tui-chat`` by default.
+Type or paste prompts directly in the TUI and press Ctrl+S to send (the input is
+multi-line, so pasting a long task works). Press Ctrl+C to quit; the latest graph
+is saved under ``examples/_runs/tui-chat`` by default.
 """
 
 from __future__ import annotations

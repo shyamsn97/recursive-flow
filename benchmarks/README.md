@@ -14,6 +14,7 @@ Initial datasets:
 
 - `synthetic_needle` - deterministic needle-in-haystack smoke task.
 - `oolong` - first real long-context dataset.
+- `official_browsecomp` - BrowseComp-Plus deep-research QA over fixed documents.
 - `official_longbench_v2` - LongBench-v2 all-domain multiple-choice/QA.
 - `official_livecodebench` - LiveCodeBench code generation with public tests.
 - `official_sudoku_extreme` - Sudoku Extreme solution checking.
@@ -49,7 +50,7 @@ Real run:
 ```bash
 python -m benchmarks.eval \
   --model openai:gpt-5-mini \
-  --dataset oolong official_longbench_v2 official_livecodebench official_sudoku_extreme \
+  --dataset oolong official_browsecomp official_longbench_v2 official_livecodebench official_sudoku_extreme \
   --runner vanilla rflow-local official-rlm \
   --seeds 0:20 \
   --wandb
@@ -60,7 +61,7 @@ Modal parallel run:
 ```bash
 python -m benchmarks.eval \
   --model openai:gpt-5-mini \
-  --dataset oolong official_longbench_v2 official_livecodebench official_sudoku_extreme \
+  --dataset oolong official_browsecomp official_longbench_v2 official_livecodebench official_sudoku_extreme \
   --runner vanilla rflow-local official-rlm \
   --seed 0 \
   --limit 50 \
@@ -73,6 +74,12 @@ python -m benchmarks.eval \
 
 Increase `--best-of-n` to duplicate each logical benchmark row and keep the
 best-scoring attempt.
+
+`official_browsecomp` is large. Download it once before running:
+
+```bash
+python -c "from datasets import load_dataset; load_dataset('Tevatron/browsecomp-plus').save_to_disk('evals/data/browsecomp_plus')"
+```
 
 Every run writes:
 

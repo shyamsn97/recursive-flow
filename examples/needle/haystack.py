@@ -1,8 +1,9 @@
 """Needle in a massive in-memory input.
 
 Inspired by alexzhang13/rlm-minimal's million-line magic-number demo. This
-version embeds the haystack directly in the query instead of writing many files,
-so the agent must chunk `INPUTS["query"]` and fan out parallel child agents.
+version passes the haystack as a single REPL input instead of writing many
+files, so the agent must chunk `INPUTS["haystack"]` and fan out parallel child
+agents.
 
 Usage:
     python examples/needle/haystack.py
@@ -105,9 +106,10 @@ def main():
     )
 
     graph = flow.start(
-        "I'm looking for a magic number buried somewhere in the haystack below. "
-        "What is it? Chunk the string and search the "
-        f"pieces in parallel.\n\nHaystack:\n{haystack}",
+        "I'm looking for a magic number buried somewhere in the haystack in "
+        "INPUTS['haystack']. What is it? Chunk the string and search the pieces "
+        "in parallel.",
+        inputs={"haystack": haystack},
     )
 
     if args.no_viz:

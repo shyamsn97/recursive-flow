@@ -31,6 +31,7 @@ class WandbLogger(Logger):
     def row(self, row: Row) -> None:
         if self._wandb is None:
             return
+        graph = row.prediction.metrics.get("graph") or {}
         self._wandb.log(
             {
                 "dataset": row.dataset,
@@ -41,6 +42,11 @@ class WandbLogger(Logger):
                 "input_tokens": row.prediction.usage.get("input_tokens", 0),
                 "output_tokens": row.prediction.usage.get("output_tokens", 0),
                 "time_seconds": row.prediction.metrics.get("time_seconds", 0.0),
+                "graph/nodes": graph.get("nodes"),
+                "graph/agents": graph.get("agents"),
+                "graph/llm_turns": graph.get("llm_turns"),
+                "graph/max_depth": graph.get("max_depth"),
+                "graph/max_branching": graph.get("max_branching"),
             }
         )
 
@@ -89,6 +95,13 @@ def _flatten_summary(prefix: str, values: dict) -> dict[str, object]:
         f"{prefix}/input_tokens": values.get("input_tokens"),
         f"{prefix}/output_tokens": values.get("output_tokens"),
         f"{prefix}/time_seconds": values.get("time_seconds"),
+        f"{prefix}/graph_count": values.get("graph_count"),
+        f"{prefix}/graph_nodes": values.get("graph_nodes"),
+        f"{prefix}/graph_agents": values.get("graph_agents"),
+        f"{prefix}/graph_llm_turns": values.get("graph_llm_turns"),
+        f"{prefix}/graph_max_depth": values.get("graph_max_depth"),
+        f"{prefix}/graph_max_branching": values.get("graph_max_branching"),
+        f"{prefix}/subdelegated": values.get("subdelegated"),
     }
 
 
@@ -105,6 +118,13 @@ def _summary_table(wandb, values: dict[str, dict]):
             "avg_input_tokens",
             "avg_output_tokens",
             "avg_time_seconds",
+            "graph_rows",
+            "avg_graph_nodes",
+            "avg_graph_agents",
+            "avg_graph_llm_turns",
+            "max_graph_depth",
+            "max_graph_branching",
+            "subdelegated",
         ]
     )
     for name, item in values.items():
@@ -119,6 +139,13 @@ def _summary_table(wandb, values: dict[str, dict]):
             item.get("input_tokens"),
             item.get("output_tokens"),
             item.get("time_seconds"),
+            item.get("graph_count"),
+            item.get("graph_nodes"),
+            item.get("graph_agents"),
+            item.get("graph_llm_turns"),
+            item.get("graph_max_depth"),
+            item.get("graph_max_branching"),
+            item.get("subdelegated"),
         )
     return table
 

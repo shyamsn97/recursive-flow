@@ -38,6 +38,22 @@ def summarize(rows: list[Row]) -> dict[str, Any]:
         graded = [row for row in items if row.score.correct is not None]
         correct = sum(1 for row in graded if row.score.correct is True)
         accuracy = correct / len(graded) if graded else None
+        graphs = [
+            graph
+            for row in items
+            if isinstance((graph := row.prediction.metrics.get("graph")), dict) and graph
+        ]
+
+        def graph_mean(key: str) -> float | None:
+            values = [graph.get(key) for graph in graphs]
+            numeric = [value for value in values if isinstance(value, (int, float))]
+            return mean(numeric) if numeric else None
+
+        def graph_max(key: str) -> float | None:
+            values = [graph.get(key) for graph in graphs]
+            numeric = [value for value in values if isinstance(value, (int, float))]
+            return max(numeric) if numeric else None
+
         return {
             "count": len(items),
             "graded_count": len(graded),
@@ -50,6 +66,13 @@ def summarize(rows: list[Row]) -> dict[str, Any]:
             "input_tokens": mean(row.prediction.usage.get("input_tokens", 0) for row in items),
             "output_tokens": mean(row.prediction.usage.get("output_tokens", 0) for row in items),
             "time_seconds": mean(row.prediction.metrics.get("time_seconds", 0.0) for row in items),
+            "graph_count": len(graphs),
+            "graph_nodes": graph_mean("nodes"),
+            "graph_agents": graph_mean("agents"),
+            "graph_llm_turns": graph_mean("llm_turns"),
+            "graph_max_depth": graph_max("max_depth"),
+            "graph_max_branching": graph_max("max_branching"),
+            "subdelegated": sum(1 for graph in graphs if graph.get("agents", 0) > 1),
         }
 
     by_runner: dict[str, list[Row]] = defaultdict(list)

@@ -181,7 +181,13 @@ class RemoteRepl(ABC):
 
     # ── seeding ───────────────────────────────────────────────────────
 
-    def seed(self, tools: dict[str, Callable], inputs: dict[str, str]) -> None:
+    def seed(
+        self,
+        tools: dict[str, Callable],
+        inputs: dict[str, str],
+        *,
+        max_query_chars: int | None = None,
+    ) -> None:
         """Bind this agent's inputs and tools into the remote REPL.
 
         Each tool is routed by kind (local-by-default, like smolagents):
@@ -218,7 +224,7 @@ class RemoteRepl(ABC):
             else:
                 self.inject_local_tool(name, fn)
         # Build flow_wait + launch_subagents remotely from the proxied delegate.
-        self.call({"cmd": "build_launcher"})
+        self.call({"cmd": "build_launcher", "max_query_chars": max_query_chars})
 
     def inject_literal(self, name: str, value: object) -> None:
         """Copy a literal value (round-tripped through ``repr``) into the REPL."""

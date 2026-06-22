@@ -15,31 +15,34 @@ REPL_BLOCK_RULE = """Use exactly one fenced REPL code block per assistant messag
 ```
 Do not write bare `repl` without the opening and closing triple backticks."""
 
-USER_PROMPT_WITH_ROOT = """Think step-by-step on what to do using the REPL environment. The original prompt is available as `INPUTS["query"]`.
+USER_PROMPT_WITH_ROOT = """Think step-by-step on what to do using the REPL environment. Your task is the prompt above; any supporting material is in the REPL `INPUTS` dict (inspect `list(INPUTS)`).
 
 Continue using the REPL environment and querying sub-LLMs / sub-agents by writing ```repl``` blocks, and determine your answer. Your next action:"""
 
 CONTINUE_ACTION = "Continue your next action:"
 
 FIRST_TURN_INSPECTION_NUDGE = """\
-Your first REPL block should usually inspect input names, sizes, and only the short previews needed to understand the task (e.g. `print(list(INPUTS))`, `print({k: len(v) for k, v in INPUTS.items()})`). Never print a full large input; keep full chunks in variables and pass focused chunks to subcalls.
+If you have any `INPUTS`, your first REPL block should usually inspect their names, sizes, and only the short previews needed to understand the task (e.g. `print(list(INPUTS))`, `print({k: len(v) for k, v in INPUTS.items()})`). Never print a full large input; keep full chunks in variables and pass focused chunks to subcalls.
 """
 
-FIRST_TURN_DECOMPOSITION_NUDGE = """\
-After the initial inspection, use `await launch_subagents([...])` for independent
-units that need tools, code execution, iteration, repair, or verification. The
-parent should coordinate, integrate child results, make final decisions, and
-verify the outcome.
 
-Do not start producing multiple final artifacts inline in the parent after
-inspection. First delegate the independent units, then integrate and verify.
+def build_decomposition_nudge() -> str:
+    """Orchestrator routing hint for the bootstrap turn.
 
-Put each child's supporting payloads in its `inputs` (a dict of str -> str),
-since a child sees only its query and the `INPUTS` you pass it — never your own
-variables.
-Never put `"query"` inside a child `inputs` dict; the spec's top-level `"query"`
-becomes that child's `INPUTS["query"]`.
-"""
+    Frames the agent as a router, not a solver: delegate units that need to act
+    (tools, code, iteration, repair, verification) and only do trivial work
+    inline.
+    """
+    return (
+        "You are this task's orchestrator. After inspecting `INPUTS`, route each "
+        "piece of work by what it needs:\n"
+        "- needs to run code, use tools, take several turns, verify/repair, or "
+        "decompose further -> `await launch_subagents([...])`\n"
+        "If a unit doesn't need that -- the answer is already in a variable or "
+        "one quick search away -- just do it yourself. Then integrate the "
+        "results and verify before calling done()."
+    )
+
 
 FINAL_ANSWER_ACTION = """You have used the full iteration budget without calling done().
 
@@ -68,24 +71,25 @@ STATUS_DEPTH_NEAR_MAX = " You are near the recursion limit."
 BASELINE_NOTE = "Baseline mode: no sub-agents available. Do all work in this REPL."
 
 
-def build_inputs_manifest(query: str, inputs: dict[str, str]) -> str:
+def build_inputs_manifest(
+    inputs: dict[str, str],
+) -> str:
     """List inputs by name + size (no value dumps), with a big-input chunk hint.
 
     Mirrors the size-signal idea from ``build_rlm_system_prompt`` so the model
     knows how large each REPL-visible input is before choosing a chunking /
-    fanout strategy. ``query`` is always listed because it is always injected as
-    ``INPUTS["query"]``.
+    fanout strategy. The query is delivered as the first user message, not as an
+    input, so it is not listed here. Returns ``""`` when the agent has no inputs.
     """
-    manifest_inputs = {"query": query, **inputs}
-    lines = [
-        f"- {name}: str, {len(value)} chars" for name, value in manifest_inputs.items()
-    ]
-    total = sum(len(value) for value in manifest_inputs.values())
+    if not inputs:
+        return ""
+    lines = [f"- {name}: str, {len(value)} chars" for name, value in inputs.items()]
+    total = sum(len(value) for value in inputs.values())
     manifest = (
         "Your REPL INPUTS contain:\n"
         + "\n".join(lines)
         + f"\nTotal input chars: {total}.\n"
-        + 'Print only small bounded samples, e.g. `print(INPUTS["query"][:500])`; never print a full large input.'
+        + 'Print only small bounded samples, e.g. `print(INPUTS["<key>"][:500])`; never print a full large input.'
     )
 
     if total > 50_000:
@@ -93,7 +97,7 @@ def build_inputs_manifest(query: str, inputs: dict[str, str]) -> str:
             f"\n\nThese inputs total ~{total} characters (~{total // 4} tokens). "
             "Print only tiny samples for orientation, then chunk large inputs in "
             "variables and process the pieces in parallel with "
-            "`llm_query_batched(...)` or `await launch_subagents([...])`."
+            "`await launch_subagents([...])`."
         )
     return manifest
 
@@ -115,19 +119,24 @@ def depth_note(depth: int, max_depth: int) -> str:
 
 
 def first_prompt(
-    query: str, inputs: dict[str, str], *, depth: int = 0, max_depth: int = 0
+    query: str,
+    inputs: dict[str, str],
+    *,
+    depth: int = 0,
+    max_depth: int = 0,
 ) -> str:
     """Build an agent's bootstrap user message.
 
-    Folds in the first-interaction safeguard, the inputs manifest (name + size,
-    never the values), the step-by-step framing, the first-turn nudges, and the
+    The query is delivered here as plain text (the model's task), followed by the
+    first-interaction safeguard, the inputs manifest (name + size, never the
+    values), the step-by-step framing, the first-turn nudges, and the
     recursion-depth note.
     """
-    parts = [FIRST_TURN_SAFEGUARD]
-    parts.append(build_inputs_manifest(query, inputs))
+    parts = [FIRST_TURN_SAFEGUARD, f"Your task:\n{query}"]
+    parts.append(build_inputs_manifest(inputs))
     parts.append(USER_PROMPT_WITH_ROOT)
     parts.append(FIRST_TURN_INSPECTION_NUDGE.strip())
     if max_depth > 0 and depth < max_depth:
-        parts.append(FIRST_TURN_DECOMPOSITION_NUDGE.strip())
+        parts.append(build_decomposition_nudge())
     parts.append(depth_note(depth, max_depth))
     return "\n\n".join(p for p in parts if p)

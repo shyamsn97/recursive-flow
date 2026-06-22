@@ -519,11 +519,11 @@ def test_direct_graph_input_mutation_syncs_live_repl_inputs():
     assert "synced-from-graph" in graph.nodes[-1].output
 
 
-def test_followup_query_updates_graph_query_and_repl_inputs():
+def test_followup_query_updates_graph_query_and_appends_message():
     replies = iter(
         [
             '```repl\ndone("first")\n```',
-            '```repl\nprint(INPUTS["query"])\ndone("second")\n```',
+            '```repl\ndone("second")\n```',
         ]
     )
     flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=5)
@@ -532,31 +532,30 @@ def test_followup_query_updates_graph_query_and_repl_inputs():
 
     graph = flow.step(graph, query="second task")
     assert graph.query == "second task"
+    # the follow-up query is delivered as a new user message, not via INPUTS
+    user_text = " ".join(m["content"] for m in graph.messages() if m["role"] == "user")
+    assert "second task" in user_text
     while not graph.finished:
         graph = flow.step(graph)
 
     assert graph.result() == "second"
-    assert "second task" in graph.nodes[-1].output
 
 
-def test_direct_graph_query_mutation_syncs_repl_inputs():
+def test_query_is_not_mirrored_into_repl_inputs():
     replies = iter(
         [
-            '```repl\nprint("created repl")\n```',
-            '```repl\nprint(INPUTS["query"])\ndone("ok")\n```',
+            '```repl\nprint("query" in INPUTS, list(INPUTS))\ndone("ok")\n```',
         ]
     )
     flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=5)
-    graph = flow.start("old query")
-    graph = flow.step(graph)  # LLMOutput
-    graph = flow.step(graph)  # ExecOutput, root REPL now exists
-
-    graph.query = "new query"
-    graph = flow.step(graph)
-    graph = flow.step(graph)
+    graph = flow.start("some query", {"doc": "d"})
+    while not graph.finished:
+        graph = flow.step(graph)
 
     assert graph.result() == "ok"
-    assert "new query" in graph.nodes[-1].output
+    # INPUTS carries only caller inputs; the query is the message, not an input.
+    assert "False" in graph.nodes[-1].output
+    assert "'doc'" in graph.nodes[-1].output
 
 
 def test_removed_agent_discards_repl_and_runtime_sync_cache():
@@ -615,9 +614,15 @@ def test_llm_query_batched_parses_structured():
 
 
 def test_llm_query_batched_registered_and_reserved():
+    # Disabled by default (keeps the prompt smaller).
     flow = make_flow()
     flow.start("q")
-    assert "llm_query_batched" in flow.build_tools()
+    assert "llm_query_batched" not in flow.build_tools()
+    # Can be turned on explicitly.
+    on = make_flow(include_llm_query=True)
+    on.start("q")
+    assert "llm_query_batched" in on.build_tools()
+    # Reserved regardless of whether the tool is exposed.
     assert "llm_query_batched" in Flow._RESERVED
     with pytest.raises(ValueError, match="reserved"):
         flow.start("q", {"llm_query_batched": "x"})

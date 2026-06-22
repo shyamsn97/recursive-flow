@@ -404,9 +404,9 @@ def test_loopback_launch_subagents_delegates_and_resumes():
 def test_loopback_launch_subagents_parallel_in_order():
     def reply_for(messages):
         task = first_user_text(messages)
-        if "query: str, 6 chars" in task:
+        if "task a" in task:
             return '```repl\ndone("A")\n```'
-        if "query: str, 7 chars" in task:
+        if "task bb" in task:
             return '```repl\ndone("B")\n```'
         return (
             "```repl\n"
@@ -454,7 +454,7 @@ def test_e2b_executes_repl_protocol_over_bridge(monkeypatch, tmp_path):
 def test_e2b_seed_routes_tools_by_kind(monkeypatch, tmp_path):
     _clear_rflow_env(monkeypatch)
     E2BRepl = _use_fake_e2b(monkeypatch)
-    flow = Flow(NoopLLM(), max_depth=1)
+    flow = Flow(NoopLLM(), max_depth=1, include_llm_query=False)
     agent = flow.start("q")
     repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
     flow.seed_agent_context(repl, agent)
@@ -462,7 +462,8 @@ def test_e2b_seed_routes_tools_by_kind(monkeypatch, tmp_path):
         repl.seed(flow.build_tools(repl.engine_context), {"DOC": "hi"})
         proxied = set(repl.proxied)
         # host-bound callables (proxy=True) are function proxies
-        assert {"done", "flow_delegate", "llm_query_batched"} <= proxied
+        assert {"done", "flow_delegate"} <= proxied
+        assert "llm_query_batched" not in proxied
         # HISTORY is no longer part of the default tool namespace.
         assert not any(name.startswith("HISTORY") for name in proxied)
         # launchers are composed in the sandbox, never proxied
@@ -476,6 +477,21 @@ def test_e2b_seed_routes_tools_by_kind(monkeypatch, tmp_path):
             f"print(os.environ[{RFLOW_IS_ROOT!r}])"
         )
         assert suspended is False and out.splitlines() == ["root", "0", "1"]
+    finally:
+        repl.close()
+        flow.close()
+
+
+def test_e2b_seed_can_opt_into_llm_query_proxy(monkeypatch, tmp_path):
+    _clear_rflow_env(monkeypatch)
+    E2BRepl = _use_fake_e2b(monkeypatch)
+    flow = Flow(NoopLLM(), max_depth=1, include_llm_query=True)
+    agent = flow.start("q")
+    repl = E2BRepl(remote_workdir=str(tmp_path / "remote"), setup_commands=[], repl_timeout=5)
+    flow.seed_agent_context(repl, agent)
+    try:
+        repl.seed(flow.build_tools(repl.engine_context), {})
+        assert "llm_query_batched" in set(repl.proxied)
     finally:
         repl.close()
         flow.close()

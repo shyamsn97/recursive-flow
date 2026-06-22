@@ -11,6 +11,7 @@ Initial datasets:
 
 - `synthetic_needle`
 - `oolong`
+- `official_browsecomp`
 - `official_longbench_v2`
 - `official_livecodebench`
 - `official_sudoku_extreme`
@@ -38,7 +39,7 @@ python -m benchmarks.eval \
 ```bash
 python -m benchmarks.eval \
   --model openai:gpt-5-mini \
-  --dataset oolong official_longbench_v2 official_livecodebench official_sudoku_extreme \
+  --dataset oolong official_browsecomp official_longbench_v2 official_livecodebench official_sudoku_extreme \
   --runner vanilla rflow-local official-rlm \
   --seeds 0:20 \
   --wandb
@@ -53,7 +54,7 @@ is unchanged. To fan rows out to cheap one-CPU Modal workers:
 ```bash
 python -m benchmarks.eval \
   --model openai:gpt-5-mini \
-  --dataset oolong official_longbench_v2 official_livecodebench official_sudoku_extreme \
+  --dataset oolong official_browsecomp official_longbench_v2 official_livecodebench official_sudoku_extreme \
   --runner vanilla rflow-local official-rlm \
   --seed 0 \
   --limit 50 \
@@ -68,6 +69,12 @@ Set `--best-of-n N` to run each logical row N times and keep only the best
 scoring attempt in `rows.jsonl`.
 
 Rows and artifacts are written under `benchmarks/runs/<run_id>/`.
+
+`official_browsecomp` is large. Download it once before running:
+
+```bash
+python -c "from datasets import load_dataset; load_dataset('Tevatron/browsecomp-plus').save_to_disk('evals/data/browsecomp_plus')"
+```
 
 ## Adding Components
 

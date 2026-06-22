@@ -59,8 +59,8 @@ def _summary_table(title: str, values: dict[str, dict]) -> list[str]:
         return lines
     lines.extend(
         [
-            "| name | rows | correct | pct correct | score | errors | avg time | avg tokens |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| name | rows | correct | pct correct | score | errors | avg time | avg tokens | avg nodes | avg agents | max depth | subdelegated |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for name, item in values.items():
@@ -72,7 +72,11 @@ def _summary_table(title: str, values: dict[str, dict]) -> list[str]:
             f"{_format_float(item.get('score'))} | "
             f"{item.get('errors', 0)} | "
             f"{_format_float(item.get('time_seconds'), suffix='s')} | "
-            f"{tokens} |"
+            f"{tokens} | "
+            f"{_format_float(item.get('graph_nodes'))} | "
+            f"{_format_float(item.get('graph_agents'))} | "
+            f"{_format_float(item.get('graph_max_depth'))} | "
+            f"{item.get('subdelegated', 0)}/{item.get('graph_count', 0)} |"
         )
     return lines
 

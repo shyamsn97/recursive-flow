@@ -370,8 +370,14 @@ class Graph:
         return deepcopy(self) if deep else _dc_replace(self)
 
     def repl_inputs(self) -> dict[str, str]:
-        """Public ``INPUTS`` dict for this agent's REPL."""
-        return {"query": self.query, **self.inputs}
+        """Public ``INPUTS`` dict for this agent's REPL.
+
+        Holds only caller-provided inputs. The query is delivered as the first
+        user message (see ``prompts.messages.first_prompt``), not mirrored into
+        ``INPUTS`` — agents read their task from chat, and ``inputs`` is reserved
+        for the (potentially large) supporting payloads.
+        """
+        return dict(self.inputs)
 
     def max_global_step(self) -> int | None:
         """Highest ``global_step`` stamped on any node in the subtree, or ``None``."""

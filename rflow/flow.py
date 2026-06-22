@@ -59,6 +59,7 @@ from rflow.runtime.env import agent_process_env
 from rflow.runtime.runtime import LocalRuntime, RemoteRepl, ReplBackend, Runtime
 from rflow.tools import tool
 from rflow.tools.builtins import (
+    DEFAULT_MAX_QUERY_CHARS,
     make_delegate,
     make_done,
     make_launch_subagents,
@@ -139,6 +140,7 @@ class Flow(BaseFlow):
         max_output_length: int = 4_000,
         max_budget: int | None = None,
         max_messages: int | None = None,
+        max_query_chars: int = DEFAULT_MAX_QUERY_CHARS,
         eager_children: bool = False,
         pool: object | None = None,
         system_prompt: str | None = None,
@@ -146,6 +148,7 @@ class Flow(BaseFlow):
         show_vars: bool = False,
         runtime: Runtime | None = None,
         enable_structured_output: bool = True,
+        include_llm_query: bool = False,
     ) -> None:
         self.llm = llm
         self.max_depth = max_depth
@@ -155,8 +158,10 @@ class Flow(BaseFlow):
         self.max_output_length = max_output_length
         self.max_budget = max_budget
         self.max_messages = max_messages
+        self.max_query_chars = max_query_chars
         self.eager_children = eager_children
         self.enable_structured_output = enable_structured_output
+        self.include_llm_query = include_llm_query
         # ``system_prompt=None`` renders the live prompt builder per turn (the
         # default). Pass a string to force a fixed system prompt (escape hatch).
         self.system_prompt = system_prompt
@@ -169,7 +174,7 @@ class Flow(BaseFlow):
         # first execution.
         self.runtime = runtime or LocalRuntime()
         # LLM routing: "default" is the primary client; named lanes select
-        # alternate models per agent (Graph.model) or per llm_query_batched call.
+        # alternate models per agent (Graph.model) or optional llm_query_batched calls.
         # A single bounded channel owns the HTTP thread pool for every lane,
         # kept separate from the per-step agent execution pool.
         self._llm_clients: dict[str, LLMClient] = {
@@ -819,6 +824,12 @@ class Flow(BaseFlow):
         depth bound is hit (which the launcher surfaces as a child result).
         """
         inputs = self._validate_inputs(inputs)
+        if len(query) > self.max_query_chars:
+            return (
+                f"[refused: query too long ({len(query)} chars > "
+                f"{self.max_query_chars})] keep query a short instruction and "
+                "move bulk payloads into inputs"
+            )
         with self._lock:
             parent = self.graph[parent_agent_id]
             if parent.depth >= self.max_depth:
@@ -896,7 +907,7 @@ class Flow(BaseFlow):
             repl_inputs = agent.repl_inputs()
             tools = self.build_tools(repl.engine_context)
             if isinstance(repl, RemoteRepl):
-                repl.seed(tools, repl_inputs)
+                repl.seed(tools, repl_inputs, max_query_chars=self.max_query_chars)
             else:
                 repl.namespace.update(tools)
                 if self.show_vars:
@@ -983,9 +994,12 @@ class Flow(BaseFlow):
             "done": make_done(self, engine_context),
             "flow_wait": wait,
             "flow_delegate": delegate,
-            "launch_subagents": make_launch_subagents(delegate, wait),
-            "llm_query_batched": self.llm_query_batched,
+            "launch_subagents": make_launch_subagents(
+                delegate, wait, max_query_chars=self.max_query_chars
+            ),
         }
+        if self.include_llm_query:
+            tools["llm_query_batched"] = self.llm_query_batched
         # Tools registered on the runtime (e.g. ``runtime.register_tools(
         # FILE_TOOLS)``) reach every agent and its children. Core control tools
         # win on a name clash, so a registered tool can never shadow ``done`` etc.

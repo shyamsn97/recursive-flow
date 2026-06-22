@@ -126,8 +126,7 @@ def main():
             f"There are {args.num_files} text files in haystack/. "
             "Exactly one line in one file matches the pattern "
             "`The magic number is <number>`. Find and return the number. "
-            "There are too many files to search manually, so split the work "
-            "into batches and delegate."
+            "There are too many files to search manually, so split the work into batches and delegate the search to subagents."
         )
 
         if args.no_viz:

@@ -91,7 +91,13 @@ def root_repl_block() -> str:
 
 def main() -> None:
     llm = GuidedLLM()
-    flow = rflow.Flow(llm, max_depth=0, max_iters=3, max_concurrency=3)
+    flow = rflow.Flow(
+        llm,
+        max_depth=0,
+        max_iters=3,
+        max_concurrency=3,
+        include_llm_query=True,
+    )
 
     graph = flow.start(
         "Classify the reviews. You must use `llm_query_batched(prompts)` for "

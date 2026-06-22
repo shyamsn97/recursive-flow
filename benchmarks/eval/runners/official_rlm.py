@@ -73,6 +73,8 @@ class OfficialRLMRunner(Runner):
                         data.get("time_seconds") or (time.perf_counter() - start)
                     ),
                     "iterations": int(data.get("iterations") or 1),
+                    "graph": data.get("graph") or {},
+                    "rlm": data.get("rlm") or {},
                 },
                 artifacts={
                     "log_dir": str(log_dir),
@@ -141,6 +143,78 @@ def _official_script(
                 input_tokens += getattr(item, "total_input_tokens", 0)
                 output_tokens += getattr(item, "total_output_tokens", 0)
 
+        def summarize_trajectory(trajectory, depth=0):
+            if not isinstance(trajectory, dict):
+                return dict(
+                    agents=1,
+                    nodes=0,
+                    llm_turns=0,
+                    max_depth=depth,
+                    max_branching=0,
+                    iterations=0,
+                    code_blocks=0,
+                    subcalls=0,
+                    recursive_subcalls=0,
+                    one_shot_subcalls=0,
+                )
+            iterations = trajectory.get("iterations") or []
+            summary = dict(
+                agents=1,
+                nodes=len(iterations),
+                llm_turns=len(iterations),
+                max_depth=depth,
+                max_branching=0,
+                iterations=len(iterations),
+                code_blocks=0,
+                subcalls=0,
+                recursive_subcalls=0,
+                one_shot_subcalls=0,
+            )
+            for iteration in iterations:
+                code_blocks = iteration.get("code_blocks") or []
+                summary["code_blocks"] += len(code_blocks)
+                summary["nodes"] += len(code_blocks)
+                for block in code_blocks:
+                    result = block.get("result") or {{}}
+                    calls = result.get("rlm_calls") or []
+                    recursive_calls = [
+                        call for call in calls if isinstance(call, dict) and call.get("metadata")
+                    ]
+                    summary["subcalls"] += len(calls)
+                    summary["recursive_subcalls"] += len(recursive_calls)
+                    summary["one_shot_subcalls"] += len(calls) - len(recursive_calls)
+                    summary["nodes"] += len(calls)
+                    summary["max_branching"] = max(
+                        summary["max_branching"],
+                        len(recursive_calls),
+                    )
+                    for call in recursive_calls:
+                        child = summarize_trajectory(call.get("metadata"), depth + 1)
+                        summary["agents"] += child["agents"]
+                        summary["nodes"] += child["nodes"]
+                        summary["llm_turns"] += child["llm_turns"]
+                        summary["max_depth"] = max(summary["max_depth"], child["max_depth"])
+                        summary["max_branching"] = max(
+                            summary["max_branching"],
+                            child["max_branching"],
+                        )
+                        summary["iterations"] += child["iterations"]
+                        summary["code_blocks"] += child["code_blocks"]
+                        summary["subcalls"] += child["subcalls"]
+                        summary["recursive_subcalls"] += child["recursive_subcalls"]
+                        summary["one_shot_subcalls"] += child["one_shot_subcalls"]
+            return summary
+
+        trajectory = getattr(result, "metadata", None) or logger.get_trajectory()
+        rlm_metrics = summarize_trajectory(trajectory)
+        graph_metrics = {{
+            "agents": rlm_metrics["agents"],
+            "nodes": rlm_metrics["nodes"],
+            "llm_turns": rlm_metrics["llm_turns"],
+            "max_depth": rlm_metrics["max_depth"],
+            "max_branching": rlm_metrics["max_branching"],
+        }}
+
         print("<<<RESULT>>>")
         print(json.dumps({{
             "response": getattr(result, "response", "") or "",
@@ -149,6 +223,8 @@ def _official_script(
             "time_seconds": elapsed,
             "iterations": getattr(result, "num_iterations", None) or 1,
             "log_file_path": getattr(logger, "log_file_path", None),
+            "graph": graph_metrics,
+            "rlm": rlm_metrics,
         }}))
         """
     )
