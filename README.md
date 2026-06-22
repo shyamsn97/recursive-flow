@@ -337,7 +337,7 @@ example in [`examples/control/graph_controller_agent.py`](examples/control/graph
 
 ## Rich visualization
 
-See [notebook](./examples/notebooks/viz_walkthrough.ipynb) for a full showcase of vizualization utilities.
+See [notebook](./examples/notebooks/viz_walkthrough.ipynb) for a full showcase of visualization utilities.
 
 Because the run is a typed graph, every visualization is just a render of
 that graph. View either a saved run directory, a single `Graph`, or a list of
@@ -438,19 +438,21 @@ flowchart TD
 Everything the CLI does is one function call away:
 
 ```python
+from pathlib import Path
+
 from rflow.utils.export import to_mermaid, to_mermaid_flowchart, to_mermaid_sequence, to_dot, to_d2
+from rflow.utils.viewer import agent_transcript
 from rflow.utils.viz import (
-    ascii_boxes, code_log, error_summary, message_stream, diff_system_prompts,
-    gantt, gantt_html, token_sparkline, budget_burndown, bench_table,
-    report_md, live, tee, slack_webhook, discord_webhook,
+    ascii_boxes, code_log, error_summary, gantt, gantt_html,
+    live, report_md, token_sparkline,
 )
 from rflow.utils.tracing import json_logs
 
 print(token_sparkline(graphs))          # ▁▂▅█▂   15820 tok over 7 steps
 print(error_summary(graph))             # ErrorOutput counts grouped by kind
-print(message_stream("root.boid_js", graph))     # rendered transcript for one agent
+print(agent_transcript(graph["root.boid_js"], include_system=False))
 print(report_md(graphs, title="run"))   # full Markdown report
-gantt_html(graphs, "run.html")          # standalone HTML swimlane
+Path("run.html").write_text(gantt_html(graphs), encoding="utf-8")
 json_logs(graph, "run.jsonl")           # one node per line
 ```
 
@@ -523,7 +525,7 @@ graph.save_image("hero.png")
 ```
 
 **Blog slideshow with dense subtrees** — fat markers, small labels,
-square-ish canvas (the recipe behind `docs/blog.md`):
+square-ish canvas:
 
 ```python
 save_steps(
@@ -585,8 +587,8 @@ rlmflow render ./myproject \
   -f html  -o stepper.html --no-normalize-labels
 ```
 
-The CLI uses `element_mult=1.0` by default for `html`, `image`, `steps`,
-and `gif` so static exports stay visually consistent with the interactive
+The CLI uses `element_mult=1.0` by default for `html`, `image`, and `steps`
+so static exports stay visually consistent with the interactive
 viewer. Node sizes are uniform; token counts stay in hover/details, not
 marker size. Override with `--element-mult`, `--marker-mult`, or
 `--text-mult` for a specific medium.
@@ -728,8 +730,8 @@ in [`docs/internals.md`](docs/internals.md). Research notes live under
   architecture, step lifecycle, REPL `await` protocol, runtime backends,
   graph persistence, and extension seams. This document is being refreshed
   after the `Flow`/`Graph` rewrite.
-- [Blog post](docs/blog.md): long-form pitch — recursive agents, why graphs
-  beat flat traces, needle-in-a-haystack and autoresearch walkthroughs.
+- [Blog post](https://shyamsn97.github.io/blog/rflow/): long-form pitch —
+  recursive agents, why graphs beat flat traces, and walkthroughs.
 - [Positioning](docs/positioning.md): when to use rlmflow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 - [Control](docs/control.md): step loop, save/load resume, rewind,

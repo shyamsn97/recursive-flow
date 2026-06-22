@@ -164,9 +164,10 @@ Path("run.d2").write_text(to_d2(graphs[-1]))
 Per-agent transcripts and ASCII tree boxes are one call:
 
 ```python
-from rflow.utils.viz import ascii_boxes, message_stream
+from rflow.utils.viewer import agent_transcript
+from rflow.utils.viz import ascii_boxes
 
-print(message_stream("root.boid_js", graphs[-1]))
+print(agent_transcript(graphs[-1]["root.boid_js"], include_system=False))
 print(ascii_boxes(graphs[-1]))
 ```
 
@@ -252,5 +253,8 @@ rlmflow render runs/deep_research/ -f gantt-html -o run1.html
 rlmflow render runs/deep_research/ -f mermaid          # stdout
 rlmflow render runs/deep_research/ -f dot -o graph.dot
 rlmflow render runs/deep_research/ -f tree
+rlmflow render runs/deep_research/ -f ascii-boxes
+rlmflow render runs/deep_research/ -f tokens
+rlmflow render runs/deep_research/ -f steps -o frames/ --marker-mult 3.5 --text-mult 2.2
 rlmflow version
 ```

@@ -701,6 +701,12 @@ class Graph:
 
         return save_html(self, path, **kwargs)
 
+    def save_image(self, path: str | Path, **kwargs: Any) -> Path:
+        """Write a static image view of this graph to ``path``."""
+        from rflow.utils.viewer import save_image
+
+        return save_image(self, path, **kwargs)
+
     def messages(self, system_prompt: str | None = None) -> list[dict[str, str]]:
         """Render this agent's trajectory as a chat-message list.
 

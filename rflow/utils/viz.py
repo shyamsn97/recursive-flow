@@ -4,8 +4,7 @@ These accept the same sources as the viewer: an in-memory :class:`~rflow.graph.G
 a graph list, a ``trace.json`` path, or a directory. Trace-wide views use every
 snapshot; single-snapshot views use the latest graph.
 
-Token/cost views from the legacy module are intentionally omitted until real token
-accounting lands (Phase 2).
+Token views summarize the usage counters stored on ``LLMOutput`` nodes.
 """
 
 from __future__ import annotations
@@ -257,6 +256,45 @@ h1 {{ font-size: 14px; color: #8b949e; font-weight: 500; margin: 0 0 12px; }}
 </body></html>"""
 
 
+# ── text summaries ────────────────────────────────────────────────────
+
+
+def ascii_boxes(source: ViewSource) -> str:
+    """Render the latest graph as a nested text tree."""
+    return graph_tree(_resolve_latest_graph(source))
+
+
+def token_sparkline(source: ViewSource) -> str:
+    """Render cumulative token usage over graph snapshots as a one-line sparkline."""
+    graphs = _resolve_graphs(source)
+    if not graphs:
+        return "(no graphs)"
+
+    totals = [graph.total_tokens() for graph in graphs]
+    final = graphs[-1]
+    input_tokens, output_tokens = final.tokens()
+    total = input_tokens + output_tokens
+
+    if len(totals) == 1:
+        spark = "█" if total else "▁"
+    else:
+        lo, hi = min(totals), max(totals)
+        blocks = "▁▂▃▄▅▆▇█"
+        if hi == lo:
+            spark = blocks[-1 if hi else 0] * len(totals)
+        else:
+            span = hi - lo
+            spark = "".join(
+                blocks[round((value - lo) / span * (len(blocks) - 1))]
+                for value in totals
+            )
+
+    return (
+        f"{spark}   {total} tok over {len(graphs)} steps "
+        f"({input_tokens} in, {output_tokens} out)"
+    )
+
+
 # ── error / code log / report ────────────────────────────────────────
 
 
@@ -346,12 +384,12 @@ def report_md(source: ViewSource, *, title: str = "rlmflow run") -> str:
     if result:
         parts.extend(["", "## Result", "", "```", str(result), "```"])
 
-    # Token/cost accounting is omitted until real usage lands (Phase 2).
     return "\n".join(parts) + "\n"
 
 
 __all__ = [
     "LiveView",
+    "ascii_boxes",
     "code_log",
     "error_summary",
     "gantt",
@@ -359,4 +397,5 @@ __all__ = [
     "live",
     "live_view",
     "report_md",
+    "token_sparkline",
 ]

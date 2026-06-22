@@ -11,10 +11,11 @@ Three sub-commands, all operating on paths — no agent construction:
 ``trace.json`` / ``graph.json``.
 
 ``--format`` accepts text formats (``mermaid`` / ``mermaid-flowchart`` /
-``mermaid-sequence`` / ``dot`` / ``d2`` / ``tree`` / ``report-md`` /
-``gantt-html`` / ``code-log`` / ``error-summary``) and figure formats
-(``html`` stepper, ``image`` PNG/SVG, ``steps`` one image per snapshot under
-``--out``). Figure formats need the ``viewer``/``image`` extras.
+``mermaid-sequence`` / ``dot`` / ``d2`` / ``tree`` / ``ascii-boxes`` /
+``report-md`` / ``gantt-html`` / ``code-log`` / ``error-summary`` /
+``tokens``) and figure formats (``html`` stepper, ``image`` PNG/SVG,
+``steps`` one image per snapshot under ``--out``). Figure formats need the
+``viewer``/``image`` extras.
 """
 
 from __future__ import annotations
@@ -63,7 +64,14 @@ def cmd_render(args: argparse.Namespace) -> int:
         to_mermaid_sequence,
     )
     from rflow.utils.viewer import graph_tree
-    from rflow.utils.viz import code_log, error_summary, gantt_html, report_md
+    from rflow.utils.viz import (
+        ascii_boxes,
+        code_log,
+        error_summary,
+        gantt_html,
+        report_md,
+        token_sparkline,
+    )
 
     graphs = _load(Path(args.path))
     topo = graphs[-1]
@@ -84,6 +92,8 @@ def cmd_render(args: argparse.Namespace) -> int:
         out = to_d2(topo)
     elif fmt == "tree":
         out = graph_tree(topo)
+    elif fmt == "ascii-boxes":
+        out = ascii_boxes(topo)
     elif fmt == "gantt-html":
         out = gantt_html(graphs)
     elif fmt == "report-md":
@@ -92,6 +102,8 @@ def cmd_render(args: argparse.Namespace) -> int:
         out = code_log(topo)
     elif fmt == "error-summary":
         out = error_summary(topo)
+    elif fmt == "tokens":
+        out = token_sparkline(graphs)
     else:
         raise SystemExit(f"rlmflow: unknown format {fmt!r}")
 
@@ -110,10 +122,23 @@ def _render_figure(
 ) -> int:
     from rflow.utils.viewer import save_html, save_image, save_steps
 
+    figure_kwargs = {
+        "element_mult": args.element_mult,
+        "marker_mult": args.marker_mult,
+        "text_mult": args.text_mult,
+        "normalize_labels": args.normalize_labels,
+    }
+
     if fmt == "html":
         if not args.out:
             raise SystemExit("rlmflow: --format html requires --out PATH")
-        path = save_html(graphs, args.out, title=args.title or "rlmflow run")
+        path = save_html(
+            graphs,
+            args.out,
+            title=args.title or "rlmflow run",
+            height=args.height,
+            **figure_kwargs,
+        )
         print(f"wrote {path}", file=sys.stderr)
         return 0
 
@@ -123,7 +148,12 @@ def _render_figure(
                 "rlmflow: --format image requires --out PATH (e.g. graph.png)"
             )
         path = save_image(
-            topo, args.out, width=args.width, height=args.height, scale=args.scale
+            topo,
+            args.out,
+            width=args.width,
+            height=args.height,
+            scale=args.scale,
+            **figure_kwargs,
         )
         print(f"wrote {path}", file=sys.stderr)
         return 0
@@ -138,6 +168,7 @@ def _render_figure(
             width=args.width,
             height=args.height,
             scale=args.scale,
+            **figure_kwargs,
         )
         print(f"wrote images under {path}", file=sys.stderr)
         return 0
@@ -195,10 +226,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "dot",
             "d2",
             "tree",
+            "ascii-boxes",
             "gantt-html",
             "report-md",
             "code-log",
             "error-summary",
+            "tokens",
             "html",
             "image",
             "steps",
@@ -221,6 +254,37 @@ def _build_parser() -> argparse.ArgumentParser:
         "--image-format",
         default="png",
         help="image suffix for --format steps (default: png)",
+    )
+    r.add_argument(
+        "--element-mult",
+        type=float,
+        default=1.0,
+        help="uniform marker/font multiplier for html/image/steps",
+    )
+    r.add_argument(
+        "--marker-mult",
+        type=float,
+        default=None,
+        help="marker/edge multiplier for html/image/steps",
+    )
+    r.add_argument(
+        "--text-mult",
+        type=float,
+        default=None,
+        help="label/font multiplier for html/image/steps",
+    )
+    r.add_argument(
+        "--normalize-labels",
+        dest="normalize_labels",
+        action="store_true",
+        default=True,
+        help="place labels consistently below nodes for html/image/steps",
+    )
+    r.add_argument(
+        "--no-normalize-labels",
+        dest="normalize_labels",
+        action="store_false",
+        help="keep plot labels at their default positions for html/image/steps",
     )
     r.set_defaults(func=cmd_render)
 

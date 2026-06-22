@@ -4,13 +4,8 @@ Pick the doc that matches what you're trying to do.
 
 ## Get oriented
 
-- [Blog post](blog.md) — long-form pitch. Why recursive agents,
-  why graphs over flat traces, full needle-in-a-haystack
-  walkthrough with the same exports the CLI ships.
-- [Minimal](minimal.md) — rlmflow stripped to its ~90-line core,
-  plus an honest accounting of which subsystems are essential vs. the
-  price of parallelism and durability. **Start here if the codebase
-  feels too complicated.**
+- [Blog post](https://shyamsn97.github.io/blog/rflow/) — long-form pitch.
+  Why recursive agents, why graphs over flat traces, and walkthroughs.
 - [Positioning](positioning.md) — when to use rlmflow vs
   rlm-minimal, ypi, LangGraph, CrewAI, AutoGen, SWE-agent, Aider.
 

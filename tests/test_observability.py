@@ -214,6 +214,27 @@ def test_code_log_pairs_exec_with_output(final_graph):
     assert "→" in log  # output arrow for at least one block
 
 
+def test_ascii_boxes_matches_graph_tree(final_graph):
+    assert viz.ascii_boxes(final_graph) == viewer.graph_tree(final_graph)
+
+
+def test_token_sparkline_summarizes_cumulative_usage():
+    graphs = [
+        Graph(
+            agent_id="root",
+            nodes=[rflow.LLMOutput(agent_id="root", input_tokens=1, output_tokens=2)],
+        ),
+        Graph(
+            agent_id="root",
+            nodes=[rflow.LLMOutput(agent_id="root", input_tokens=3, output_tokens=4)],
+        ),
+    ]
+
+    line = viz.token_sparkline(graphs)
+    assert "7 tok over 2 steps" in line
+    assert "(3 in, 4 out)" in line
+
+
 def test_report_md_summarizes_run(run_snapshots):
     md = viz.report_md(run_snapshots, title="my run")
     assert md.startswith("# my run")
@@ -315,6 +336,8 @@ def test_save_image_writes_png(final_graph, tmp_path):
     pytest.importorskip("kaleido")
     out = viewer.save_image(final_graph, tmp_path / "g.png")
     assert out.exists() and out.stat().st_size > 0
+    shorthand = final_graph.save_image(tmp_path / "g2.png")
+    assert shorthand.exists() and shorthand.stat().st_size > 0
 
 
 def test_save_steps_dedupes_and_writes_frames(run_snapshots, tmp_path):
@@ -349,8 +372,10 @@ def test_cli_render_text_formats(run_snapshots, tmp_path, capsys):
     for fmt, needle in [
         ("mermaid", "stateDiagram-v2"),
         ("tree", "● root"),
+        ("ascii-boxes", "● root"),
         ("report-md", "# rlmflow run"),
         ("error-summary", "no errors"),
+        ("tokens", "tok over"),
     ]:
         rc, captured = _run_cli(["render", path, "-f", fmt], capsys)
         assert rc == 0
@@ -427,6 +452,49 @@ def test_cli_render_steps_requires_out(run_snapshots, tmp_path, capsys):
     path = str(save_trace(run_snapshots, tmp_path / "trace.json"))
     with pytest.raises(SystemExit, match="requires --out"):
         _run_cli(["render", path, "-f", "steps"], capsys)
+
+
+def test_cli_render_html_forwards_scaling_flags(
+    run_snapshots, tmp_path, capsys, monkeypatch
+):
+    path = str(save_trace(run_snapshots, tmp_path / "trace.json"))
+    out = tmp_path / "viewer.html"
+    captured: dict = {}
+
+    def fake_save_html(graphs, output, **kwargs):
+        captured["graphs"] = graphs
+        captured["output"] = output
+        captured["kwargs"] = kwargs
+        out.write_text("<html></html>", encoding="utf-8")
+        return out
+
+    monkeypatch.setattr("rflow.utils.viewer.save_html", fake_save_html)
+
+    rc, _ = _run_cli(
+        [
+            "render",
+            path,
+            "-f",
+            "html",
+            "-o",
+            str(out),
+            "--element-mult",
+            "1.2",
+            "--marker-mult",
+            "3.5",
+            "--text-mult",
+            "2.2",
+            "--no-normalize-labels",
+        ],
+        capsys,
+    )
+
+    assert rc == 0
+    assert captured["output"] == str(out)
+    assert captured["kwargs"]["element_mult"] == 1.2
+    assert captured["kwargs"]["marker_mult"] == 3.5
+    assert captured["kwargs"]["text_mult"] == 2.2
+    assert captured["kwargs"]["normalize_labels"] is False
 
 
 def test_cli_render_gantt_html_to_file(run_snapshots, tmp_path, capsys):

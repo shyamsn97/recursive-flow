@@ -1,8 +1,7 @@
 # Examples
 
 Single-file scripts live at the root. Multi-file tasks and API tours live in
-named folders. Generated runs go under [`_runs/`](_runs/); fixtures under
-[`_data/`](_data/).
+named folders. Generated runs go under [`_runs/`](_runs/).
 
 ## Scripts
 
@@ -81,7 +80,7 @@ A finished run is saved automatically under `_runs/`; reopen it with:
 ```bash
 python examples/summarizer.py        # saves to examples/_runs/summarizer/
 rlmflow view examples/_runs/summarizer
-rlmflow render examples/_runs/summarizer --format html -o viewer.html
+rlmflow render examples/_runs/summarizer -f html -o viewer.html
 ```
 
 The saved directory holds `graph.json` (and optionally `trace.json` when you
