@@ -1,117 +1,63 @@
-# Autoresearch
+# autoresearch
 
-A [Karpathy-style autoresearch](https://github.com/karpathy/autoresearch)
-hill-climb on top of `Flow`. **The agent is the researcher**: it
-rewrites a single function (e.g. `solve()` in `solution.py`),
-passes the new source to `run_experiment(source)`, and decides
-what to try next. A separate `evaluate.py` — which the agent does
-not see — imports that function and prints `score: <float>`. To
-run trials in parallel, the agent uses `await launch_subagents([...])`.
+This example gives agents a small, real language-model training loop and lets
+them submit variations. The baseline is intentionally boring: a bounded
+TinyStories sample, byte-level tokens, a compact GPT, AdamW, and a fixed time
+budget.
 
-```
-turn 0:
- → run_baseline()                         # one-shot, idempotent
-turn 1+:
- → fresh = pick_slugs(get_runs())
- → results = await launch_subagents([     # children call run_experiment
- →     {"name": slug, "query": hyp, "inputs": {"brief": ctx}} for slug, hyp, ctx in fresh
- → ])
- → ...
- → done(<summary>)
-```
+## How it works
 
-There is **no trial dir** to manage. Every call to
-`run_experiment(source, description=<slug>)` writes the source to
-`history/<n>_<slug>.py` and runs `python evaluate.py
-history/<n>_<slug>.py` from the workdir root.
-`history/ledger.jsonl` records every run; `list_runs()` /
-`get_runs()` read it back. The baseline never goes through
-`run_experiment`: it gets its own one-shot `run_baseline()` tool
-which evaluates the original `solution.py` once and records
-`description='baseline'`.
+The repo is deliberately kept small and only really has two files that matter:
 
-Use `--max-submissions N` to put a hard cap on experiment submissions.
-The cap counts `run_experiment(...)` calls only, not the baseline. Agents
-can inspect `submission_status()` and `run_experiment(...)` raises
-`SubmissionError("too many submissions...")` without writing a new ledger row
-once the cap is exhausted.
+- **`train.py`** — the single file the agent edits. Contains TinyStories cache setup, byte tokenization, batch sampling, BPB-style evaluation, GPT model, AdamW, and the training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
+- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
 
-Archived candidates are the research record. Prompt children to include
-module, target-function, and helper docstrings that explain the strategy,
-validity invariants, inputs/outputs, units, and non-obvious constants.
-This makes `history/<n>_<slug>.py` useful when the parent resumes or when
-a human reviews why one idea beat another.
+By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
 
-## Layout
-
-```
-examples/autoresearch/
-├── README.md
-├── Makefile                 # make run, make sanity, make smoke
-├── autoresearch.py          # driver — target-agnostic
-└── circle_packing/          # example target: pack 26 circles in [0,1]^2
-    ├── README.md
-    ├── program.md           # agent-facing brief
-    ├── solution.py          # the file the agent rewrites — just solve()
-    └── evaluate.py          # the harness — imports + scores a candidate
-```
+If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
 
 ## Quick start
 
-```bash
-pip install -e .
-pip install numpy
-
-export OPENAI_API_KEY=...
-
-cd examples/autoresearch
-make sanity   # optional baseline check
-
-make run      # or override: make run MODEL=gpt-5-mini MAX_SUBMISSIONS=64
-
-# equivalent direct invocation:
-python autoresearch.py \
-    --target circle_packing \
-    --budget-s 120 --max-iterations 20 --max-submissions 40 \
-    --model gpt-5 --branches-per-turn 8 --max-depth 2
-```
-
-Output goes to `examples/_runs/autoresearch/` (or `--workdir`):
-
-- `solution.py` — the original baseline (immutable; the agent edits
-  a string in memory and passes it to `run_experiment`).
-- `evaluate.py` — the harness (immutable; the agent doesn't see it).
-- `history/<n>_<slug>.py` — every source string that was ever run.
-- `history/ledger.jsonl` — `{n, ts, score, returncode, ...}` per run.
-- `graph.json` — the final run graph (via `graph.save(...)`).
-- `viewer.html` — static replay (via `graph.save_html(...)`).
-
-## Adding your own target
-
-A target is a directory containing exactly three files:
-
-- `<solution>.py` — defines one top-level function (the unit of
-  search; the agent rewrites this).
-- `<evaluator>.py` — takes a path to a candidate `<solution>.py` on
-  argv, imports it, runs the function, and prints `score: <float>`
-  on the last line of stdout. Exit non-zero on crash. **The agent
-  never sees this file.** Declare ``FN_NAME = "..."`` at module
-  scope so the driver can preflight-check candidate sources for
-  the right function name and signature.
-- `program.md` — the agent's brief (task description + how to use
-  `run_experiment` / `run_baseline` / `launch_subagents`). Include a short
-  docstring rubric for candidate sources: module docstring for the
-  strategy, target-function docstring for the algorithm and invariants,
-  helper docstrings for inputs/outputs/units, and comments for magic
-  constants.
+**Requirements:** Python 3.10+, [uv](https://docs.astral.sh/uv/), and ideally a CUDA GPU. CPU works for smoke tests but is slow.
 
 ```bash
-python examples/autoresearch/autoresearch.py \
-    --target path/to/my_target \
-    --solution train.py \
-    --evaluator score.py \
-    --lower-is-better        # use if smaller is better (e.g. val loss)
+
+# 1. Install uv project manager (if you don't already have it)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Install dependencies
+uv sync
+
+# 3. Manually run a single training experiment (~5 min, plus one-time cache setup)
+uv run train.py
 ```
 
-Defaults: `--solution solution.py`, `--evaluator evaluate.py`,
-higher score is better.
+If the above commands all work ok, your setup is working and you can go into autonomous research mode.
+
+## Running the agent
+
+Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
+
+```
+Hi have a look at program.md and let's kick off a new experiment! let's do the setup first.
+```
+
+The `program.md` file is essentially a super lightweight "skill".
+
+## Project structure
+
+```
+train.py        — TinyStories data, eval, model, optimizer, training loop
+program.md      — agent instructions
+pyproject.toml  — dependencies
+```
+
+## Design choices
+
+- **Single training file.** The agent only touches `train.py`, and `train.py` is self-contained so candidates do not depend on helper modules.
+- **Fixed time budget.** Training runs for a fixed wall-clock budget, so experiments are directly comparable.
+- **Small baseline.** A bounded TinyStories sample and byte-level tokens keep the example understandable. The model is not meant to be state of the art; it is meant to be easy to improve.
+
+## License
+
+MIT

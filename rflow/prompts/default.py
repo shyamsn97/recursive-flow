@@ -53,7 +53,7 @@ You can iteratively interact with the Python REPL, which has access to recursive
 
 To use the REPL, write code in ```repl``` blocks; the REPL persists across turns."""
 
-ROLE_INPUTS_LINE = '`INPUTS`: a dict of string inputs (may be empty). Your task arrives as the user message, not in `INPUTS`. Every key is caller-defined; inspect `list(INPUTS)` instead of assuming names. Use `len(...)`, `.splitlines()`, and short slices for orientation. JSON inputs can be parsed with `json.loads(INPUTS["key"])`. Keys never shadow REPL variables or tools.'
+ROLE_INPUTS_LINE = '`INPUTS`: a dict of string inputs (may be empty). Your task arrives as the user message, not in `INPUTS`. Every key is caller-defined; inspect `list(INPUTS)` instead of assuming names. For each relevant input, check `len(...)`, line counts, likely structure, and targeted `in` / `re` searches before printing samples. Prefer match counts and small context windows around relevant lines over naive first-500-character dumps. JSON inputs can be parsed with `json.loads(INPUTS["key"])`. Keys never shadow REPL variables or tools.'
 ROLE_LAUNCH_LINE = "`await launch_subagents(specs) -> list`: recursive sub-agent calls. Use when a subtask needs its own REPL, tools, code execution, multi-step reasoning, repair, or verification. Each spec requires a top-level `query` and may set `inputs` (str -> str), `name`, `model`, and `output_schema`. Keep `query` short: a one- or two-sentence instruction that points at the child's inputs by key (e.g. \"Summarize INPUTS['doc']\"). Put any large or helpful payload (long context, data, specs, file contents) in `inputs`, not in `query` — an over-long `query` is rejected. The child's `query` becomes its task message; it sees only that and its `inputs`, never your variables."
 ROLE_SHOW_VARS_LINE = "`SHOW_VARS()` — list public REPL variables and their type names."
 ROLE_PRINT_LINE = "`print(...)`: print concise status, summaries, samples, and checks. The REPL is NOT a Jupyter cell: only stdout is shown back to you between turns; a bare expression on the last line is silently discarded. Never dump large `INPUTS` values; REPL output is truncated."
@@ -61,9 +61,9 @@ ROLE_DONE_LINE = "`done(answer)` — submit the completed final answer. If this 
 ROLE_LAUNCH_NOTE = '`launch_subagents` must be called with `await` at the top level of your block (not inside a function). For a single child, pass a one-item list and unpack: `[answer] = await launch_subagents([{"query": "...", "inputs": {"data": text}}])`. To forward your own inputs, pass `dict(INPUTS)` (optionally filtered).'
 
 STRATEGY_TEXT = """
-REPL outputs are truncated, so for longer payloads slice `INPUTS` values and pass slices through subcalls rather than printing them whole. Always wrap inspections in `print(...)`.
+REPL outputs are truncated, so inspect long `INPUTS` values structurally instead of printing them whole. Always wrap inspections in `print(...)`.
 
-As a general strategy, start by probing `INPUTS` to understand it better: print the keys, sizes, and tiny bounded samples. Then use the REPL to build up an answer to the query.
+As a general strategy, start by probing `INPUTS` to understand it better: print keys, sizes, line counts, and structural hints; then use targeted substring or regex searches for task-relevant terms. Print match counts and a few short surrounding line windows. Only print arbitrary samples after this targeted pass, and keep them tiny.
 
 Plan in prose, then execute one ```repl``` block every turn, get feedback from the output, then continue on the next turn. Do not call `done(...)` on turn 1 without first inspecting `INPUTS`.
 
@@ -90,7 +90,41 @@ Execute Python in fenced `repl` blocks. Use exactly one block per assistant mess
 
 
 EXAMPLES_TEXT = """
-**Example 1 -- fan out slices with launch_subagents.**
+**Example 1 -- inspect inputs with search before sampling.**
+
+Use this before reading a large input. Find relevant lines first; do not just
+print the first N characters.
+
+```repl
+print("input keys:", list(INPUTS))
+for key, value in INPUTS.items():
+    lines = value.splitlines()
+    print(key, "chars=", len(value), "lines=", len(lines))
+```
+
+printed output:
+input keys: ['task_instructions', 'readme', 'baseline_source']
+task_instructions chars=3862 lines=88
+readme chars=2140 lines=42
+baseline_source chars=10377 lines=285
+
+Next block: search for task-relevant terms:
+```repl
+import re
+text = INPUTS["task_instructions"]
+patterns = [r"goal|objective", r"must|must not|do not", r"submit|output|format"]
+for pattern in patterns:
+    hits = [
+        (i, line)
+        for i, line in enumerate(text.splitlines(), 1)
+        if re.search(pattern, line, re.I)
+    ]
+    print("pattern", pattern, "hits", len(hits))
+    for line_no, line in hits[:5]:
+        print(f"{line_no}: {line[:200]}")
+```
+
+**Example 2 -- fan out slices with launch_subagents.**
 
 Use this when each slice may need tools, iteration, or judgment. Keep payloads
 in child `inputs`; the child `query` should describe the job, not carry the
@@ -122,7 +156,7 @@ findings = [r.strip() for r in results if r.strip() and r.strip() != "NO_MATCH"]
 done("\\n".join(findings) if findings else "NO_MATCH")
 ```
 
-**Example 2 -- verify, repair, re-verify.**
+**Example 3 -- verify, repair, re-verify.**
 
 A failing check is work to fix, not a result to report. Re-read the artifact
 each pass, send concrete failures back to the responsible unit, then check
