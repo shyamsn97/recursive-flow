@@ -232,10 +232,10 @@ def test_history_reflects_live_trajectory():
     assert len(hist) > before
 
 
-def test_make_history_tracks_live_graph_across_functional_adopt():
+def test_make_history_tracks_live_graph_across_set_graph():
     # make_history resolves the agent by id, so the functional step API
-    # (graph = flow.step(graph), which deep-copies + adopts) is reflected with
-    # no rebinding of the REPL's HISTORY.
+    # (graph = flow.step(graph), which deep-copies through set_graph) is
+    # reflected with no rebinding of the REPL's HISTORY.
     flow = make_flow(DONE_OK)
     graph = flow.start("q")
     hist = make_history(flow, EngineContext(agent_id=graph.agent_id))

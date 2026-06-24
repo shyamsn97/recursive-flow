@@ -11,7 +11,15 @@ from __future__ import annotations
 
 import re
 
-from rflow import Flow, Graph, is_done, is_errored, is_supervising
+from rflow import (
+    Flow,
+    Graph,
+    create_final_action_message,
+    is_done,
+    is_errored,
+    is_supervising,
+    parallel_step,
+)
 from tests.helpers import ScriptedLLM, first_user_text, make_flow, run_to_completion, types
 
 
@@ -65,6 +73,57 @@ def test_global_step_is_stamped_and_monotonic():
     assert steps[0] == 0  # bootstrap query stamped at step 0
     assert steps == sorted(steps)
     assert g.max_global_step() == max(steps)
+
+
+def test_parallel_step_maps_step_calls_on_one_pool():
+    seen_ids: list[str] = []
+
+    def execute(tasks):
+        seen_ids.extend(task_id for task_id, _fn in tasks)
+        return {task_id: fn() for task_id, fn in tasks}
+
+    flow1 = make_flow('```repl\ndone("one")\n```')
+    flow2 = make_flow('```repl\ndone("two")\n```')
+
+    graph1, graph2 = parallel_step(
+        [
+            (flow1, {"query": "one"}),
+            (flow2, {"query": "two"}),
+        ],
+        pool=execute,
+    )
+
+    assert seen_ids == ["0:root", "1:root"]
+    assert graph1.current().type == "llm_output"
+    assert graph2.current().type == "llm_output"
+
+    graph1, graph2 = parallel_step([(flow1, graph1), (flow2, graph2)], pool=execute)
+
+    assert seen_ids == ["0:root", "1:root", "0:root", "1:root"]
+    assert graph1.result() == "one"
+    assert graph2.result() == "two"
+
+
+def test_parallel_step_rejects_shared_step_kwargs():
+    flow = make_flow()
+    try:
+        parallel_step([flow], query="bad")  # type: ignore[call-arg]
+    except TypeError as exc:
+        assert "query" in str(exc)
+    else:
+        raise AssertionError("parallel_step accepted shared step kwargs")
+
+
+def test_parallel_step_returns_snapshot_when_no_actions():
+    flow = make_flow()
+    graph = run_to_completion(flow, "done")
+
+    [snapshot] = parallel_step([(flow, graph)])
+
+    assert snapshot is not flow.graph
+    assert snapshot.to_dict() == flow.graph.to_dict()
+    flow.graph.nodes.append(graph.nodes[0])
+    assert snapshot.to_dict() != flow.graph.to_dict()
 
 
 # ── single-agent state machine ────────────────────────────────────────
@@ -144,7 +203,7 @@ def test_no_code_block_records_error_then_recovers():
 
 def test_max_iters_forces_final_answer_turn():
     def reply_for(messages):
-        if flow.FINAL in "\n".join(m["content"] for m in messages):
+        if create_final_action_message() in "\n".join(m["content"] for m in messages):
             return '```repl\ndone("final answer")\n```'
         return "```repl\nx = 1\n```"
 

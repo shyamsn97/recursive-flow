@@ -262,7 +262,7 @@ def test_close_tears_down_backends():
     assert closed["n"] == 1
 
 
-def test_step_adopts_external_graph_and_discards_stale_repl():
+def test_set_graph_discards_stale_repl_without_advancing():
     created: list[_CountingRepl] = []
 
     def factory(agent):
@@ -283,17 +283,30 @@ def test_step_adopts_external_graph_and_discards_stale_repl():
     )
     before = incoming.to_dict()
 
-    advanced = flow.step(incoming)
+    current = flow.set_graph(incoming)
 
     assert stale.closed == 1
     assert flow.repls == {}
     assert flow.runtime.repl_env_cache == {}
     assert flow.runtime.repl_inputs_cache == {}
-    assert advanced is flow.graph and advanced is not incoming
+    assert current is flow.graph and current is not incoming
     assert incoming.to_dict() == before
-    assert advanced.query == "new"
-    assert advanced.inputs == {}
-    assert advanced.nodes[0].content == "incoming"
+    assert current.query == "new"
+    assert current.inputs == {}
+    assert current.nodes[0].content == "incoming"
+    assert [node.type for node in current.nodes] == ["user_query"]
+
+
+def test_step_returns_snapshot_not_live_graph():
+    flow = Flow(StubLLM(), max_depth=0)
+    graph = flow.start("q")
+
+    advanced = flow.step(graph)
+
+    assert advanced is not flow.graph
+    assert advanced.to_dict() == flow.graph.to_dict()
+    flow.graph.nodes.append(UserQuery(content="mutated live graph"))
+    assert advanced.to_dict() != flow.graph.to_dict()
 
 
 def test_step_preserves_repl_for_same_graph_history():

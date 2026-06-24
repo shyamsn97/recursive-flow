@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from rflow.prompts.builder import PromptBuilder, Section, SectionBody
 from rflow.prompts.default import DEFAULT_BUILDER, SYSTEM_PROMPT
+from rflow.prompts.messages import (
+    create_final_action_message,
+    create_nudge_message,
+)
 
 __all__ = [
     "DEFAULT_BUILDER",
@@ -17,4 +21,6 @@ __all__ = [
     "SYSTEM_PROMPT",
     "Section",
     "SectionBody",
+    "create_final_action_message",
+    "create_nudge_message",
 ]

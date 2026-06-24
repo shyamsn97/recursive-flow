@@ -84,14 +84,17 @@ class BaseFlow(ABC):
     @abstractmethod
     def step(
         self,
-        graph: Graph | None = None,
+        override_graph: Graph | None = None,
         query: str | None = None,
         inputs: dict[str, str] | None = None,
         *,
         output_schema: Any | None = None,
-        salvage: bool = False,
     ) -> Graph:
         """Advance a run by one engine tick and return the graph."""
+
+    @abstractmethod
+    def set_graph(self, graph: Graph) -> Graph:
+        """Set the current run graph without advancing it."""
 
     @abstractmethod
     def terminate(self, agent_ids: Iterable[str] | None = None) -> Graph:

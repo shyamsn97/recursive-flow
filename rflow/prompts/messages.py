@@ -70,6 +70,16 @@ STATUS_DEPTH_NEAR_MAX = " You are near the recursion limit."
 BASELINE_NOTE = "Baseline mode: no sub-agents available. Do all work in this REPL."
 
 
+def create_nudge_message() -> str:
+    """Nudge appended when the model needs to produce another REPL action."""
+    return CONTINUE_NUDGE
+
+
+def create_final_action_message() -> str:
+    """Nudge appended when iteration budget forces a final ``done(...)`` action."""
+    return FINAL_ANSWER_ACTION
+
+
 def build_inputs_manifest(
     inputs: dict[str, str],
 ) -> str:

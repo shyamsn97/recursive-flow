@@ -53,6 +53,7 @@ class WorkerPoolControl:
             self.inspect_graph_shapes,
             self.inspect_workers,
             self.inspect_worker,
+            self.advance_workers,
             self.advance_worker,
             self.inject_worker_note,
             self.replace_worker_supervisor,
@@ -166,10 +167,33 @@ class WorkerPoolControl:
         return "\n".join(lines)
 
     @rflow.tool("Advance one worker graph by one scheduler tick.", proxy=True)
-    def advance_worker(self, *, worker: str, salvage: bool = False) -> str:
-        run = self._run(worker)
-        run.graph = run.worker.step(run.graph, salvage=salvage)
+    def advance_worker(self, *, worker: str) -> str:
+        self._advance_runs([self._run(worker)])
         return self.inspect_worker(worker=worker)
+
+    @rflow.tool(
+        "Advance multiple unfinished worker graphs by one shared parallel scheduler tick.",
+        proxy=True,
+    )
+    def advance_workers(self, *, workers: list[str] | None = None) -> str:
+        selected = (
+            [self._run(worker) for worker in workers]
+            if workers is not None
+            else list(self.runs.values())
+        )
+        active = [run for run in selected if not run.graph.finished]
+        if not active:
+            return "no selected workers need advancement"
+        self._advance_runs(active)
+        return self.inspect_workers()
+
+    @staticmethod
+    def _advance_runs(runs: list[WorkerRun]) -> None:
+        next_graphs = rflow.parallel_step(
+            [(run.worker, run.graph) for run in runs]
+        )
+        for run, graph in zip(runs, next_graphs):
+            run.graph = graph
 
     @rflow.tool("Inject controller feedback into one worker agent.", proxy=True)
     def inject_worker_note(self, *, worker: str, target: str, note: str) -> str:
@@ -209,7 +233,7 @@ class WorkerPoolControl:
         targets = "all unfinished agents" if agent_ids is None else ", ".join(agent_ids)
         return (
             f"termination requested for {targets} in worker {worker!r}; "
-            "call advance_worker(worker=...) to commit it"
+            "call advance_workers(workers=[...]) to commit it"
         )
 
     @rflow.tool("Return one worker's final result if it is finished.", proxy=True)
@@ -266,15 +290,16 @@ Available control loop:
 3. Use inspect_graph_shapes() while running to verify the graphs actually diverge
    (different child edges, node types, or finished states), not just the labels.
 4. Use inspect_workers() before decisions that need current outputs/errors.
-5. Advance diversified workers with advance_worker(worker="...").
+5. Advance diversified workers together with advance_workers(workers=[...]) or
+   advance_workers() for all unfinished workers.
 6. If an agent is stuck, looping, or missing a key instruction, call
    inject_worker_note(worker=..., target=..., note=...) with a concise,
    evidence-based note.
 7. If a supervisor delegated down a bad route, call replace_worker_supervisor(
-   worker=..., target=..., note=...) and then use
-   advance_worker(worker=..., salvage=True) on the next tick.
+   worker=..., target=..., note=...) and then use advance_workers(workers=[...]) on
+   the next tick.
 8. If the worker has done enough and should stop, call terminate_worker() and
-   then advance_worker() until the forced final answer lands.
+   then advance_workers(workers=[...]) until the forced final answer lands.
 9. When enough independent workers agree on all roots, call done(...) with the
    selected result and short evidence.
 
@@ -292,13 +317,13 @@ Example moves:
 - If inspect_worker_specs() shows duplicate approaches, inject notes or prioritize
   workers so the pool covers genuinely different methods.
 - If inspect_graph_shapes() shows every worker has only root and the same current
-  type, advance different named workers before deciding.
+  type, call advance_workers() before deciding.
 - If worker="one-root" is waiting on a child asked for only one root, keep
   advancing until the child result is visible.
 - If worker="one-root" would resume with one root only, call
   replace_worker_supervisor(worker="one-root", target="root", note="...") to
   turn the bad wait into a controller observation, then call
-  advance_worker(worker="one-root", salvage=True).
+  advance_workers(workers=["one-root"]).
 - Once two approaches agree on x = 2 and x = 3, call done(...) with the answer
   and name the agreeing workers.
 """

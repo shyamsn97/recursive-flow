@@ -209,15 +209,24 @@ def main() -> None:
             child_max_iters=None,
         )
 
-    # One Flow per variant; pass each edited graph to step() to adopt + advance it.
+    # One Flow per variant; step active variants through one shared parallel batch.
     cols_flow = new_flow()
     root_flow = new_flow()
 
     while not (cols_graph.finished and root_graph.finished):
+        active: list[tuple[rflow.Flow, rflow.Graph]] = []
         if not cols_graph.finished:
-            cols_graph = cols_flow.step(cols_graph)
+            active.append((cols_flow, cols_graph))
         if not root_graph.finished:
-            root_graph = root_flow.step(root_graph)
+            active.append((root_flow, root_graph))
+
+        next_graphs = rflow.parallel_step(active)
+        i = 0
+        if not cols_graph.finished:
+            cols_graph = next_graphs[i]
+            i += 1
+        if not root_graph.finished:
+            root_graph = next_graphs[i]
         cols_state = cols_graph.current().type if cols_graph.current() else "<empty>"
         root_state = root_graph.current().type if root_graph.current() else "<empty>"
         print(f"step: Variation A={cols_state}, Variation B={root_state}")

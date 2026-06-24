@@ -108,7 +108,7 @@ def observation_injection() -> None:
     graph = flow.step(injected)  # reacts to the observation -> LLM call
     graph = flow.step(graph)  # executes the LLM's done(...) block
     assert graph.result() == "used the injected controller observation"
-    print_states("after adopting + stepping: run reacted and finished", graph)
+    print_states("after set_graph + stepping: run reacted and finished", graph)
     print(f"result={graph.result()!r}")
     _save_example_graph(
         graph,

@@ -86,7 +86,9 @@ def make_spawn_child(flow: BaseFlow, engine_context: EngineContext):
     return _rflow_spawn_child
 
 
-def make_launch_subagents(spawn_child, *, max_query_chars: int = DEFAULT_MAX_QUERY_CHARS):
+def make_launch_subagents(
+    spawn_child, *, max_query_chars: int = DEFAULT_MAX_QUERY_CHARS
+):
     """Build the public ``launch_subagents(specs)`` launcher.
 
     ``max_query_chars`` bounds each spec's ``query`` so a model cannot route a
@@ -194,7 +196,9 @@ def make_get_subagent_result(flow: BaseFlow, engine_context: EngineContext):
         "Returns one entry per immediate child in launch order.",
         proxy=True,
     )
-    def get_subagent_result(id: str | None = None) -> list[dict[str, Any]]:  # noqa: A002
+    def get_subagent_result(
+        id: str | None = None,
+    ) -> list[dict[str, Any]]:  # noqa: A002
         graph = flow.graph
         if graph is None:
             raise RuntimeError("get_subagent_result(...) needs an active graph")
@@ -208,13 +212,14 @@ def make_get_subagent_result(flow: BaseFlow, engine_context: EngineContext):
             node
             for node in agent.nodes
             if getattr(node, "type", None) == "supervising_output"
-            and getattr(node, "launch_id", None)
         ]
         if target is None:
             if len(launches) == 1:
                 launch = launches[0]
             else:
-                available = ", ".join(getattr(n, "launch_id", "") for n in launches)
+                available = ", ".join(
+                    getattr(n, "launch_id", None) or n.id for n in launches
+                )
                 raise ValueError(
                     "get_subagent_result() needs a launch id; "
                     f"available launches: {available or '<none>'}"
@@ -229,7 +234,9 @@ def make_get_subagent_result(flow: BaseFlow, engine_context: EngineContext):
                 None,
             )
             if launch is None:
-                available = ", ".join(getattr(n, "launch_id", "") for n in launches)
+                available = ", ".join(
+                    getattr(n, "launch_id", None) or n.id for n in launches
+                )
                 raise KeyError(
                     f"no subagent launch {target!r}; "
                     f"available launches: {available or '<none>'}"
@@ -266,7 +273,9 @@ def make_get_subagent_result(flow: BaseFlow, engine_context: EngineContext):
                 entry["result"] = flow._child_result(child_id)  # noqa: SLF001
             elif cur is not None and getattr(cur, "type", None) == "error_output":
                 entry["status"] = "error"
-                entry["error"] = getattr(cur, "content", "") or getattr(cur, "error", "")
+                entry["error"] = getattr(cur, "content", "") or getattr(
+                    cur, "error", ""
+                )
             else:
                 entry["status"] = "pending"
                 entry["error"] = "child is not terminal"
@@ -297,7 +306,7 @@ def make_history(flow: BaseFlow, engine_context: EngineContext) -> "History":
     """Build this agent's ``HISTORY`` view, mirroring ``make_done``.
 
     The view resolves the agent's *live* graph by id at call time (never captures
-    a ``Graph``), so it stays correct across deep-copy-on-adopt, ``inject``, and
+    a ``Graph``), so it stays correct across ``set_graph(...)``, ``inject``, and
     ``truncate`` — and ships nothing until a method is actually called. ``HISTORY``
     is host-bound: a remote runtime object-proxies it so the slice computed over
     the full host trajectory is all that crosses the wire.

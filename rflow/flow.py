@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
 
 import rflow.prompts.projection as prompt_projection
 from rflow.base import BaseFlow
@@ -69,30 +70,6 @@ from rflow.tools.builtins import (
 from rflow.utils.pool import ThreadPool, create_pool
 
 
-class ResumeError(RuntimeError):
-    """Raised when an adopted graph has a suspended agent that can't resume.
-
-    A suspended agent (its current node is :class:`SupervisingOutput`) parks a
-    live coroutine on ``flow.repls`` waiting for child results. That coroutine
-    is never serialized and never crosses a process boundary, so a graph
-    ``load()``-ed from disk — or forked/adopted by a flow that didn't create the
-    coroutine — cannot be resumed bit-for-bit. ``step()`` raises this by default
-    instead of silently diverging or wedging. Pass ``salvage=True`` to truncate
-    the stranded agents back to their delegating turn and re-run it
-    deterministically (re-launching their children) instead.
-    """
-
-    def __init__(self, agent_ids: "Iterable[str]") -> None:
-        self.agent_ids = list(agent_ids)
-        joined = ", ".join(self.agent_ids)
-        super().__init__(
-            f"cannot resume suspended agent(s) [{joined}]: their live REPL "
-            "coroutine did not survive into this process (it is never "
-            "serialized). Re-run from the start, or pass salvage=True to "
-            "truncate the stranded agents and re-delegate deterministically."
-        )
-
-
 class Flow(BaseFlow):
     """A minimal, stateless rlmflow engine.
 
@@ -114,16 +91,12 @@ class Flow(BaseFlow):
     mutation lock); ``step(query=...)`` on a fresh flow is ``start`` + one tick,
     and ``step(query=...)`` on a running graph adds a follow-up turn.
 
-    The text/projection seams below are public on purpose: subclass and
-    override ``CONTINUE`` / ``FINAL`` (nudge text), :meth:`format_exec_output`,
-    :meth:`first_prompt`, :meth:`followup_prompt`, or :meth:`build_messages` to
-    customize what the model sees without touching the loop.
+    The text/projection seams below are public on purpose: customize prompt
+    helpers in :mod:`rflow.prompts.messages`, or override
+    :meth:`format_exec_output`, :meth:`first_prompt`, :meth:`followup_prompt`, or
+    :meth:`build_messages` to change what the model sees without touching the
+    scheduler.
     """
-
-    #: Nudge appended when the latest turn left no pending user message.
-    CONTINUE: str = messages.CONTINUE_NUDGE
-    #: Nudge appended once the agent has exhausted its iteration budget.
-    FINAL: str = messages.FINAL_ANSWER_ACTION
 
     def __init__(
         self,
@@ -242,7 +215,6 @@ class Flow(BaseFlow):
     def tui(
         self,
         *,
-        salvage: bool = False,
         max_steps_per_turn: int | None = None,
     ) -> Graph | None:
         """Open the optional full-screen terminal chat UI for this flow."""
@@ -251,7 +223,6 @@ class Flow(BaseFlow):
 
         return run_tui(
             self,
-            salvage=salvage,
             max_steps_per_turn=max_steps_per_turn,
         )
 
@@ -325,32 +296,61 @@ class Flow(BaseFlow):
         )
         return self.graph
 
+    # ── step pipeline: setup → plan → execute ─────────────────────────
+    #
+    # These methods are intentionally split so ``parallel_step(...)`` can reuse
+    # the setup and planning phases across many independent flows, then execute
+    # all planned actions through one shared pool.
+
     def step(
         self,
-        graph: Graph | None = None,
+        override_graph: Graph | None = None,
         query: str | None = None,
         inputs: dict[str, str] | None = None,
         *,
         output_schema: Schema | None = None,
-        salvage: bool = False,
     ) -> Graph:
         """Advance the run by one tick and return the graph.
 
-        ``graph = agent.step(graph)``: the graph you pass is deep-copied (so it
-        stays a frozen snapshot / checkpoint) and the advanced copy is returned.
-        Omit ``graph`` to advance the flow's own graph in place. ``query=``
-        starts a run (no current graph) or appends a follow-up user turn (merged
-        into a trailing user node so two user messages never sit in a row).
-        ``output_schema=`` on an existing graph updates the root agent's
-        structured-output contract before the next transition.
+        ``graph = agent.step(override_graph)``: the override graph you pass is
+        deep-copied (so it stays a frozen snapshot / checkpoint) and the
+        advanced copy is returned. Omit ``override_graph`` to advance the flow's
+        own graph in place. ``query=`` starts a run (no current graph) or appends
+        a follow-up user turn (merged into a trailing user node so two user
+        messages never sit in a row). ``output_schema=`` on an existing graph
+        updates the root agent's structured-output contract before the next
+        transition.
 
-        A graph loaded/forked while paused mid-delegation (tip
-        ``SupervisingOutput``) has no live coroutine to resume, so this raises
-        :class:`ResumeError` — unless ``salvage=True`` truncates it back to the
-        delegating turn and re-runs it.
+        A graph loaded/forked while paused mid-delegation no longer needs the
+        original coroutine: once children finish, the scheduler injects a
+        recovery turn that can call ``get_subagent_result(...)``.
         """
-        if graph is not None:
-            self._adopt(graph)
+        self.setup_step(
+            override_graph=override_graph,
+            query=query,
+            inputs=inputs,
+            output_schema=output_schema,
+        )
+        plan = self.plan_step()
+        self.run_plan(plan)
+        return self.graph.copy(deep=True)
+
+    def setup_step(
+        self,
+        *,
+        override_graph: Graph | None = None,
+        query: str | None = None,
+        inputs: dict[str, str] | None = None,
+        output_schema: Schema | None = None,
+    ) -> Graph:
+        """Prepare graph state for one scheduler tick without executing actions.
+
+        This is the only phase that adopts an override graph, starts an empty
+        flow from ``query=``, appends follow-up user turns, and syncs live REPL
+        metadata from the graph.
+        """
+        if override_graph is not None:
+            self.set_graph(override_graph)
 
         if self.graph is None:
             if query is None:
@@ -364,21 +364,26 @@ class Flow(BaseFlow):
             if query is not None:
                 self._add_user_turn(query, inputs)
 
-        self.sync_graph_state()
-        self._check_resumable(salvage)
+        return self.sync_graph_state()
+
+    def plan_step(self) -> ActionPlan:
+        """Plan the next scheduler tick for the current graph.
+
+        Planning is pure with respect to model/runtime I/O: it only decides
+        which agent actions are runnable for this tick.
+        """
+        if self.graph is None:
+            raise RuntimeError("plan_step() needs a graph")
         self._step += 1
-        plan = self.plan(self.graph)
-        if plan:
-            self.run_plan(plan)
-        return self.graph
+        return self.plan(self.graph)
 
-    def _adopt(self, graph: Graph) -> None:
-        """Take ``graph`` as run state, deep-copied so the original stays frozen.
+    def set_graph(self, graph: Graph) -> Graph:
+        """Set this flow's current run graph from a deep-copied snapshot.
 
-        If the adopted graph is not the exact same history already bound to
-        this flow, live REPLs are discarded and recreated lazily. A graph can be
-        serialized or edited, but a Python namespace, sandbox process, or
-        suspended coroutine cannot be safely diffed onto a different history.
+        If ``graph`` is not the exact same history already bound to this flow,
+        live REPLs are discarded and recreated lazily. A graph can be serialized
+        or edited, but a Python namespace, sandbox process, or suspended
+        coroutine cannot be safely diffed onto a different history.
         """
         same_history = (
             self.graph is not None and graph.to_dict() == self.graph.to_dict()
@@ -390,6 +395,7 @@ class Flow(BaseFlow):
         self.graph = graph.copy(deep=True)
         self.runtime.clear_graph_sync_cache()
         self._step = self.graph.max_global_step() or 0
+        return self.graph
 
     def _update_root_output_schema(self, output_schema: Schema) -> None:
         """Set the root graph's structured-output contract."""
@@ -431,40 +437,6 @@ class Flow(BaseFlow):
             root, UserQuery(content=self.followup_prompt(query, depth=root.depth))
         )
 
-    def _check_resumable(self, salvage: bool) -> None:
-        """Stop (or salvage) if an adopted graph is paused with no live REPL."""
-        stranded = [
-            a.agent_id
-            for a in self.graph.walk()
-            if isinstance(a.current(), SupervisingOutput)
-            and a.agent_id not in self.repls
-            and not getattr(a.current(), "launch_id", None)
-        ]
-        if not stranded:
-            return
-        if not salvage:
-            raise ResumeError(stranded)
-        for aid in stranded:
-            if aid in self.graph.agents:
-                self._salvage(aid)
-
-    def _salvage(self, agent_id: str) -> None:
-        """Truncate a stranded supervisor back to its delegating turn to re-run it."""
-        from rflow.graph.truncation import prune_unreachable_children
-
-        agent = self.graph[agent_id]
-        keep = next(
-            (
-                i
-                for i in reversed(range(len(agent.nodes)))
-                if isinstance(agent.nodes[i], LLMOutput)
-            ),
-            None,
-        )
-        if keep is not None:
-            agent.nodes = agent.nodes[: keep + 1]
-            prune_unreachable_children(agent)
-
     def terminate(self, agent_ids: "Iterable[str] | None" = None) -> Graph:
         """Force the named agents (or all) to finish on their next LLM turn.
 
@@ -480,7 +452,7 @@ class Flow(BaseFlow):
                 self._terminate_requested.add(aid)
         return self.graph
 
-    # ── execution: how a step's plan is carried out (override seams) ──
+    # ── action execution: turn a plan into parallel work ──────────────
 
     def run_plan(self, plan: ActionPlan) -> None:
         """Carry out one step's plan by running each action.
@@ -492,11 +464,20 @@ class Flow(BaseFlow):
         descendants. Override to add ordering, batching, per-agent rate limits,
         etc.
         """
-        tasks = [(aid, lambda a=action: self.act(a)) for aid, action in plan.items()]
+        tasks = self.action_tasks(plan)
         if self.eager_children:
             self.pool.run_until_idle(tasks, self._refill_eager_children)
             return
         self.pool.execute(tasks)
+
+    def action_tasks(
+        self, plan: ActionPlan, *, task_prefix: str = ""
+    ) -> "list[tuple[str, Callable[[], None]]]":
+        """Convert a plan into executable action tasks."""
+        return [
+            (f"{task_prefix}{agent_id}", lambda action=action: self.act(action))
+            for agent_id, action in plan.items()
+        ]
 
     def _refill_eager_children(
         self, _done_id: str, _result: object, active_ids: set[str]
@@ -558,9 +539,7 @@ class Flow(BaseFlow):
         if isinstance(cur, SupervisingOutput):
             if self._has_live_coroutine(agent.agent_id):
                 return Resume(agent.agent_id)
-            if cur.launch_id:
-                return Recover(agent.agent_id, cur.launch_id)
-            return Resume(agent.agent_id)
+            return Recover(agent.agent_id, cur.launch_id or cur.id)
         if isinstance(cur, LLMOutput):
             return Exec(agent.agent_id)
         if isinstance(cur, (UserQuery, ExecOutput, ErrorOutput)):
@@ -1164,8 +1143,8 @@ class Flow(BaseFlow):
             graph,
             system_prompt=system_prompt,
             max_messages=self.max_messages,
-            continue_nudge=self.CONTINUE,
-            final_nudge=self.FINAL,
+            continue_nudge=messages.create_nudge_message(),
+            final_nudge=messages.create_final_action_message(),
             force_final=force_final,
         )
 
@@ -1275,4 +1254,81 @@ class Flow(BaseFlow):
             return self.graph[agent_id]
 
 
-__all__ = ["Flow", "ResumeError", "find_code_blocks", "SYSTEM_PROMPT"]
+def parallel_step(
+    items: Sequence[
+        Flow | tuple[Flow] | tuple[Flow, Graph | None] | tuple[Flow, dict[str, Any]]
+    ],
+    *,
+    pool: object | None = None,
+) -> list[Graph]:
+    """Advance several independent flows with one shared action batch.
+
+    Each item is either a ``Flow``, ``(flow,)``, ``(flow, override_graph)``, or
+    ``(flow, {"override_graph": graph, "query": ..., ...})``. Step arguments are
+    per item only; there are no shared step kwargs because these are independent
+    flows.
+
+    Unlike mapping ``flow.step`` through a thread pool, this plans every flow
+    first, then executes all runnable actions through one shared pool. Results
+    are returned in input order.
+    """
+
+    flows: list[Flow] = []
+    tasks: list[tuple[str, Callable[[], None]]] = []
+    prefix_tasks = len(items) > 1
+    for index, item in enumerate(items):
+        flow, kwargs = _parallel_step_call(item)
+        if flow.eager_children:
+            raise ValueError(
+                "parallel_step(...) does not support eager_children=True. "
+                "Set eager_children=False so the coordinator owns global scheduling."
+            )
+        flow.setup_step(**kwargs)
+        flows.append(flow)
+        plan = flow.plan_step()
+        task_prefix = f"{index}:" if prefix_tasks else ""
+        tasks.extend(flow.action_tasks(plan, task_prefix=task_prefix))
+    if not flows:
+        return []
+    if not tasks:
+        return [flow.graph.copy(deep=True) for flow in flows]
+
+    owns_pool = pool is None
+    runner = create_pool(pool, max_concurrency=max(1, len(tasks)))
+    try:
+        runner.execute(tasks)
+    finally:
+        if owns_pool and isinstance(runner, ThreadPool):
+            runner.shutdown()
+    return [flow.graph.copy(deep=True) for flow in flows]
+
+
+def _parallel_step_call(
+    item: Flow | tuple[Flow] | tuple[Flow, Graph | None] | tuple[Flow, dict[str, Any]],
+) -> tuple[Flow, dict[str, Any]]:
+    if isinstance(item, Flow):
+        return item, {}
+    if not isinstance(item, tuple) or not item:
+        raise TypeError(
+            "parallel_step(...) items must be Flow or tuple starting with Flow"
+        )
+    flow = item[0]
+    if not isinstance(flow, Flow):
+        raise TypeError("parallel_step(...) item[0] must be a Flow")
+    kwargs: dict[str, Any] = {}
+    if len(item) == 1:
+        return flow, kwargs
+    if len(item) != 2:
+        raise TypeError(
+            "parallel_step(...) tuples must be (flow,), (flow, override_graph), "
+            "or (flow, step_kwargs)"
+        )
+    extra = item[1]
+    if isinstance(extra, dict):
+        kwargs.update(extra)
+    else:
+        kwargs["override_graph"] = extra
+    return flow, kwargs
+
+
+__all__ = ["Flow", "parallel_step", "find_code_blocks", "SYSTEM_PROMPT"]

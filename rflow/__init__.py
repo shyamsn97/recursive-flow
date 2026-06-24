@@ -28,7 +28,7 @@ from rflow.clients import (
     is_retryable,
     retry_transient,
 )
-from rflow.flow import Flow, ResumeError, find_code_blocks
+from rflow.flow import Flow, find_code_blocks, parallel_step
 from rflow.graph import (
     Action,
     ActionNode,
@@ -82,6 +82,8 @@ from rflow.prompts import (
     DEFAULT_BUILDER,
     SYSTEM_PROMPT,
     PromptBuilder,
+    create_final_action_message,
+    create_nudge_message,
 )
 from rflow.repl import REPL, DoneSignal
 from rflow.runtime import DockerRuntime, LocalRuntime, Runtime
@@ -110,7 +112,6 @@ __all__ = [
     "ExecOutput",
     "FILE_TOOLS",
     "Flow",
-    "ResumeError",
     "Graph",
     "LLMAction",
     "LLMChannel",
@@ -123,6 +124,7 @@ __all__ = [
     "ObservationNode",
     "OpenAIClient",
     "PromptBuilder",
+    "parallel_step",
     "Recover",
     "REPL",
     "Resume",
@@ -134,6 +136,8 @@ __all__ = [
     "Trace",
     "UserQuery",
     "WaitRequest",
+    "create_final_action_message",
+    "create_nudge_message",
     "find_code_blocks",
     "get_tool_metadata",
     "inject",

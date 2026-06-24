@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 def tui(
     flow: "Flow",
     *,
-    salvage: bool = False,
     max_steps_per_turn: int | None = None,
 ) -> Graph | None:
     """Open an interactive terminal chat for ``flow`` and return the latest graph.
@@ -47,7 +46,6 @@ def tui(
 
     return run_tui(
         flow,
-        salvage=salvage,
         max_steps_per_turn=max_steps_per_turn,
     )
 
@@ -55,7 +53,6 @@ def tui(
 def run_tui(
     flow: "Flow",
     *,
-    salvage: bool = False,
     max_steps_per_turn: int | None = None,
 ) -> Graph | None:
     """Run the Textual app, importing optional dependencies only here."""
@@ -143,7 +140,6 @@ def run_tui(
             super().__init__()
             self.flow = flow
             self.graph: Graph | None = flow.graph
-            self.salvage = salvage
             self.max_steps_per_turn = max_steps_per_turn
             self._seen_nodes: set[str] = set()
             self._pending: list[tuple[str | None, dict[str, str] | None, Any]] = []
@@ -291,7 +287,6 @@ def run_tui(
                         query=prompt,
                         inputs=turn_inputs,
                         output_schema=schema,
-                        salvage=self.salvage,
                     )
                     self.call_from_thread(self._refresh)
 
@@ -307,7 +302,7 @@ def run_tui(
                             "yellow",
                         )
                         return
-                    self.graph = self.flow.step(self.graph, salvage=self.salvage)
+                    self.graph = self.flow.step(self.graph)
                     steps += 1
                     self.call_from_thread(self._refresh)
             except Exception as exc:  # noqa: BLE001 - TUI should surface failures
