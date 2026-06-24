@@ -126,6 +126,9 @@ class SupervisingOutput(CodeObservation):
 
     type: Literal["supervising_output"] = "supervising_output"
     waiting_on: list[str] = Field(default_factory=list)
+    launch_id: str | None = None
+    launch_specs: list[dict[str, Any]] = Field(default_factory=list)
+    launch_names: list[str] = Field(default_factory=list)
 
 
 class ErrorOutput(CodeObservation):
@@ -273,11 +276,21 @@ class ChildHandle:
 class WaitRequest:
     """Awaited to request suspension until the named children finish."""
 
-    def __init__(self, agent_ids: list[str]) -> None:
+    def __init__(
+        self,
+        agent_ids: list[str],
+        *,
+        launch_id: str | None = None,
+        launch_specs: list[dict[str, Any]] | None = None,
+        launch_names: list[str] | None = None,
+    ) -> None:
         self.agent_ids = agent_ids
+        self.launch_id = launch_id or new_id()
+        self.launch_specs = list(launch_specs or [])
+        self.launch_names = list(launch_names or [])
 
     def __repr__(self) -> str:
-        return f"WaitRequest({self.agent_ids!r})"
+        return f"WaitRequest({self.agent_ids!r}, launch_id={self.launch_id!r})"
 
     def __await__(self):
         results = yield self
@@ -285,11 +298,21 @@ class WaitRequest:
 
     def to_dict(self) -> dict:
         """JSON-safe form for shipping across the remote-REPL proxy boundary."""
-        return {"wait_request": list(self.agent_ids)}
+        return {
+            "wait_request": list(self.agent_ids),
+            "launch_id": self.launch_id,
+            "launch_specs": list(self.launch_specs),
+            "launch_names": list(self.launch_names),
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> "WaitRequest":
-        return cls(list(data["wait_request"]))
+        return cls(
+            list(data["wait_request"]),
+            launch_id=data.get("launch_id"),
+            launch_specs=data.get("launch_specs") or [],
+            launch_names=data.get("launch_names") or [],
+        )
 
 
 # ── Graph ─────────────────────────────────────────────────────────────

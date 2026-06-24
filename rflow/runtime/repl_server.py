@@ -9,18 +9,17 @@ line. Code execution is delegated to the in-process :class:`rflow.repl.REPL`
 (top-level-await detection, suspension, stdout capture, ``DoneSignal``) — this
 module only adds the wire protocol and the host-call proxies.
 
-Host-bound tools (``done`` writes the host's ``env``; ``flow_delegate`` spawns a
-child in the host's graph; ``HISTORY`` reads the host's graph) are installed as
-**proxies** — calling one ships ``{"proxy": name, ...}`` to the host and blocks on
-the reply. Ordinary tools (``FILE_TOOLS`` and friends) are shipped *in* and run
-here against the sandbox's own working directory. ``flow_wait`` and
-``launch_subagents`` are built locally from the proxied ``flow_delegate``
-(suspension is decided by the local coroutine driver).
+Host-bound tools (``done`` writes the host's ``env``; private child spawn mutates
+the host graph; ``HISTORY`` reads the host's graph) are installed as **proxies**.
+Calling one ships ``{"proxy": name, ...}`` to the host and blocks on the reply.
+Ordinary tools (``FILE_TOOLS`` and friends) are shipped *in* and run here against
+the sandbox's own working directory. ``launch_subagents`` is built locally from
+the private spawn proxy, and suspension is decided by the local coroutine driver.
 
 Commands: ``inject`` (literal), ``inject_proxy`` (host-call function),
 ``inject_object`` (host-call object), ``inject_import`` / ``inject_source`` (ship a
-local tool in), ``build_launcher`` (wire up ``flow_wait`` + ``launch_subagents``),
-``run``, ``resume``, ``reset``.
+local tool in), ``build_launcher`` (wire up ``launch_subagents``), ``run``,
+``resume``, ``reset``.
 """
 
 from __future__ import annotations
@@ -38,7 +37,6 @@ from rflow.runtime.runtime import deserialize, serialize
 from rflow.tools.builtins import (
     DEFAULT_MAX_QUERY_CHARS,
     make_launch_subagents,
-    make_wait,
 )
 
 
@@ -84,7 +82,13 @@ class ReplServer:
     def _format(self, suspended: bool, payload: object) -> dict:
         if suspended:
             request, pre_output = payload  # type: ignore[misc]
-            resp: dict = {"suspended": True, "agent_ids": request.agent_ids}
+            resp: dict = {
+                "suspended": True,
+                "agent_ids": request.agent_ids,
+                "launch_id": request.launch_id,
+                "launch_specs": request.launch_specs,
+                "launch_names": request.launch_names,
+            }
             if pre_output:
                 resp["pre_output"] = pre_output
         else:
@@ -135,11 +139,8 @@ class ReplServer:
             return {"ok": True}
         if cmd == "build_launcher":
             ns = self.repl.namespace
-            wait = make_wait()
-            ns["flow_wait"] = wait
             ns["launch_subagents"] = make_launch_subagents(
-                ns["flow_delegate"],
-                wait,
+                ns["_rflow_spawn_child"],
                 max_query_chars=msg.get("max_query_chars") or DEFAULT_MAX_QUERY_CHARS,
             )
             return {"ok": True}

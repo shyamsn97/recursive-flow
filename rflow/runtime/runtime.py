@@ -32,9 +32,9 @@ from rflow.runtime.context import EngineContext
 if TYPE_CHECKING:
     from rflow.graph import Graph
 
-#: Public launchers composed *in the sandbox* from the proxied ``flow_delegate``
-#: (``build_launcher``), so ``seed`` never ships them itself.
-REMOTE_LAUNCHER = ("flow_wait", "launch_subagents")
+#: ``launch_subagents`` is composed *in the sandbox* from a private host-side
+#: child-spawn proxy, so ``seed`` never ships the host closure itself.
+REMOTE_LAUNCHER = ("launch_subagents",)
 
 
 # ── serde ─────────────────────────────────────────────────────────────
@@ -113,7 +113,15 @@ def parse_response(resp: dict) -> tuple[bool, object]:
     Callers set ``errored`` separately from ``resp.get("errored")``.
     """
     if resp.get("suspended"):
-        return True, (WaitRequest(resp["agent_ids"]), resp.get("pre_output", ""))
+        return True, (
+            WaitRequest(
+                resp["agent_ids"],
+                launch_id=resp.get("launch_id"),
+                launch_specs=resp.get("launch_specs") or [],
+                launch_names=resp.get("launch_names") or [],
+            ),
+            resp.get("pre_output", ""),
+        )
     return False, resp.get("output", "")
 
 
@@ -128,12 +136,11 @@ class RemoteRepl(ABC):
     ``engine_context`` is the host-shared object the proxied ``done`` writes into.
 
     :meth:`seed` routes each tool by kind: host-bound tools proxy back (``done``
-    writes the host context; ``flow_delegate`` spawns a child in the host graph;
-    ``HISTORY`` reads the host graph), while ordinary tools
-    (``FILE_TOOLS`` and friends) are shipped into the sandbox to run there.
-    ``flow_wait`` / ``launch_subagents`` are built remotely from the proxied
-    delegate, so child recursion still spawns host-side while the parent's code
-    runs in the sandbox.
+    writes the host context; private child spawn mutates the host graph;
+    ``HISTORY`` reads the host graph), while ordinary tools (``FILE_TOOLS`` and
+    friends) are shipped into the sandbox to run there. ``launch_subagents`` is
+    built remotely from the private spawn proxy, so child recursion still spawns
+    host-side while the parent's code runs in the sandbox.
     """
 
     def __init__(self) -> None:
@@ -192,12 +199,12 @@ class RemoteRepl(ABC):
 
         Each tool is routed by kind (local-by-default, like smolagents):
 
-        * ``flow_wait`` / ``launch_subagents`` are skipped — they're composed in
-          the sandbox from the proxied ``flow_delegate`` (``build_launcher``).
+        * ``launch_subagents`` is skipped — it is composed in the sandbox from a
+          private host child-spawn proxy (``build_launcher``).
         * non-callables (``HISTORY``) are exposed as **object proxies** — public
           methods round-trip to the host, so a slice computed over the live host
           graph is all that crosses the wire.
-        * ``@tool(proxy=True)`` callables (``done``/``flow_delegate``/
+        * ``@tool(proxy=True)`` callables (``done`` / private child spawn /
           ``llm_query_batched``) are **function proxies** — they touch host-only
           state, so calls run on the host.
         * everything else (``FILE_TOOLS``, ``runtime.register_tools(...)``) is
@@ -223,7 +230,7 @@ class RemoteRepl(ABC):
                 self.inject_function_proxy(name, fn)
             else:
                 self.inject_local_tool(name, fn)
-        # Build flow_wait + launch_subagents remotely from the proxied delegate.
+        # Build launch_subagents remotely from the private spawn proxy.
         self.call({"cmd": "build_launcher", "max_query_chars": max_query_chars})
 
     def inject_literal(self, name: str, value: object) -> None:

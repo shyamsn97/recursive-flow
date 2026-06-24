@@ -158,6 +158,8 @@ class BaseFlow(ABC):
         inputs: dict[str, str] | None = None,
         model: str = "default",
         output_schema: Any | None = None,
+        *,
+        strict_name: bool = False,
     ) -> ChildHandle | str:
         """Spawn a recursive child agent."""
 

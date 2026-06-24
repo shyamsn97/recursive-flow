@@ -1,19 +1,18 @@
 """Phase 0 — the in-process REPL (``rflow.repl``).
 
 Ported from the legacy REPL-yield coverage to the new ``rflow.repl.REPL``
-(no namespace ctor arg; ``repl.namespace`` is public).
-Covers top-level-await detection, suspend/resume on ``flow_wait``, the
-unsupported-await guard in the driver, and BaseException capture (errors and
-``SystemExit`` become recorded output rather than crashing the host).
+(no namespace ctor arg; ``repl.namespace`` is public). Covers top-level-await
+detection, suspend/resume on ``WaitRequest``, the unsupported-await guard in the
+driver, and BaseException capture (errors and ``SystemExit`` become recorded
+output rather than crashing the host).
 """
 
 from __future__ import annotations
 
 import ast
 
-from rflow.graph import ChildHandle, WaitRequest
+from rflow.graph import WaitRequest
 from rflow.repl import REPL, _has_top_level_await
-from rflow.tools.builtins import make_wait
 
 # ── top-level await detection ─────────────────────────────────────────
 
@@ -23,7 +22,7 @@ def _await(code: str) -> bool:
 
 
 def test_top_level_await_detected():
-    assert _await("x = await flow_wait(h)") is True
+    assert _await("x = await launch_subagents(specs)") is True
 
 
 def test_await_inside_nested_function_is_not_top_level():
@@ -68,20 +67,21 @@ def test_namespace_persists_across_blocks():
     assert suspended is False and out == "[1, 2]"
 
 
-# ── suspend / resume on flow_wait ─────────────────────────────────────
+# ── suspend / resume on WaitRequest ───────────────────────────────────
 
 
 def _wait_repl() -> REPL:
     r = REPL()
-    r.namespace["flow_wait"] = make_wait()
-    r.namespace["a"] = ChildHandle("root.a")
-    r.namespace["b"] = ChildHandle("root.b")
+    async def wait_agents(*agent_ids):
+        return await WaitRequest(list(agent_ids))
+
+    r.namespace["wait_agents"] = wait_agents
     return r
 
 
 def test_await_wait_suspends_with_agent_ids():
     r = _wait_repl()
-    suspended, payload = r.start("res = await flow_wait(a)")
+    suspended, payload = r.start("res = await wait_agents('root.a')")
     assert suspended is True
     request, pre = payload
     assert isinstance(request, WaitRequest) and request.agent_ids == ["root.a"]
@@ -90,7 +90,7 @@ def test_await_wait_suspends_with_agent_ids():
 
 def test_multiple_handles_in_one_wait():
     r = _wait_repl()
-    suspended, payload = r.start("res = await flow_wait(a, b)")
+    suspended, payload = r.start("res = await wait_agents('root.a', 'root.b')")
     assert suspended is True
     request, _ = payload
     assert request.agent_ids == ["root.a", "root.b"]
@@ -98,15 +98,58 @@ def test_multiple_handles_in_one_wait():
 
 def test_resume_returns_send_value_to_block():
     r = _wait_repl()
-    r.start("res = await flow_wait(a, b)")
+    r.start("res = await wait_agents('root.a', 'root.b')")
     suspended, out = r.resume(["A", "B"])
+    assert suspended is False
+    assert r.namespace["res"] == ["A", "B"]
+
+
+def test_nested_async_helper_can_suspend_and_resume():
+    r = _wait_repl()
+    code = (
+        "async def helper():\n"
+        "    vals = await wait_agents('root.a', 'root.b')\n"
+        "    return '-'.join(vals)\n"
+        "res = await helper()\n"
+        "print(res)\n"
+    )
+    suspended, payload = r.start(code)
+    assert suspended is True
+    request, _pre = payload
+    assert request.agent_ids == ["root.a", "root.b"]
+    suspended, out = r.resume(["A", "B"])
+    assert suspended is False
+    assert out == "A-B"
+    assert r.namespace["res"] == "A-B"
+
+
+def test_nested_async_helper_can_suspend_twice():
+    r = _wait_repl()
+    code = (
+        "async def helper():\n"
+        "    first = await wait_agents('root.a')\n"
+        "    second = await wait_agents('root.b')\n"
+        "    return first + second\n"
+        "res = await helper()\n"
+    )
+    suspended, payload = r.start(code)
+    assert suspended is True
+    request, _pre = payload
+    assert request.agent_ids == ["root.a"]
+    suspended, payload = r.resume(["A"])
+    assert suspended is True
+    request, _pre = payload
+    assert request.agent_ids == ["root.b"]
+    suspended, _out = r.resume(["B"])
     assert suspended is False
     assert r.namespace["res"] == ["A", "B"]
 
 
 def test_pre_output_captured_before_suspension():
     r = _wait_repl()
-    suspended, payload = r.start("print('before wait')\nres = await flow_wait(a)")
+    suspended, payload = r.start(
+        "print('before wait')\nres = await wait_agents('root.a')"
+    )
     assert suspended is True
     _request, pre = payload
     assert pre == "before wait"
@@ -154,7 +197,7 @@ def test_unsupported_await_in_driver_is_rejected():
     suspended, out = r.start("await Boom()")
     assert suspended is False
     assert r.errored is True
-    assert "only `await launch_subagents(...)` is supported" in out
+    assert "only graph-aware awaits" in out
 
 
 def test_resume_without_suspension_errors():

@@ -6,8 +6,8 @@ Covers the backend seam without requiring Docker/Modal/E2B:
 * ``build_argv`` for the Docker transport;
 * :class:`Flow` backend selection (``make_repl`` / ``Runtime.open``);
 * the full JSON-over-stdio protocol, end to end, via an in-process loopback
-  backend wired to the real :class:`ReplServer` — exercising seeding, the
-  ``done`` / ``flow_delegate`` host proxies, suspension, and resume.
+  backend wired to the real :class:`ReplServer` — exercising seeding, host
+  proxies, suspension, and resume.
 """
 
 from __future__ import annotations
@@ -71,10 +71,23 @@ def test_child_handle_roundtrip():
 
 
 def test_wait_request_roundtrip():
-    w = WaitRequest(["a", "b"])
-    assert w.to_dict() == {"wait_request": ["a", "b"]}
+    w = WaitRequest(
+        ["a", "b"],
+        launch_id="launch-1",
+        launch_specs=[{"name": "a", "query": "qa"}],
+        launch_names=["a"],
+    )
+    assert w.to_dict() == {
+        "wait_request": ["a", "b"],
+        "launch_id": "launch-1",
+        "launch_specs": [{"name": "a", "query": "qa"}],
+        "launch_names": ["a"],
+    }
     back = WaitRequest.from_dict(w.to_dict())
     assert isinstance(back, WaitRequest) and back.agent_ids == ["a", "b"]
+    assert back.launch_id == "launch-1"
+    assert back.launch_specs == [{"name": "a", "query": "qa"}]
+    assert back.launch_names == ["a"]
 
 
 def test_serialize_recurses_through_containers():
@@ -410,7 +423,8 @@ def test_loopback_launch_subagents_parallel_in_order():
             return '```repl\ndone("B")\n```'
         return (
             "```repl\n"
-            'rs = await launch_subagents([{"query": "task a"}, {"query": "task bb"}])\n'
+            'rs = await launch_subagents([{"name": "a", "query": "task a"}, '
+            '{"name": "b", "query": "task bb"}])\n'
             'done("|".join(rs))\n'
             "```"
         )
@@ -462,12 +476,12 @@ def test_e2b_seed_routes_tools_by_kind(monkeypatch, tmp_path):
         repl.seed(flow.build_tools(repl.engine_context), {"DOC": "hi"})
         proxied = set(repl.proxied)
         # host-bound callables (proxy=True) are function proxies
-        assert {"done", "flow_delegate"} <= proxied
+        assert {"done", "_rflow_spawn_child", "get_subagent_result"} <= proxied
         assert "llm_query_batched" not in proxied
         # HISTORY is no longer part of the default tool namespace.
         assert not any(name.startswith("HISTORY") for name in proxied)
         # launchers are composed in the sandbox, never proxied
-        assert not (proxied & {"flow_wait", "launch_subagents"})
+        assert not (proxied & {"launch_subagents"})
         # inputs land in the namespace; public agent metadata lands in os.environ.
         assert repl.start('print(INPUTS["DOC"])') == (False, "hi")
         suspended, out = repl.start(

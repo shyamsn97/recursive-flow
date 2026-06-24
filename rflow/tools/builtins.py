@@ -60,62 +60,34 @@ def make_done(flow: BaseFlow, engine_context: EngineContext):
     return done
 
 
-def make_wait():
-    """Build ``flow_wait(*handles)`` with an actionable error on refusals."""
+def make_spawn_child(flow: BaseFlow, engine_context: EngineContext):
+    """Build the private host-side child-spawn hook used by ``launch_subagents``."""
 
-    @tool("Wait for delegated children. Must be called with `await`.")
-    def flow_wait(*handles: ChildHandle) -> WaitRequest:
-        if not handles:
-            raise ValueError("flow_wait() requires at least one child handle")
-        bad = [(i, h) for i, h in enumerate(handles) if not isinstance(h, ChildHandle)]
-        if bad:
-            details = "; ".join(
-                f"handles[{i}] is {type(h).__name__}: {h!r}" for i, h in bad
-            )
-            raise TypeError(
-                "flow_wait() got non-handle arguments — flow_delegate() likely "
-                "refused those calls and returned a refusal string instead of a "
-                "ChildHandle. Read the string(s), fix the cause (unknown `model=` "
-                f"key, max depth reached), and retry. {details}"
-            )
-        return WaitRequest([h.agent_id for h in handles])
-
-    return flow_wait
-
-
-def make_delegate(flow: BaseFlow, engine_context: EngineContext):
-    """Build the hidden ``flow_delegate(...)`` primitive for this agent.
-
-    Reads ``engine_context.agent_id`` at call time to know which agent is
-    spawning, so the same factory works for any agent — no Graph captured.
-    """
-
-    @tool(
-        "Delegate one unit of work to a named child agent. Pass shared "
-        "requirements/data via inputs (a dict of str -> str bound as the "
-        "child's own top-level variables); set output_schema to a JSON Schema "
-        "dict when the child must return a validated value.",
-        proxy=True,
-    )
-    def flow_delegate(
+    @tool("Private rflow transport hook for spawning one child agent.", proxy=True)
+    def _rflow_spawn_child(
         *,
         name: str = "subagent",
         query: str,
         inputs: dict[str, str] | None = None,
         model: str = "default",
         output_schema: Any | None = None,
+        strict_name: bool = False,
     ) -> ChildHandle | str:
         return flow.spawn_child(
-            engine_context.agent_id, name, query, inputs, model, output_schema
+            engine_context.agent_id,
+            name,
+            query,
+            inputs,
+            model,
+            output_schema,
+            strict_name=strict_name,
         )
 
-    return flow_delegate
+    return _rflow_spawn_child
 
 
-def make_launch_subagents(
-    flow_delegate, flow_wait, *, max_query_chars: int = DEFAULT_MAX_QUERY_CHARS
-):
-    """Build the public ``launch_subagents(specs)`` launcher from primitives.
+def make_launch_subagents(spawn_child, *, max_query_chars: int = DEFAULT_MAX_QUERY_CHARS):
+    """Build the public ``launch_subagents(specs)`` launcher.
 
     ``max_query_chars`` bounds each spec's ``query`` so a model cannot route a
     large payload through the child's task message; oversized queries raise
@@ -132,8 +104,14 @@ def make_launch_subagents(
     async def launch_subagents(specs):
         if not isinstance(specs, list):
             raise TypeError("launch_subagents(...) takes a list of dict specs")
+        if not specs:
+            raise ValueError("launch_subagents(...) requires at least one spec")
         results: list = [None] * len(specs)
-        handles, positions = [], []
+        agent_ids: list[str] = []
+        positions: list[int] = []
+        launch_specs: list[dict[str, Any]] = []
+        launch_names: list[str] = []
+        seen_names: set[str] = set()
         for i, spec in enumerate(specs):
             if not isinstance(spec, dict):
                 raise TypeError(
@@ -163,25 +141,139 @@ def make_launch_subagents(
                     "key 'query'; put the child task in the top-level spec "
                     "'query' and use another input key for supporting text"
                 )
-            handle = flow_delegate(
-                name=spec.get("name", "subagent"),
+            name = spec.get("name", "subagent")
+            if not isinstance(name, str):
+                raise TypeError(
+                    "launch_subagents(...) spec 'name' must be a str; got "
+                    f"{type(name).__name__}"
+                )
+            if name in seen_names:
+                raise ValueError(
+                    f"launch_subagents(...) duplicate child name {name!r}; "
+                    "choose a unique 'name' for each spec"
+                )
+            seen_names.add(name)
+            spawned = spawn_child(
+                name=name,
                 query=spec["query"],
                 inputs=inputs,
                 model=spec.get("model", "default"),
                 output_schema=spec.get("output_schema"),
+                strict_name=True,
             )
-            if isinstance(handle, str):
-                results[i] = handle
+            if isinstance(spawned, str):
+                results[i] = spawned
             else:
-                handles.append(handle)
+                if not isinstance(spawned, ChildHandle):
+                    raise TypeError(
+                        "launch_subagents(...) internal spawn hook returned "
+                        f"{type(spawned).__name__}; expected ChildHandle or str"
+                    )
+                agent_ids.append(spawned.agent_id)
                 positions.append(i)
-        if handles:
-            waited = await flow_wait(*handles)
+                launch_specs.append(dict(spec))
+                launch_names.append(str(name))
+        if agent_ids:
+            waited = await WaitRequest(
+                agent_ids,
+                launch_specs=launch_specs,
+                launch_names=launch_names,
+            )
             for pos, result in zip(positions, waited):
                 results[pos] = result
         return results
 
     return launch_subagents
+
+
+def make_get_subagent_result(flow: BaseFlow, engine_context: EngineContext):
+    """Build ``get_subagent_result(id=None)`` over durable graph launch state."""
+
+    @tool(
+        "Read results for a completed subagent launch by launch id. "
+        "Returns one entry per immediate child in launch order.",
+        proxy=True,
+    )
+    def get_subagent_result(id: str | None = None) -> list[dict[str, Any]]:  # noqa: A002
+        graph = flow.graph
+        if graph is None:
+            raise RuntimeError("get_subagent_result(...) needs an active graph")
+        agent = graph.agents.get(engine_context.agent_id)
+        if agent is None:
+            raise RuntimeError(
+                f"current agent {engine_context.agent_id!r} is not in the graph"
+            )
+        target = id or engine_context.recovery_launch_id
+        launches = [
+            node
+            for node in agent.nodes
+            if getattr(node, "type", None) == "supervising_output"
+            and getattr(node, "launch_id", None)
+        ]
+        if target is None:
+            if len(launches) == 1:
+                launch = launches[0]
+            else:
+                available = ", ".join(getattr(n, "launch_id", "") for n in launches)
+                raise ValueError(
+                    "get_subagent_result() needs a launch id; "
+                    f"available launches: {available or '<none>'}"
+                )
+        else:
+            launch = next(
+                (
+                    n
+                    for n in launches
+                    if getattr(n, "launch_id", None) == target or n.id == target
+                ),
+                None,
+            )
+            if launch is None:
+                available = ", ".join(getattr(n, "launch_id", "") for n in launches)
+                raise KeyError(
+                    f"no subagent launch {target!r}; "
+                    f"available launches: {available or '<none>'}"
+                )
+
+        waiting_on = list(getattr(launch, "waiting_on", []))
+        names = list(getattr(launch, "launch_names", []) or [])
+        specs = list(getattr(launch, "launch_specs", []) or [])
+        out: list[dict[str, Any]] = []
+        agents = graph.agents
+        for i, child_id in enumerate(waiting_on):
+            child = agents.get(child_id)
+            name = (
+                names[i]
+                if i < len(names)
+                else child_id.removeprefix(agent.agent_id + ".")
+            )
+            entry: dict[str, Any] = {
+                "agent_id": child_id,
+                "name": name,
+                "status": "missing",
+                "result": None,
+                "error": None,
+            }
+            if i < len(specs):
+                entry["spec"] = specs[i]
+            if child is None:
+                entry["error"] = "child is missing from graph"
+                out.append(entry)
+                continue
+            cur = child.current()
+            if child.finished:
+                entry["status"] = "done"
+                entry["result"] = flow._child_result(child_id)  # noqa: SLF001
+            elif cur is not None and getattr(cur, "type", None) == "error_output":
+                entry["status"] = "error"
+                entry["error"] = getattr(cur, "content", "") or getattr(cur, "error", "")
+            else:
+                entry["status"] = "pending"
+                entry["error"] = "child is not terminal"
+            out.append(entry)
+        return out
+
+    return get_subagent_result
 
 
 def make_show_vars(namespace: dict[str, Any]):
@@ -275,12 +367,12 @@ class History:
 
 
 __all__ = [
+    "make_get_subagent_result",
     "DEFAULT_MAX_QUERY_CHARS",
     "History",
-    "make_delegate",
     "make_done",
     "make_history",
     "make_launch_subagents",
     "make_show_vars",
-    "make_wait",
+    "make_spawn_child",
 ]

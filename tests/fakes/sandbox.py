@@ -11,7 +11,7 @@ which:
   ``tail -f in.jsonl | python -m rflow.runtime.repl_server``, starts a real
   :class:`ReplServer` in a daemon thread whose ``stdin`` *tails* ``in.jsonl`` and
   whose ``stdout`` appends to ``out.jsonl`` — faithfully reproducing the bridge,
-  including mid-execution host proxies (``done`` / ``flow_delegate``);
+  including mid-execution host proxies;
 * runs everything else (the transport's pure-stdlib ``python -c`` append/poll
   snippets, ``mkdir``, ``rm``) as a real subprocess. They only touch files, so
   they share state with the in-thread server via the filesystem and — crucially

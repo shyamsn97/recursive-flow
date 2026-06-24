@@ -26,8 +26,7 @@ def _delegated_graph() -> Graph:
             return '```repl\ndone("c")\n```'
         return (
             "```repl\n"
-            'h = flow_delegate(name="child", query="child task")\n'
-            "results = await flow_wait(h)\n"
+            'results = await launch_subagents([{"name": "child", "query": "child task"}])\n'
             'done("p:" + results[0])\n'
             "```"
         )

@@ -1,11 +1,4 @@
-"""REPL namespace partitioning for prompt generation.
-
-The REPL namespace holds both model-facing tools and a couple of hidden control
-primitives (``flow_delegate``/``flow_wait``) that ``launch_subagents`` composes
-but the model should not call directly. :func:`partition_repl_namespace` splits a
-namespace into ``(visible, hidden)`` so the prompt's tool list only advertises
-the visible ones.
-"""
+"""REPL namespace partitioning for prompt generation."""
 
 from __future__ import annotations
 
@@ -13,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 SHOW_VARS_NAME = "SHOW_VARS"
-HIDDEN_REPL_TOOL_NAMES = frozenset({"flow_delegate", "flow_wait"})
+HIDDEN_REPL_TOOL_NAMES = frozenset()
 
 
 def partition_repl_namespace(
@@ -23,8 +16,8 @@ def partition_repl_namespace(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Split a REPL namespace into ``(visible, hidden)`` callables.
 
-    Skips private names, ``SHOW_VARS``, and non-callables. ``flow_delegate`` /
-    ``flow_wait`` (or any name in ``hidden_names``) go in the hidden bucket.
+    Skips private names, ``SHOW_VARS``, and non-callables. Any name in
+    ``hidden_names`` goes in the hidden bucket.
     """
     visible: dict[str, Any] = {}
     hidden: dict[str, Any] = {}

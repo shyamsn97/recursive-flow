@@ -395,8 +395,7 @@ class _OneChild(ScriptedLLM):
 
     ROOT = (
         "```repl\n"
-        "h = flow_delegate(name='child', query='do thing')\n"
-        "results = await flow_wait(h)\n"
+        "results = await launch_subagents([{'name': 'child', 'query': 'do thing'}])\n"
         "done('root:' + results[0])\n"
         "```"
     )

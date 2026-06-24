@@ -82,12 +82,16 @@ def test_replace_no_block_is_identity():
 
 
 def test_wait_check_accepts_direct_await():
-    assert check_wait_syntax("x = await flow_wait(h)") is None
     assert check_wait_syntax("rs = await launch_subagents([{'query': 'q'}])") is None
 
 
 def test_wait_check_accepts_conditional_await():
-    assert check_wait_syntax("x = (await flow_wait(h)) if cond else None") is None
+    assert (
+        check_wait_syntax(
+            "x = (await launch_subagents([{'query': 'q'}])) if cond else None"
+        )
+        is None
+    )
 
 
 def test_wait_check_rejects_top_level_yield():
@@ -103,7 +107,17 @@ def test_wait_check_rejects_yield_from():
 
 def test_wait_check_rejects_naked_wait():
     err = check_wait_syntax("flow_wait(h)")
-    assert err is not None and "must be awaited" in err
+    assert err is not None and "internal" in err
+
+
+def test_wait_check_rejects_direct_flow_wait():
+    err = check_wait_syntax("x = await flow_wait(h)")
+    assert err is not None and "internal" in err
+
+
+def test_wait_check_rejects_direct_flow_delegate():
+    err = check_wait_syntax('h = flow_delegate(name="x", query="q")')
+    assert err is not None and "internal" in err
 
 
 def test_wait_check_rejects_naked_launch_subagents():
@@ -113,17 +127,15 @@ def test_wait_check_rejects_naked_launch_subagents():
 
 def test_wait_check_rejects_wait_in_comprehension():
     err = check_wait_syntax("[await flow_wait(h) for h in hs]")
-    assert err is not None and "comprehensions" in err
+    assert err is not None and ("internal" in err or "comprehensions" in err)
 
 
-def test_wait_check_rejects_await_in_nested_function():
-    err = check_wait_syntax("async def f():\n    return await launch_subagents([])")
-    assert err is not None and "top level" in err
+def test_wait_check_accepts_nested_async_launch():
+    assert check_wait_syntax("async def f():\n    return await launch_subagents([])") is None
 
 
-def test_wait_check_rejects_unsupported_await():
-    err = check_wait_syntax("x = await something_else()")
-    assert err is not None and "only `await launch_subagents(...)` is supported" in err
+def test_wait_check_allows_unknown_await_for_runtime_driver():
+    assert check_wait_syntax("x = await something_else()") is None
 
 
 def test_wait_check_ignores_plain_code():

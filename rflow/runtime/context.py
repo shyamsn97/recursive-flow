@@ -18,6 +18,7 @@ class EngineContext:
     agent_id: str = ""
     output_schema: dict[str, Any] | None = None
     done_result: str | None = None
+    recovery_launch_id: str | None = None
 
 
 __all__ = ["EngineContext"]

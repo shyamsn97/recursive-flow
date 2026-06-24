@@ -42,8 +42,16 @@ class Resume:
     agent_id: str
 
 
-Action = CallLLM | Exec | Resume
+@dataclass(frozen=True, slots=True)
+class Recover:
+    """Inject a recovery observation for a stranded supervisor."""
+
+    agent_id: str
+    launch_id: str
+
+
+Action = CallLLM | Exec | Resume | Recover
 ActionPlan = dict[str, Action]
 
 
-__all__ = ["Action", "ActionPlan", "CallLLM", "Exec", "Resume"]
+__all__ = ["Action", "ActionPlan", "CallLLM", "Exec", "Recover", "Resume"]

@@ -1,11 +1,9 @@
 """Static checks on agent-emitted code blocks.
 
-The engine runs an agent's ```repl block as a coroutine only when it has a
-*top-level* ``await launch_subagents(...)``. Anything else involving ``await``
-(awaiting the wrong call, awaiting inside a function or comprehension, a bare
-un-awaited ``launch_subagents(...)``) fails confusingly at runtime. This
-pre-flight check turns those into a single clear, recoverable error string the
-model can act on, before the block ever executes.
+The engine understands graph-aware awaits: ``await launch_subagents(...)`` and
+async helpers that eventually yield the same :class:`WaitRequest`. The checks
+below keep invalid bare control calls and unsupported async shapes recoverable
+without trying to prove every helper's runtime behavior statically.
 """
 
 from __future__ import annotations
@@ -64,10 +62,10 @@ def replace_code_block(text: str, new_code: str) -> str:
     return text[: opening.start()] + f"```repl\n{new_code}\n```"
 
 
-# The only calls an agent may ``await`` at action-block top level.
-# ``launch_subagents`` is the public surface; ``flow_wait`` is the internal
-# primitive it composes over (kept awaitable for the engine's own machinery).
-_AWAITABLE_CALLS = {"launch_subagents", "flow_wait"}
+# Public graph-aware await surface. The old delegate/wait primitives are rejected
+# explicitly so stale agent code gets a clear recovery message.
+_PUBLIC_AWAITABLE_CALLS = {"launch_subagents"}
+_INTERNAL_CONTROL_CALLS = {"flow_wait", "flow_delegate"}
 
 
 def check_wait_syntax(code: str) -> str | None:
@@ -89,8 +87,14 @@ def _is_awaitable_call(node: ast.AST | None) -> bool:
     return (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
-        and node.func.id in _AWAITABLE_CALLS
+        and node.func.id in _PUBLIC_AWAITABLE_CALLS
     )
+
+
+def _call_name(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id
+    return None
 
 
 class _WaitSyntaxChecker(ast.NodeVisitor):
@@ -104,8 +108,9 @@ class _WaitSyntaxChecker(ast.NodeVisitor):
         self.errors.append(prefix + message)
 
     def visit_Await(self, node: ast.Await) -> None:  # noqa: N802
-        if not _is_awaitable_call(node.value):
-            self._add(node, "only `await launch_subagents(...)` is supported")
+        name = _call_name(node.value)
+        if name in _INTERNAL_CONTROL_CALLS:
+            self._add(node, f"`{name}(...)` is internal; use `launch_subagents(...)`")
         self.await_depth += 1
         self.generic_visit(node)
         self.await_depth -= 1
@@ -123,6 +128,9 @@ class _WaitSyntaxChecker(ast.NodeVisitor):
         if _is_awaitable_call(node) and self.await_depth == 0:
             name = node.func.id  # type: ignore[union-attr]
             self._add(node, f"`{name}(...)` must be awaited: `await {name}(...)`")
+        name = _call_name(node)
+        if name in _INTERNAL_CONTROL_CALLS:
+            self._add(node, f"`{name}(...)` is internal; use `launch_subagents(...)`")
         self.generic_visit(node)
 
     def visit_ListComp(self, node: ast.ListComp) -> None:  # noqa: N802
@@ -143,28 +151,6 @@ class _WaitSyntaxChecker(ast.NodeVisitor):
                 self._add(
                     node,
                     "`await launch_subagents(...)` is not supported in comprehensions",
-                )
-                return
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
-        self._check_nested(node)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
-        self._check_nested(node)
-
-    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
-        self._check_nested(node)
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
-        self._check_nested(node)
-
-    def _check_nested(self, node: ast.AST) -> None:
-        for child in ast.walk(node):
-            if isinstance(child, ast.Await) or _is_awaitable_call(child):
-                self._add(
-                    node,
-                    "`launch_subagents(...)` is only supported at action-block "
-                    "top level",
                 )
                 return
 

@@ -34,8 +34,7 @@ def _delegating_reply(messages):
         return '```repl\ndone("child-answer")\n```'
     return (
         "```repl\n"
-        'h = flow_delegate(name="child", query="child task")\n'
-        "results = await flow_wait(h)\n"
+        'results = await launch_subagents([{"name": "child", "query": "child task"}])\n'
         'done("p:" + results[0])\n'
         "```"
     )
@@ -210,7 +209,7 @@ def test_error_summary_groups_by_kind():
 
 def test_code_log_pairs_exec_with_output(final_graph):
     log = viz.code_log(final_graph)
-    assert "flow_delegate" in log
+    assert "launch_subagents" in log
     assert "→" in log  # output arrow for at least one block
 
 

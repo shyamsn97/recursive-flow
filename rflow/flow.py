@@ -42,7 +42,7 @@ from rflow.graph import (
     SupervisingOutput,
     UserQuery,
 )
-from rflow.graph.actions import Action, ActionPlan, CallLLM, Exec, Resume
+from rflow.graph.actions import Action, ActionPlan, CallLLM, Exec, Recover, Resume
 from rflow.integrations.structured import (
     Schema,
     StructuredOutputParser,
@@ -60,11 +60,11 @@ from rflow.runtime.runtime import LocalRuntime, RemoteRepl, ReplBackend, Runtime
 from rflow.tools import tool
 from rflow.tools.builtins import (
     DEFAULT_MAX_QUERY_CHARS,
-    make_delegate,
     make_done,
+    make_get_subagent_result,
     make_launch_subagents,
     make_show_vars,
-    make_wait,
+    make_spawn_child,
 )
 from rflow.utils.pool import ThreadPool, create_pool
 
@@ -438,6 +438,7 @@ class Flow(BaseFlow):
             for a in self.graph.walk()
             if isinstance(a.current(), SupervisingOutput)
             and a.agent_id not in self.repls
+            and not getattr(a.current(), "launch_id", None)
         ]
         if not stranded:
             return
@@ -555,6 +556,10 @@ class Flow(BaseFlow):
         if cur is None or cur.terminal:
             return None
         if isinstance(cur, SupervisingOutput):
+            if self._has_live_coroutine(agent.agent_id):
+                return Resume(agent.agent_id)
+            if cur.launch_id:
+                return Recover(agent.agent_id, cur.launch_id)
             return Resume(agent.agent_id)
         if isinstance(cur, LLMOutput):
             return Exec(agent.agent_id)
@@ -614,6 +619,8 @@ class Flow(BaseFlow):
             self.step_exec(agent, cur)
         elif isinstance(action, Resume) and isinstance(cur, SupervisingOutput):
             self.step_after_supervising(agent, cur)
+        elif isinstance(action, Recover) and isinstance(cur, SupervisingOutput):
+            self.step_recover_supervising(agent, cur)
 
     # ── LLM access (override seams) ───────────────────────────────────
 
@@ -711,6 +718,19 @@ class Flow(BaseFlow):
             agent, repl, suspended, payload, resumed_from=list(sup.waiting_on)
         )
 
+    def step_recover_supervising(self, agent: Graph, sup: SupervisingOutput) -> None:
+        """Append a recovery observation for a stranded supervisor."""
+        if not self._can_resume(sup):
+            return
+        self._append(
+            agent,
+            ExecOutput(
+                output="",
+                content=self.recovery_prompt(agent, sup),
+                resumed_from=list(sup.waiting_on),
+            ),
+        )
+
     def record_observation(
         self,
         agent: Graph,
@@ -743,6 +763,9 @@ class Flow(BaseFlow):
                     output=pre,
                     content=self.format_exec_output(pre) if pre.strip() else "",
                     waiting_on=list(request.agent_ids),
+                    launch_id=request.launch_id,
+                    launch_specs=list(request.launch_specs),
+                    launch_names=list(request.launch_names),
                     resumed_from=rf,
                 ),
             )
@@ -799,6 +822,43 @@ class Flow(BaseFlow):
         agents = self.graph.agents
         return all(aid in agents and agents[aid].finished for aid in sup.waiting_on)
 
+    def _has_live_coroutine(self, agent_id: str) -> bool:
+        """Whether this Flow can resume ``agent_id``'s suspended Python frame."""
+        repl = self.repls.get(agent_id)
+        if repl is None:
+            return False
+        # Local REPLs expose ``coro``; remote backends do not, but if the backend
+        # survived in ``self.repls`` it owns the paused state.
+        return getattr(repl, "coro", True) is not None
+
+    def recovery_prompt(self, agent: Graph, sup: SupervisingOutput) -> str:
+        """Prompt shown when a stranded supervisor must recover from graph state."""
+        launch_id = sup.launch_id or sup.id
+        children = "\n".join(f"- `{aid}`" for aid in sup.waiting_on)
+        return "\n\n".join(
+            [
+                "You are recovering this agent after a delegated subagent call.",
+                (
+                    "The original Python coroutine is unavailable, so execution "
+                    "cannot resume at the line after `await launch_subagents(...)`."
+                ),
+                (
+                    f"Delegation `{launch_id}` is complete. Its immediate child "
+                    "results are available in original launch order."
+                ),
+                f"Immediate children:\n{children or '- <none>'}",
+                (
+                    "Call:\n"
+                    f"```repl\nresults = get_subagent_result({launch_id!r})\n```"
+                ),
+                (
+                    "Then continue this agent's task from those graph-backed "
+                    "results. Do not relaunch these children unless you decide "
+                    "their results are invalid."
+                ),
+            ]
+        )
+
     def _child_result(self, agent_id: str) -> object:
         """Value handed back to a parent's coroutine for one finished child.
 
@@ -828,6 +888,7 @@ class Flow(BaseFlow):
         inputs: dict[str, str] | None = None,
         model: str = "default",
         output_schema: Schema | None = None,
+        strict_name: bool = False,
     ) -> ChildHandle | str:
         """Create a child agent under ``parent_agent_id`` in the current run.
 
@@ -846,7 +907,17 @@ class Flow(BaseFlow):
             parent = self.graph[parent_agent_id]
             if parent.depth >= self.max_depth:
                 return f"[refused: max depth {self.max_depth}] do this inline"
-            child_id = self._unique_id(parent_agent_id, name, parent)
+            base_child_id = f"{parent_agent_id}.{name}"
+            if strict_name and base_child_id in parent.children:
+                raise ValueError(
+                    f"child id {base_child_id!r} already exists; choose a unique "
+                    "`name` for this launch_subagents(...) spec"
+                )
+            child_id = (
+                base_child_id
+                if strict_name
+                else self._unique_id(parent_agent_id, name, parent)
+            )
             parent_node = parent.current()
             child = Graph(
                 agent_id=child_id,
@@ -995,20 +1066,17 @@ class Flow(BaseFlow):
         :meth:`repl_for`. For most cases, register tools on the runtime
         (``runtime.register_tools(FILE_TOOLS)``) and they are merged in here.
         Override (typically ``super().build_tools(engine_context) | extra``) only
-        when a tool must close over the context or the flow. ``flow_delegate`` /
-        ``flow_wait`` are hidden control primitives that ``launch_subagents``
-        composes; the rest are model-facing.
+        when a tool must close over the context or the flow.
         """
         engine_context = engine_context or EngineContext()
-        delegate = make_delegate(self, engine_context)
-        wait = make_wait()
+        spawn_child = make_spawn_child(self, engine_context)
         tools = {
             "done": make_done(self, engine_context),
-            "flow_wait": wait,
-            "flow_delegate": delegate,
             "launch_subagents": make_launch_subagents(
-                delegate, wait, max_query_chars=self.max_query_chars
+                spawn_child, max_query_chars=self.max_query_chars
             ),
+            "_rflow_spawn_child": spawn_child,
+            "get_subagent_result": make_get_subagent_result(self, engine_context),
         }
         if self.include_llm_query:
             tools["llm_query_batched"] = self.llm_query_batched
@@ -1159,9 +1227,9 @@ class Flow(BaseFlow):
     _RESERVED = frozenset(
         {
             "done",
-            "flow_wait",
-            "flow_delegate",
             "launch_subagents",
+            "get_subagent_result",
+            "_rflow_spawn_child",
             "llm_query_batched",
             "query",
             "HISTORY",

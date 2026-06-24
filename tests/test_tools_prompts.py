@@ -23,12 +23,10 @@ from rflow.runtime.context import EngineContext
 from rflow.tools import format_tool_line
 from rflow.tools.builtins import (
     History,
-    make_delegate,
     make_done,
     make_history,
     make_launch_subagents,
     make_show_vars,
-    make_wait,
 )
 from rflow.tools.filesystem import (
     append_file,
@@ -119,8 +117,10 @@ def test_partition_repl_namespace_hides_control_tools():
     visible, hidden = partition_repl_namespace(namespace)
     assert set(hidden) == set(HIDDEN_REPL_TOOL_NAMES)
     assert "done" in visible and "launch_subagents" in visible
+    assert "get_subagent_result" in visible
     assert "llm_query_batched" not in visible
     assert "flow_delegate" not in visible
+    assert "flow_wait" not in visible
 
 
 def test_partition_skips_private_and_noncallable():
@@ -134,26 +134,26 @@ def test_partition_skips_private_and_noncallable():
 # ── builtins factories ──────────────────────────────────────────────────
 
 
-def test_make_wait_errors_and_success():
-    flow_wait = make_wait()
-    with pytest.raises(ValueError):
-        flow_wait()
-    with pytest.raises(TypeError, match="non-handle"):
-        flow_wait("refusal string")
-    req = flow_wait(ChildHandle("a"), ChildHandle("b"))
-    assert isinstance(req, WaitRequest) and req.agent_ids == ["a", "b"]
+def _run_launch(coro, child_results: list | None = None):
+    try:
+        request = coro.send(None)
+    except StopIteration as done:
+        return done.value
+    assert isinstance(request, WaitRequest)
+    try:
+        coro.send(child_results or [])
+    except StopIteration as done:
+        return done.value
+    raise AssertionError("launch_subagents coroutine did not finish after results")
 
 
 def test_make_launch_subagents_spec_validation():
     import asyncio
 
-    def fake_delegate(**spec):
+    def fake_spawn(**spec):
         return ChildHandle(spec["name"])
 
-    async def fake_wait(*handles):
-        return [h.agent_id for h in handles]
-
-    launch = make_launch_subagents(fake_delegate, fake_wait, max_query_chars=2_000)
+    launch = make_launch_subagents(fake_spawn, max_query_chars=2_000)
     with pytest.raises(TypeError, match="list of dict"):
         asyncio.run(launch("notalist"))
     with pytest.raises(TypeError, match="every spec to be a dict"):
@@ -166,7 +166,12 @@ def test_make_launch_subagents_spec_validation():
         asyncio.run(launch([{"name": "x", "query": "x" * 2_001}]))
     with pytest.raises(ValueError, match="inputs must not contain reserved key 'query'"):
         asyncio.run(launch([{"name": "x", "query": "q", "inputs": {"query": "bad"}}]))
-    out = asyncio.run(launch([{"name": "a", "query": "q"}, {"name": "b", "query": "q"}]))
+    with pytest.raises(ValueError, match="duplicate child name"):
+        asyncio.run(launch([{"name": "x", "query": "q"}, {"name": "x", "query": "q"}]))
+    out = _run_launch(
+        launch([{"name": "a", "query": "q"}, {"name": "b", "query": "q"}]),
+        ["a", "b"],
+    )
     assert out == ["a", "b"]
 
 
@@ -317,12 +322,14 @@ def test_build_system_prompt_has_dynamic_tool_docs():
     flow = make_flow(include_llm_query=False)
     agent = flow.start("q")
     prompt = flow.build_system_prompt(agent)
-    assert "\n## Tools\n\n" not in prompt
+    assert "\n## Tools\n\n" in prompt
     assert "`done(" in prompt
     assert "launch_subagents" in prompt
+    assert "`get_subagent_result(" in prompt
     assert "llm_query_batched" not in prompt
     # hidden control tools are not advertised
     assert "`flow_delegate(" not in prompt
+    assert "`flow_wait(" not in prompt
     # recursion status
     assert "recursion depth" in prompt
 
@@ -512,10 +519,10 @@ def test_make_show_vars_filters_tools_and_hidden():
     def done():
         return None
 
-    ns = {"x": 5, "_p": 1, "done": done, "flow_delegate": (lambda: None)}
+    ns = {"x": 5, "_p": 1, "done": done, "_rflow_spawn_child": (lambda: None)}
     get = make_show_vars(ns)
     out = get()
-    assert out == {"x": "int"}  # tool (metadata) + hidden + private all filtered
+    assert out == {"x": "int"}  # tool metadata + private names are filtered
 
 
 # ── FileFlow integration ────────────────────────────────────────────────
@@ -552,6 +559,7 @@ def test_file_flow_writes_and_reads(tmp_path, monkeypatch):
     assert "- `llm_query_batched(" not in tools_section
     assert "- `flow_delegate(" not in tools_section
     assert "- `flow_wait(" not in tools_section
+    assert "- `get_subagent_result(" in tools_section
 
 
 # ── filesystem tools: edge cases (ported from legacy test_filesystem_tools) ─
@@ -632,60 +640,16 @@ def test_file_tools_collection_is_complete():
     }
 
 
-# ── make_delegate unit behavior (ported from legacy test_builtins) ──────
-
-
-def test_flow_delegate_is_keyword_only_and_wires_spawn():
-    import inspect
-
-    flow = make_flow()
-    agent = flow.start("q")
-    captured = {}
-
-    def fake_spawn(parent_agent_id, name, query, inputs, model, output_schema):
-        captured.update(
-            parent_agent_id=parent_agent_id,
-            name=name,
-            query=query,
-            inputs=inputs,
-            model=model,
-            output_schema=output_schema,
-        )
-        return ChildHandle(f"{parent_agent_id}.{name}")
-
-    flow.spawn_child = fake_spawn  # type: ignore[assignment]
-    context = EngineContext(agent_id=agent.agent_id)
-    delegate = make_delegate(flow, context)
-
-    params = inspect.signature(delegate).parameters
-    assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in params.values())
-
-    handle = delegate(name="kid", query="do it", inputs={"k": "v"}, model="default")
-    assert isinstance(handle, ChildHandle) and handle.agent_id == "root.kid"
-    assert captured == {
-        "parent_agent_id": "root",
-        "name": "kid",
-        "query": "do it",
-        "inputs": {"k": "v"},
-        "model": "default",
-        "output_schema": None,
-    }
-
-
 def test_launch_subagents_mixes_refusal_strings_and_handles():
-    import asyncio
-
     calls = iter([ChildHandle("root.ok"), "refused: max depth"])
 
-    def fake_delegate(**spec):
+    def fake_spawn(**spec):
         return next(calls)
 
-    async def fake_wait(*handles):
-        return [f"result:{h.agent_id}" for h in handles]
-
-    launch = make_launch_subagents(fake_delegate, fake_wait, max_query_chars=2_000)
-    out = asyncio.run(
-        launch([{"query": "a"}, {"query": "b"}])
+    launch = make_launch_subagents(fake_spawn, max_query_chars=2_000)
+    out = _run_launch(
+        launch([{"name": "ok", "query": "a"}, {"name": "refused", "query": "b"}]),
+        ["result:root.ok"],
     )
     # handle slot gets the awaited result; refusal slot keeps the string.
     assert out == ["result:root.ok", "refused: max depth"]

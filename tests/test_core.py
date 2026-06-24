@@ -178,8 +178,7 @@ def _tight_parent_child(messages):
         return '```repl\ndone("c")\n```'
     return (
         "```repl\n"
-        'h = flow_delegate(name="child", query="child task")\n'
-        "results = await flow_wait(h)\n"
+        'results = await launch_subagents([{"name": "child", "query": "child task"}])\n'
         'done("p:" + results[0])\n'
         "```"
     )
@@ -222,7 +221,7 @@ def test_launch_subagents_fans_out_in_order():
             return '```repl\ndone("B")\n```'
         return (
             "```repl\n"
-            'rs = await launch_subagents([{"query": "task a"}, {"query": "task bb"}])\n'
+            'rs = await launch_subagents([{"name": "a", "query": "task a"}, {"name": "b", "query": "task bb"}])\n'
             'done("|".join(rs))\n'
             "```"
         )
@@ -231,6 +230,83 @@ def test_launch_subagents_fans_out_in_order():
     g = run_to_completion(flow, "p")
     assert g.result() == "A|B"
     assert len(g.children) == 2
+    sup = next(n for n in g.nodes if is_supervising(n))
+    assert sup.launch_id
+    assert sup.launch_names == ["a", "b"]
+    assert [spec["query"] for spec in sup.launch_specs] == ["task a", "task bb"]
+
+
+def test_launch_subagents_inside_async_helper_runs_live():
+    def reply_for(messages):
+        task = first_user_text(messages)
+        if "task a" in task:
+            return '```repl\ndone("A")\n```'
+        if "task b" in task:
+            return '```repl\ndone("B")\n```'
+        return (
+            "```repl\n"
+            "async def helper():\n"
+            '    first = await launch_subagents([{"name": "a", "query": "task a"}])\n'
+            '    second = await launch_subagents([{"name": "b", "query": "task b"}])\n'
+            "    return first[0] + second[0]\n"
+            "result = await helper()\n"
+            "done(result)\n"
+            "```"
+        )
+
+    flow = Flow(ScriptedLLM(reply_for), max_depth=2, max_iters=8)
+    g = run_to_completion(flow, "p")
+    assert g.result() == "AB"
+    sups = [n for n in g.nodes if is_supervising(n)]
+    assert len(sups) == 2
+    assert [sup.launch_names for sup in sups] == [["a"], ["b"]]
+
+
+def test_stranded_supervisor_recovers_with_get_subagent_result():
+    def live_reply_for(messages):
+        task = first_user_text(messages)
+        if "child task" in task:
+            return '```repl\ndone("child-result")\n```'
+        return (
+            "```repl\n"
+            'results = await launch_subagents([{"name": "child", "query": "child task"}])\n'
+            'done("live:" + results[0])\n'
+            "```"
+        )
+
+    live = Flow(ScriptedLLM(live_reply_for), max_depth=1, max_iters=6)
+    live.start("parent")
+    while True:
+        live.step()
+        root = live.graph
+        sup = next((n for n in root.nodes if is_supervising(n)), None)
+        if sup is not None and root["root.child"].finished and root.current() is sup:
+            break
+
+    launch_id = sup.launch_id
+    assert launch_id
+
+    def recovery_reply_for(messages):
+        joined = "\n".join(m["content"] for m in messages)
+        assert "recovering this agent" in joined
+        assert launch_id in joined
+        return (
+            "```repl\n"
+            f"results = get_subagent_result({launch_id!r})\n"
+            'done("recovered:" + results[0]["result"])\n'
+            "```"
+        )
+
+    recovered = Flow(ScriptedLLM(recovery_reply_for), max_depth=1, max_iters=6)
+    graph = live.graph.copy(deep=True)
+    steps = 0
+    while not graph.finished:
+        graph = recovered.step(graph)
+        steps += 1
+        assert steps < 20
+
+    assert graph.result() == "recovered:child-result"
+    assert any(n.type == "exec_output" and "get_subagent_result" in n.content for n in graph.nodes)
 
 
 def test_structured_child_result_is_parsed_not_a_json_string():
@@ -282,13 +358,12 @@ def test_resume_does_not_leak_child_result_into_prompt():
         prior_assistant = "\n".join(
             m["content"] for m in messages if m["role"] == "assistant"
         )
-        if "flow_wait" in prior_assistant:
+        if "launch_subagents" in prior_assistant:
             captured["resume_messages"] = messages
             return '```repl\ndone("parent:" + results[0])\n```'
         return (
             "```repl\n"
-            'h = flow_delegate(name="child", query="child task")\n'
-            "results = await flow_wait(h)\n"
+            'results = await launch_subagents([{"name": "child", "query": "child task"}])\n'
             'print("MARKER")\n'
             "```"
         )
@@ -313,8 +388,9 @@ def test_recursive_depth_chain():
             return f'```repl\ndone("leaf@{level}")\n```'
         return (
             "```repl\n"
-            f'h = flow_delegate(name="child", query="level:{level + 1}")\n'
-            "results = await flow_wait(h)\n"
+            "results = await launch_subagents([\n"
+            f'    {{"name": "child", "query": "level:{level + 1}"}}\n'
+            "])\n"
             f'done("d{level}->" + results[0])\n'
             "```"
         )
@@ -335,8 +411,8 @@ def test_max_depth_refusal_keeps_run_alive():
             return '```repl\ndone("unreachable")\n```'
         return (
             "```repl\n"
-            'r = flow_delegate(name="c", query="go")\n'
-            'done(r if isinstance(r, str) else "delegated")\n'
+            'results = await launch_subagents([{"name": "c", "query": "go"}])\n'
+            'done(results[0])\n'
             "```"
         )
 

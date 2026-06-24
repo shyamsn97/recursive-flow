@@ -216,7 +216,9 @@ class REPL:
                 return False, self._output
             if isinstance(request, WaitRequest):
                 return True, (request, self._output)
-            raise TypeError("only `await launch_subagents(...)` is supported")
+            raise TypeError(
+                "only graph-aware awaits that yield WaitRequest are supported"
+            )
         return False, self._output
 
 
