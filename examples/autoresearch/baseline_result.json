@@ -1,0 +1,18 @@
+{
+  "depth": 4,
+  "elapsed_s": 275.27445511599996,
+  "gpu": "L4",
+  "job_id": "cached-baseline-20260629-193221",
+  "num_params_M": 16.1,
+  "num_steps": 1798,
+  "peak_vram_mb": 4031.1,
+  "returncode": 0,
+  "score": -1.155102,
+  "status": "succeeded",
+  "stderr_tail": "Using CPython 3.12.1 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\nInstalled 76 packages in 570ms\nW0630 02:35:03.213000 71 .venv/lib/python3.12/site-packages/torch/_inductor/utils.py:1613] [0/0] Not enough SMs to use max_autotune_gemm mode\n",
+  "stdout_tail": "--- eval ---\n---\nval_bpb:          1.155102\ntraining_seconds: 180.0\ntotal_seconds:    198.0\npeak_vram_mb:     4031.1\ntotal_tokens_M:   29.5\nnum_steps:        1798\nnum_params_M:     16.1\ndepth:            4\n",
+  "total_seconds": 198.0,
+  "total_tokens_M": 29.5,
+  "training_seconds": 180.0,
+  "val_bpb": 1.155102
+}

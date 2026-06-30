@@ -22,23 +22,41 @@ Continue using the REPL environment and querying sub-LLMs / sub-agents by writin
 CONTINUE_ACTION = "Continue your next action:"
 
 FIRST_TURN_INSPECTION_NUDGE = """\
-If you have any `INPUTS`, your first REPL block should usually inspect their names, sizes, and only the short previews needed to understand the task (e.g. `print(list(INPUTS))`, `print({k: len(v) for k, v in INPUTS.items()})`). Never print a full large input; keep full chunks in variables and pass focused chunks to subcalls.
+If `INPUTS` is non-empty, make your first REPL block an inspection-only observation turn: print keys, sizes, line counts, likely formats, and the constraints or line windows needed to understand the task. Wait for that REPL output before planning, calling `done(...)`, launching subagents, or running effectful tools. For small instruction-like inputs, read or outline them fully enough that the next turn can reason from the actual constraints. For large inputs, keep full values in variables and print targeted windows instead of dumping the payload.
 """
 
 
-def build_decomposition_nudge() -> str:
-    """Orchestrator routing hint for the bootstrap turn.
+def build_decomposition_nudge(*, depth: int = 0, max_depth: int = 0) -> str:
+    """Depth-aware planning and delegation hint for the bootstrap turn.
 
-    Frames the agent as a router, not a solver: split independent work into
-    sub-agents, then integrate and verify before finalizing.
+    The root gets coordinator framing. Children keep ownership of their assigned
+    task and delegate only when a separable subtask benefits from its own agent.
     """
+    if depth <= 0:
+        return (
+            "You are this task's root coordinator. After the relevant context has "
+            "been observed, either act directly for simple work or write a short "
+            "plan for multi-step work. When there are separable pieces, launch "
+            "them as sub-agents in parallel with `await launch_subagents([...])`; "
+            "make the launch block after the observation turn. Use the root for "
+            "preparing focused inputs, integrating child results, verifying the "
+            "combined work, and calling done(...)."
+        )
+    if max_depth > 0 and depth >= max_depth - 1:
+        return (
+            "Own your assigned task. You are near the recursion limit, so prefer "
+            "solving locally after observing relevant context. You may still "
+            "delegate a clearly bounded leaf subtask with "
+            "`await launch_subagents([...])` when that is the best way to finish, "
+            "but keep responsibility for integrating the result and calling "
+            "done(...)."
+        )
     return (
-        "You are this task's orchestrator. After inspecting `INPUTS`, ask what "
-        "work can proceed independently. When there are separable pieces, launch "
-        "them as sub-agents in parallel with `await launch_subagents([...])`; "
-        "when your plan identifies independent branches, make the next REPL block "
-        "launch those branches. Use the root for preparing focused inputs, "
-        "integrating child results, verifying the combined work, and calling "
+        "Own your assigned task. After the relevant context has been observed, "
+        "either solve simple work directly or write a short plan for multi-step "
+        "work. You may delegate clearly separable subtasks with "
+        "`await launch_subagents([...])` when another agent would help, but keep "
+        "responsibility for integrating the result, verifying it, and calling "
         "done(...)."
     )
 
@@ -98,15 +116,18 @@ def build_inputs_manifest(
         "Your REPL INPUTS contain:\n"
         + "\n".join(lines)
         + f"\nTotal input chars: {total}.\n"
-        + 'Print only small bounded samples, e.g. `print(INPUTS["<key>"][:500])`; never print a full large input.'
+        + "Choose an inspection strategy for each input: small instruction-like "
+        "inputs can be read or outlined fully; large inputs should be "
+        "summarized by structure plus targeted line windows around relevant "
+        "constraints."
     )
 
     if total > 50_000:
         manifest += (
             f"\n\nThese inputs total ~{total} characters (~{total // 4} tokens). "
-            "Print only tiny samples for orientation, then chunk large inputs in "
-            "variables and process the pieces in parallel with "
-            "`await launch_subagents([...])`."
+            "Keep large values in variables, print only the structure and "
+            "task-relevant windows, then process focused pieces in later turns "
+            "or subagents."
         )
     return manifest
 
@@ -146,7 +167,7 @@ def first_prompt(
     parts.append(USER_PROMPT_WITH_ROOT)
     parts.append(FIRST_TURN_INSPECTION_NUDGE.strip())
     if max_depth > 0 and depth < max_depth:
-        parts.append(build_decomposition_nudge())
+        parts.append(build_decomposition_nudge(depth=depth, max_depth=max_depth))
     parts.append(depth_note(depth, max_depth))
     return "\n\n".join(p for p in parts if p)
 

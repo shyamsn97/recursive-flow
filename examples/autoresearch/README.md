@@ -1,63 +1,94 @@
 # autoresearch
 
-This example gives agents a small, real language-model training loop and lets
-them submit variations. The baseline is intentionally boring: a bounded
-TinyStories sample, byte-level tokens, a compact GPT, AdamW, and a fixed time
-budget.
+`autoresearch` is a compact autoresearch loop: an agent edits a single GPT
+training file, submits GPU trials through Modal, and tries to lower validation
+bits per byte on TinyStories.
 
-## How it works
+This example is meant to be easy to understand and cheap enough to iterate on.
+It keeps the rflow hierarchy/ledger/Modal wrapper, but the ML task is just:
 
-The repo is deliberately kept small and only really has two files that matter:
+- Hugging Face TinyStories dataset.
+- GPT-2 tokenizer.
+- A compact GPT model in one editable `train.py`.
+- Fixed-time training.
+- `val_bpb` as the ranking metric.
 
-- **`train.py`** — the single file the agent edits. Contains TinyStories cache setup, byte tokenization, batch sampling, BPB-style evaluation, GPT model, AdamW, and the training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
-- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
+## Files
 
-By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
+- `prepare.py` — downloads/tokenizes TinyStories and provides fixed dataloaders
+  and validation BPB. Agents should not edit this.
+- `train.py` — the only file agents edit.
+- `program.md` — task-only instructions given to agents.
+- `run.py` — rflow coordinator that creates trial directories and launches the
+  hierarchy.
+- `modal_runner.py` — Modal execution for each trial directory.
+- `pyproject.toml` — dependencies.
 
-If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
+## Quick Start
 
-## Quick start
-
-**Requirements:** Python 3.10+, [uv](https://docs.astral.sh/uv/), and ideally a CUDA GPU. CPU works for smoke tests but is slow.
+From this directory:
 
 ```bash
-
-# 1. Install uv project manager (if you don't already have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Install dependencies
 uv sync
-
-# 3. Manually run a single training experiment (~5 min, plus one-time cache setup)
+uv run prepare.py
 uv run train.py
 ```
 
-If the above commands all work ok, your setup is working and you can go into autonomous research mode.
+`prepare.py` writes cached token tensors under `~/.cache/autoresearch`.
 
-## Running the agent
+## Run With rflow + Modal
 
-Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
-
-```
-Hi have a look at program.md and let's kick off a new experiment! let's do the setup first.
+```bash
+make run MODEL=gpt-5 GPU=L4 PARALLEL=4 MAX_SUBMISSIONS=16
 ```
 
-The `program.md` file is essentially a super lightweight "skill".
+Or from the repo root:
 
-## Project structure
-
+```bash
+python examples/autoresearch/run.py \
+  --model gpt-5 \
+  --gpu L4 \
+  --parallel 4 \
+  --max-submissions 16
 ```
-train.py        — TinyStories data, eval, model, optimizer, training loop
-program.md      — agent instructions
-pyproject.toml  — dependencies
+
+Runs are written under:
+
+```text
+examples/_runs/autoresearch/<timestamp>/
 ```
 
-## Design choices
+Each run contains `upstream_base/`, copied `trials/`, `ledger.jsonl`, `graph/`,
+and `report.json`.
 
-- **Single training file.** The agent only touches `train.py`, and `train.py` is self-contained so candidates do not depend on helper modules.
-- **Fixed time budget.** Training runs for a fixed wall-clock budget, so experiments are directly comparable.
-- **Small baseline.** A bounded TinyStories sample and byte-level tokens keep the example understandable. The model is not meant to be state of the art; it is meant to be easy to improve.
+## Metric
 
-## License
+Lower `val_bpb` is better. The final training summary must contain:
 
-MIT
+```text
+---
+val_bpb:          1.234567
+training_seconds: 180.1
+total_seconds:    195.4
+peak_vram_mb:     1234.5
+total_tokens_M:   12.3
+num_steps:        456
+num_params_M:     12.7
+depth:            4
+```
+
+The host runner parses `val_bpb`, records it in `ledger.jsonl`, and ranks
+successful trials by lowest BPB.
+
+## Design
+
+This task deliberately trades realism for faster iteration:
+
+- No custom tokenizer training.
+- No Flash Attention kernel dependency.
+- No H100 requirement.
+- A simple GPT-2-tokenizer BPB evaluator.
+- No nanochat-scale architecture.
+
+That makes it a better small example for debugging the rflow autoresearch loop
+itself before moving back to a larger, more expensive task.

@@ -4,7 +4,7 @@ Each ``make_*`` factory returns a closure bound to the live ``BaseFlow`` and the
 agent's :class:`rflow.runtime.context.EngineContext` — *not* its ``Graph``. The
 per-agent context is seeded by :meth:`rflow.base.BaseFlow.seed_agent_context` and
 read at call time, so a single build serves the agent for its whole life. They
-raise the existing :class:`rflow.repl.DoneSignal` and are
+raise the existing :class:`rflow.runtime.repl.DoneSignal` and are
 ``@tool``-decorated so the prompt's tool list can describe them. ``History`` is
 the read-only ``HISTORY`` object an agent uses to re-read its own past turns when
 the model's context has been windowed (it does wrap the ``Graph``, since it is a
@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import blake2s
 from typing import TYPE_CHECKING, Any
 
 from rflow.base import BaseFlow
 from rflow.graph import ChildHandle, WaitRequest
-from rflow.repl import DoneSignal
 from rflow.runtime.context import EngineContext
+from rflow.runtime.repl import DoneSignal
 from rflow.tools.registry import HIDDEN_REPL_TOOL_NAMES
 from rflow.tools.tools import get_tool_metadata, tool
 
@@ -33,6 +34,19 @@ if TYPE_CHECKING:
 #: ``query`` is a short task instruction; large payloads belong in ``inputs``.
 #: Configurable per run via ``Flow(max_query_chars=...)``.
 DEFAULT_MAX_QUERY_CHARS = 2_000
+
+
+def _launch_id_from_names(names: list[str], agent_ids: list[str]) -> str:
+    """Readable, stable-ish launch id from child names plus concrete ids."""
+    label = "-".join(names[:3]) if names else "subagents"
+    if len(names) > 3:
+        label += f"-plus-{len(names) - 3}"
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-") or "subagents"
+    digest = blake2s(
+        "|".join([*names, *agent_ids]).encode("utf-8"),
+        digest_size=3,
+    ).hexdigest()
+    return f"launch-{label}-{digest}"
 
 
 def make_done(flow: BaseFlow, engine_context: EngineContext):
@@ -178,6 +192,7 @@ def make_launch_subagents(
         if agent_ids:
             waited = await WaitRequest(
                 agent_ids,
+                launch_id=_launch_id_from_names(launch_names, agent_ids),
                 launch_specs=launch_specs,
                 launch_names=launch_names,
             )

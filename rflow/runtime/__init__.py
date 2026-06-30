@@ -3,8 +3,9 @@
 A :class:`~rflow.runtime.runtime.Runtime` is the user-facing object you pass to
 :class:`rflow.flow.Flow` (``Flow(runtime=...)``); it owns the working directory
 and registered tools, and mints one :class:`ReplBackend` per agent. The default
-is :class:`LocalRuntime` (in-process). :class:`DockerRuntime` and the cloud
-sandbox runtimes (Modal, E2B, Daytona) run code in isolated containers.
+is :class:`LocalRuntime` (in-process). :class:`SubprocessRuntime` runs each agent
+in a separate local Python process; :class:`DockerRuntime` and the cloud sandbox
+runtimes (Modal, E2B, Daytona) run code in isolated containers.
 
 Provider backends are imported lazily via ``__getattr__`` so their optional SDKs
 are only required when you actually reference the class.
@@ -14,8 +15,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from rflow.runtime.code import (
+    check_wait_syntax,
+    find_code_blocks,
+    replace_code_block,
+)
 from rflow.runtime.context import EngineContext
 from rflow.runtime.docker import DockerRepl, DockerRuntime, build_argv
+from rflow.runtime.local_process import SubprocessRepl, SubprocessRuntime
+from rflow.runtime.repl import DoneSignal, REPL
 from rflow.runtime.runtime import (
     LocalRuntime,
     RemoteRepl,
@@ -47,19 +55,26 @@ __all__ = [
     "DaytonaRuntime",
     "DockerRepl",
     "DockerRuntime",
+    "DoneSignal",
     "E2BRepl",
     "E2BRuntime",
     "EngineContext",
     "LocalRuntime",
     "ModalRepl",
     "ModalRuntime",
+    "REPL",
     "RemoteFileRuntime",
     "RemoteRepl",
     "ReplBackend",
     "Runtime",
+    "SubprocessRepl",
+    "SubprocessRuntime",
     "build_argv",
+    "check_wait_syntax",
     "deserialize",
+    "find_code_blocks",
     "parse_response",
+    "replace_code_block",
     "serialize",
 ]
 

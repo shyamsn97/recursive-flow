@@ -10,16 +10,19 @@ new-stack replacement for the core legacy engine tests.
 from __future__ import annotations
 
 import re
+import threading
 
 from rflow import (
     Flow,
     Graph,
+    SupervisingOutput,
     create_final_action_message,
     is_done,
     is_errored,
     is_supervising,
     parallel_step,
 )
+from rflow.graph import LLMAction, LLMOutput
 from tests.helpers import ScriptedLLM, first_user_text, make_flow, run_to_completion, types
 
 
@@ -102,6 +105,90 @@ def test_parallel_step_maps_step_calls_on_one_pool():
     assert seen_ids == ["0:root", "1:root", "0:root", "1:root"]
     assert graph1.result() == "one"
     assert graph2.result() == "two"
+
+
+def test_parallel_step_default_pool_runs_independent_flows_concurrently():
+    barrier = threading.Barrier(2)
+    lock = threading.Lock()
+    entered: list[str] = []
+
+    class BarrierFlow(Flow):
+        def step_llm(self, agent: Graph, *, force_final: bool) -> None:
+            self._append(agent, LLMAction(model="default"))
+            with lock:
+                entered.append(agent.query)
+            barrier.wait(timeout=1)
+            reply = f'```repl\ndone("{agent.query}")\n```'
+            self._append(
+                agent,
+                LLMOutput(reply=reply, code=f'done("{agent.query}")', model="default"),
+            )
+
+    flow1 = BarrierFlow(ScriptedLLM(lambda _messages: "unused"))
+    flow2 = BarrierFlow(ScriptedLLM(lambda _messages: "unused"))
+
+    graph1, graph2 = parallel_step(
+        [
+            (flow1, {"query": "one"}),
+            (flow2, {"query": "two"}),
+        ]
+    )
+
+    assert set(entered) == {"one", "two"}
+    assert graph1.current().reply == '```repl\ndone("one")\n```'
+    assert graph2.current().reply == '```repl\ndone("two")\n```'
+
+
+def test_parallel_step_queues_runnable_children_from_all_flows_in_one_batch():
+    def reply_for(messages):
+        task = first_user_text(messages)
+        if "child a" in task:
+            return '```repl\ndone("A")\n```'
+        if "child b" in task:
+            return '```repl\ndone("B")\n```'
+        return (
+            "```repl\n"
+            "results = await launch_subagents([\n"
+            '    {"name": "a", "query": "child a"},\n'
+            '    {"name": "b", "query": "child b"},\n'
+            "])\n"
+            'done("|".join(results))\n'
+            "```"
+        )
+
+    def start_supervising_parent(flow: Flow) -> Graph:
+        flow.start("parent")
+        flow.step()  # root LLM
+        flow.step()  # root exec launches children and suspends
+        assert is_supervising(flow.graph.current())
+        return flow.graph.copy(deep=True)
+
+    batches: list[list[str]] = []
+
+    def execute(tasks):
+        batches.append([task_id for task_id, _fn in tasks])
+        return {task_id: fn() for task_id, fn in tasks}
+
+    flow1 = Flow(ScriptedLLM(reply_for), max_depth=1, max_iters=5)
+    flow2 = Flow(ScriptedLLM(reply_for), max_depth=1, max_iters=5)
+    graph1 = start_supervising_parent(flow1)
+    graph2 = start_supervising_parent(flow2)
+
+    graph1, graph2 = parallel_step([(flow1, graph1), (flow2, graph2)], pool=execute)
+
+    assert batches == [["0:root.a", "0:root.b", "1:root.a", "1:root.b"]]
+    assert graph1["root.a"].current().type == "llm_output"
+    assert graph1["root.b"].current().type == "llm_output"
+    assert graph2["root.a"].current().type == "llm_output"
+    assert graph2["root.b"].current().type == "llm_output"
+
+    graph1, graph2 = parallel_step([(flow1, graph1), (flow2, graph2)], pool=execute)
+
+    assert batches[-1] == ["0:root.a", "0:root.b", "1:root.a", "1:root.b"]
+    assert graph1["root.a"].result() == "A"
+    assert graph1["root.b"].result() == "B"
+    assert graph2["root.a"].result() == "A"
+    assert graph2["root.b"].result() == "B"
 
 
 def test_parallel_step_rejects_shared_step_kwargs():
@@ -290,7 +377,7 @@ def test_launch_subagents_fans_out_in_order():
     assert g.result() == "A|B"
     assert len(g.children) == 2
     sup = next(n for n in g.nodes if is_supervising(n))
-    assert sup.launch_id
+    assert sup.launch_id.startswith("launch-a-b-")
     assert sup.launch_names == ["a", "b"]
     assert [spec["query"] for spec in sup.launch_specs] == ["task a", "task bb"]
 
@@ -366,6 +453,17 @@ def test_stranded_supervisor_recovers_with_get_subagent_result():
 
     assert graph.result() == "recovered:child-result"
     assert any(n.type == "exec_output" and "get_subagent_result" in n.content for n in graph.nodes)
+
+
+def test_legacy_supervisor_recovery_prompt_has_readable_label():
+    flow = make_flow()
+    graph = Graph(agent_id="root")
+    sup = SupervisingOutput(waiting_on=["root.rows", "root.cols", "root.diagonals"])
+    prompt = flow.recovery_prompt(graph, sup)
+
+    assert "Delegation `legacy-launch-rows-cols-diagonals` is complete" in prompt
+    assert f"Recovery id: `{sup.id}`" in prompt
+    assert f"get_subagent_result({sup.id!r})" in prompt
 
 
 def test_structured_child_result_is_parsed_not_a_json_string():

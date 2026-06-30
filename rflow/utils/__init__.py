@@ -1,7 +1,8 @@
 """Utility re-exports.
 
-Code-parsing helpers (:mod:`rflow.code`) are cheap and imported eagerly — the
-engine hot path pulls ``find_code_blocks`` / ``check_wait_syntax`` every turn.
+Code-parsing helpers (:mod:`rflow.runtime.code`) are cheap and imported eagerly
+— the engine hot path pulls ``find_code_blocks`` / ``check_wait_syntax`` every
+turn.
 
 The viewer/export figure helpers live in :mod:`rflow.utils.viewer`, which
 transitively imports plotly (and, on demand, gradio). To keep that weight off
@@ -14,7 +15,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from rflow.code import check_wait_syntax, find_code_blocks, replace_code_block
+from rflow.runtime.code import (
+    check_wait_syntax,
+    find_code_blocks,
+    replace_code_block,
+)
 
 _LAZY_VIEWER = {
     "open_viewer",

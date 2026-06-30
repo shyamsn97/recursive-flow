@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
-from rflow import DoneOutput, Flow, Graph, LLMUsage, UserQuery
+from rflow import DoneOutput, Flow, Graph, LLMClient, LLMUsage, UserQuery
 from rflow.utils.pool import CallablePool, SequentialPool, ThreadPool, create_pool
 from tests.helpers import ScriptedLLM, StubLLM, make_flow, run_to_completion
 
@@ -126,6 +127,118 @@ def test_eager_children_runs_to_completion():
     graph = run_to_completion(flow, "go")
     assert graph.finished
     assert isinstance(flow.pool, ThreadPool)
+
+
+class TimelineLLM(LLMClient):
+    """Deterministic LLM that exposes whether child turns overlap."""
+
+    thread_safe = True
+
+    def __init__(self) -> None:
+        self.started_at = time.perf_counter()
+        self.events: list[tuple[float, str]] = []
+        self._lock = threading.Lock()
+
+    def mark(self, label: str) -> None:
+        with self._lock:
+            self.events.append((time.perf_counter() - self.started_at, label))
+
+    def chat(self, messages, *args, **kwargs):
+        self.last_usage = LLMUsage(input_tokens=1, output_tokens=1)
+        convo = "\n".join((m.get("content") or "").lower() for m in messages)
+        if "child a slow task" in convo:
+            self.mark("childa.task_1 start")
+            time.sleep(0.25)
+            self.mark("childa.task_1 finish")
+            return '```repl\ndone("A done")\n```'
+        if "child b two-step task" in convo:
+            if "childb task_1 exec" not in convo:
+                self.mark("childb.task_1 start")
+                self.mark("childb.task_1 finish")
+                return '```repl\nprint("childb task_1 exec")\n```'
+            self.mark("childb.task_2 start")
+            self.mark("childb.task_2 finish")
+            return '```repl\ndone("B done")\n```'
+        return (
+            "```repl\n"
+            "results = await launch_subagents([\n"
+            '    {"name": "childa", "query": "Child A slow task"},\n'
+            '    {"name": "childb", "query": "Child B two-step task"},\n'
+            "])\n"
+            'done(" | ".join(results))\n'
+            "```"
+        )
+
+
+def _run_timeline_flow(*, eager_children: bool) -> TimelineLLM:
+    llm = TimelineLLM()
+    flow = Flow(
+        llm,
+        eager_children=eager_children,
+        max_concurrency=2,
+        max_depth=2,
+        max_iters=8,
+    )
+    graph = run_to_completion(flow, "Show eager child scheduling.")
+    assert graph.result() == "A done | B done"
+    return llm
+
+
+def test_eager_children_refills_fast_child_before_slow_sibling_finishes():
+    llm = _run_timeline_flow(eager_children=True)
+    events = {label: t for t, label in llm.events}
+
+    assert events["childb.task_2 start"] < events["childa.task_1 finish"]
+
+
+def test_non_eager_children_waits_for_barrier_before_fast_child_continues():
+    llm = _run_timeline_flow(eager_children=False)
+    events = {label: t for t, label in llm.events}
+
+    assert events["childb.task_2 start"] > events["childa.task_1 finish"]
+
+
+def test_thread_pool_run_until_idle_refills_before_active_sibling_finishes():
+    pool = ThreadPool(max_concurrency=2)
+    started_at = time.perf_counter()
+    events: list[tuple[float, str]] = []
+    lock = threading.Lock()
+
+    def mark(label: str) -> None:
+        with lock:
+            events.append((time.perf_counter() - started_at, label))
+
+    def slow() -> str:
+        mark("slow start")
+        time.sleep(0.25)
+        mark("slow finish")
+        return "slow"
+
+    def fast() -> str:
+        mark("fast start")
+        mark("fast finish")
+        return "fast"
+
+    def refill(task_id, _result, active_ids):
+        if task_id == "fast":
+            assert active_ids == {"slow"}
+
+            def fast_next() -> str:
+                mark("fast next start")
+                mark("fast next finish")
+                return "fast next"
+
+            return [("fast.next", fast_next)]
+        return []
+
+    try:
+        results = pool.run_until_idle([("slow", slow), ("fast", fast)], refill)
+    finally:
+        pool.shutdown()
+
+    times = {label: t for t, label in events}
+    assert results == {"fast": "fast", "fast.next": "fast next", "slow": "slow"}
+    assert times["fast next start"] < times["slow finish"]
 
 
 def test_custom_pool_runs_normal_steps_without_eager_children():

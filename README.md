@@ -666,7 +666,7 @@ Add `--include-optional`, `--include-live`, `--include-sandbox`, or
 | [`control/injection/`](examples/control/injection/) | Generate a baseline run, edit copies with graph injection/replacement, and continue variants. |
 | [`fork_repair.py`](examples/control/branching/fork_repair.py) | Fork graph/workdir snapshots into independent repair branches and compare results. |
 | [`best_of_n.py`](examples/control/branching/best_of_n.py) | Run N independent branches and pick the best result. |
-| [`autoresearch/`](examples/autoresearch/) | Karpathy-style hill-climbing research loop with custom `@tool`s and delegation. |
+| [`autoresearch/`](examples/autoresearch/) | TinyStories autoresearch loop with custom `@tool`s, delegation, and Modal GPU trials. |
 | [`graph/`](examples/graph/) | Offline tour of the `Graph` API: query, navigate, mutate, save/load, timeline retrace, fork, render. |
 | [`run_examples.py`](examples/run_examples.py) | Manifest-driven smoke runner for offline, optional, live, sandbox, and manual examples. |
 | [`view_demo.py`](examples/view_demo.py) | Build synthetic `Graph` snapshots and launch the Gradio viewer. |

@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +28,8 @@ from rflow.runtime import (
     RemoteRepl,
     ReplBackend,
     Runtime,
+    SubprocessRepl,
+    SubprocessRuntime,
     build_argv,
     deserialize,
     serialize,
@@ -42,6 +45,7 @@ from rflow.runtime.env import (
     RFLOW_PARENT_AGENT_ID,
 )
 from rflow.tools.builtins import make_history
+from rflow.tools.filesystem import read_file, write_file
 
 from .fakes.sandbox import FakeE2BSandboxFactory, NoopLLM
 from .helpers import ScriptedLLM, StubLLM, first_user_text, run_to_completion
@@ -139,6 +143,239 @@ def test_local_runtime_exposes_public_agent_env(monkeypatch):
         assert key not in os.environ
 
 
+# ── local subprocess runtime ──────────────────────────────────────────
+
+
+def test_subprocess_runtime_exports_are_public():
+    import rflow
+    from rflow.runtime.local_process import SubprocessRuntime as Direct
+
+    assert rflow.SubprocessRuntime is Direct
+    assert SubprocessRuntime is Direct
+
+
+def test_subprocess_repl_runs_in_working_directory(tmp_path):
+    repl = SubprocessRepl(working_directory=tmp_path)
+    try:
+        suspended, out = repl.start(
+            "from pathlib import Path\n"
+            "Path('note.txt').write_text('hello')\n"
+            "print(Path.cwd().name)\n"
+            "print(Path('note.txt').read_text())"
+        )
+        assert suspended is False and not repl.errored
+        assert out.splitlines() == [tmp_path.name, "hello"]
+        assert (tmp_path / "note.txt").read_text() == "hello"
+    finally:
+        repl.close()
+
+
+def test_subprocess_repl_timeout_closes_hung_code(tmp_path):
+    repl = SubprocessRepl(working_directory=tmp_path, repl_timeout=0.2)
+    started_at = time.perf_counter()
+    with pytest.raises(TimeoutError, match="did not respond"):
+        repl.start("import time\ntime.sleep(5)")
+    assert time.perf_counter() - started_at < 2
+    assert repl.proc is None
+
+
+def test_flow_records_error_output_when_subprocess_repl_times_out(tmp_path):
+    flow = Flow(
+        StubLLM("```repl\nimport time\ntime.sleep(5)\n```"),
+        runtime=SubprocessRuntime(working_directory=tmp_path, repl_timeout=0.2),
+        max_iters=2,
+    )
+    try:
+        graph = flow.start("hang")
+        graph = flow.step(graph)
+        graph = flow.step(graph)
+    finally:
+        flow.close()
+
+    latest = graph.current()
+    assert latest is not None
+    assert latest.type == "error_output"
+    assert "TimeoutError" in latest.content
+
+
+def test_subprocess_repl_closes_when_agent_finishes(tmp_path):
+    flow = Flow(
+        StubLLM('```repl\nprint("done soon")\ndone("ok")\n```'),
+        runtime=SubprocessRuntime(working_directory=tmp_path),
+        max_iters=2,
+    )
+    try:
+        graph = run_to_completion(flow, "finish")
+        assert graph.result() == "ok"
+        assert flow.repls == {}
+        assert flow.runtime.repl_env_cache == {}
+        assert flow.runtime.repl_inputs_cache == {}
+    finally:
+        flow.close()
+
+
+def test_subprocess_seed_exposes_env_inputs_and_file_tools(monkeypatch, tmp_path):
+    _clear_rflow_env(monkeypatch)
+    flow = Flow(
+        NoopLLM(), runtime=SubprocessRuntime(working_directory=tmp_path), max_depth=2
+    )
+    flow.runtime.register_tools([read_file, write_file])
+    agent = flow.start("q", inputs={"DOC": "hello"})
+    repl = flow.repl_for(agent)
+    try:
+        suspended, out = repl.start(
+            "import os\n"
+            "write_file('doc.txt', INPUTS['DOC'])\n"
+            "print(read_file('doc.txt'))\n"
+            f"print(os.environ[{RFLOW_AGENT_ID!r}])\n"
+            f"print(os.environ[{RFLOW_DEPTH!r}])\n"
+            f"print(os.environ[{RFLOW_IS_ROOT!r}])"
+        )
+        assert suspended is False and not repl.errored
+        assert out.splitlines() == ["hello", "root", "0", "1"]
+        assert (tmp_path / "doc.txt").read_text() == "hello"
+    finally:
+        flow.close()
+        _clear_rflow_env(monkeypatch)
+
+
+class ParallelSleepLLM(ScriptedLLM):
+    thread_safe = True
+
+
+def test_subprocess_runtime_runs_sibling_repl_blocks_concurrently(tmp_path):
+    events_path = tmp_path / "events.log"
+
+    def reply_for(messages):
+        task = first_user_text(messages).lower()
+        if "child a sleep" in task:
+            return (
+                "```repl\n"
+                "from pathlib import Path\n"
+                "import time\n"
+                "with Path('events.log').open('a') as fh:\n"
+                "    fh.write(f'a start {time.time()}\\n')\n"
+                "time.sleep(0.8)\n"
+                "with Path('events.log').open('a') as fh:\n"
+                "    fh.write(f'a finish {time.time()}\\n')\n"
+                'done("A")\n'
+                "```"
+            )
+        if "child b sleep" in task:
+            return (
+                "```repl\n"
+                "from pathlib import Path\n"
+                "import time\n"
+                "with Path('events.log').open('a') as fh:\n"
+                "    fh.write(f'b start {time.time()}\\n')\n"
+                "time.sleep(0.8)\n"
+                "with Path('events.log').open('a') as fh:\n"
+                "    fh.write(f'b finish {time.time()}\\n')\n"
+                'done("B")\n'
+                "```"
+            )
+        return (
+            "```repl\n"
+            "results = await launch_subagents([\n"
+            '    {"name": "a", "query": "Child A sleep"},\n'
+            '    {"name": "b", "query": "Child B sleep"},\n'
+            "])\n"
+            'done("|".join(results))\n'
+            "```"
+        )
+
+    flow = Flow(
+        ParallelSleepLLM(reply_for),
+        runtime=SubprocessRuntime(working_directory=tmp_path),
+        max_concurrency=2,
+        max_depth=1,
+        max_iters=6,
+    )
+    started_at = time.perf_counter()
+    try:
+        graph = run_to_completion(flow, "launch sleepers")
+    finally:
+        flow.close()
+    elapsed = time.perf_counter() - started_at
+
+    assert graph.result() == "A|B"
+    rows = [line.split() for line in events_path.read_text().splitlines()]
+    starts = [float(ts) for _name, event, ts in rows if event == "start"]
+    finishes = [float(ts) for _name, event, ts in rows if event == "finish"]
+    assert len(starts) == 2 and len(finishes) == 2
+    assert max(starts) < min(finishes)
+    assert elapsed < 1.8
+
+
+def test_subprocess_runtime_eager_refills_ready_child_repl_work(tmp_path):
+    events_path = tmp_path / "eager-events.log"
+
+    def reply_for(messages):
+        task = first_user_text(messages).lower()
+        convo = "\n".join(m.get("content", "").lower() for m in messages)
+        if "child a slow" in task:
+            return (
+                "```repl\n"
+                "from pathlib import Path\n"
+                "import time\n"
+                "with Path('eager-events.log').open('a') as fh:\n"
+                "    fh.write(f'a start {time.time()}\\n')\n"
+                "time.sleep(0.8)\n"
+                "with Path('eager-events.log').open('a') as fh:\n"
+                "    fh.write(f'a finish {time.time()}\\n')\n"
+                'done("A")\n'
+                "```"
+            )
+        if "child b two step" in task:
+            if "b marker" not in convo:
+                return (
+                    "```repl\n"
+                    "from pathlib import Path\n"
+                    "import time\n"
+                    "with Path('eager-events.log').open('a') as fh:\n"
+                    "    fh.write(f'b1 {time.time()}\\n')\n"
+                    "print('b marker')\n"
+                    "```"
+                )
+            return (
+                "```repl\n"
+                "from pathlib import Path\n"
+                "import time\n"
+                "with Path('eager-events.log').open('a') as fh:\n"
+                "    fh.write(f'b2 {time.time()}\\n')\n"
+                'done("B")\n'
+                "```"
+            )
+        return (
+            "```repl\n"
+            "results = await launch_subagents([\n"
+            '    {"name": "a", "query": "Child A slow"},\n'
+            '    {"name": "b", "query": "Child B two step"},\n'
+            "])\n"
+            'done("|".join(results))\n'
+            "```"
+        )
+
+    flow = Flow(
+        ParallelSleepLLM(reply_for),
+        runtime=SubprocessRuntime(working_directory=tmp_path),
+        eager_children=True,
+        max_concurrency=2,
+        max_depth=1,
+        max_iters=6,
+    )
+    try:
+        graph = run_to_completion(flow, "launch eager sleepers")
+    finally:
+        flow.close()
+
+    assert graph.result() == "A|B"
+    rows = [line.split() for line in events_path.read_text().splitlines()]
+    b2 = next(float(row[1]) for row in rows if row[0] == "b2")
+    a_finish = next(float(row[2]) for row in rows if row[:2] == ["a", "finish"])
+    assert b2 < a_finish
+
+
 # ── docker argv ───────────────────────────────────────────────────────
 
 
@@ -227,7 +464,7 @@ class _CountingRepl:
 
 
 def test_make_repl_defaults_to_in_process():
-    from rflow.repl import REPL
+    from rflow.runtime.repl import REPL
 
     flow = Flow(StubLLM(), max_depth=1)
     agent = flow.start("q")

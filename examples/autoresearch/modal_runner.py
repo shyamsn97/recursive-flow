@@ -1,12 +1,30 @@
-"""Modal launcher for autoresearch train.py trials."""
+"""Modal launcher for autoresearch trial directories."""
 
 from __future__ import annotations
 
+import os
+import re
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+SUMMARY_KEYS = (
+    "val_bpb",
+    "training_seconds",
+    "total_seconds",
+    "peak_vram_mb",
+    "total_tokens_M",
+    "num_steps",
+    "num_params_M",
+    "depth",
+)
+SUMMARY_RE = re.compile(
+    rf"^({'|'.join(re.escape(key) for key in SUMMARY_KEYS)}):\s*"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -14,19 +32,67 @@ class ModalConfig:
     app_name: str = "rlmflow-autoresearch"
     gpu: str = "L4"
     parallel: int = 4
-    timeout_s: int = 1020
+    timeout_s: int = 1200
     volume_name: str = "rlmflow-autoresearch-cache"
     python_version: str | None = None
 
 
-def preflight(config: ModalConfig) -> dict[str, Any]:
-    """Fail early if Modal is not installed."""
+def validate_gpu(config: ModalConfig) -> None:
+    if not str(config.gpu).strip():
+        raise ValueError("--gpu must be a non-empty Modal GPU spec, e.g. L4 or H100")
 
+
+def parse_autoresearch_stdout(
+    stdout: str,
+    stderr: str = "",
+    *,
+    returncode: int = 0,
+) -> dict[str, Any]:
+    """Parse autoresearch's final summary block."""
+
+    metrics: dict[str, float | int] = {}
+    for key, raw in SUMMARY_RE.findall(stdout or ""):
+        value = float(raw)
+        if key in {"num_steps", "depth"}:
+            metrics[key] = int(value)
+        else:
+            metrics[key] = value
+
+    val_bpb = metrics.get("val_bpb")
+    status = classify_result(returncode, stdout, stderr, val_bpb)
+    return {
+        **metrics,
+        "val_bpb": float(val_bpb) if val_bpb is not None else None,
+        "status": status,
+    }
+
+
+def classify_result(
+    returncode: int,
+    stdout: str = "",
+    stderr: str = "",
+    val_bpb: float | int | None = None,
+) -> str:
+    lower = f"{stdout}\n{stderr}".lower()
+    if "out of memory" in lower or "cuda oom" in lower:
+        return "oom"
+    if returncode != 0:
+        return "crashed"
+    if val_bpb is None:
+        return "crashed"
+    return "succeeded"
+
+
+def preflight(config: ModalConfig) -> dict[str, Any]:
+    """Fail before agent startup if Modal is not importable/authenticated."""
+
+    validate_gpu(config)
     _modal()
     return {
         "status": "ok",
-        "gpu": config.gpu,
         "app_name": config.app_name,
+        "gpu": config.gpu,
+        "parallel": config.parallel,
     }
 
 
@@ -34,13 +100,11 @@ def submit(
     config: ModalConfig,
     *,
     path: str | Path,
-    train_budget_s: int,
     slug: str,
     n: int,
     run_id: str,
-    seed: int | None = None,
 ) -> dict[str, Any]:
-    """Spawn one detached Modal job for an archived train.py path."""
+    """Submit one trial directory to Modal and wait for the result."""
 
     modal = _modal()
     app = modal.App(config.app_name)
@@ -52,124 +116,167 @@ def submit(
         timeout=config.timeout_s,
         max_containers=max(1, config.parallel),
         volumes={"/root/.cache/autoresearch": cache_volume},
+        secrets=_secrets(modal, config),
         serialized=True,
     )
-    def run_train(payload: dict[str, Any]) -> dict[str, Any]:
-        import json
+    def run_trial(payload: dict[str, Any]) -> dict[str, Any]:
         import os
+        import re
         import subprocess
-        import sys
         import tempfile
         from pathlib import Path
         from time import monotonic
 
+        def needs_prepare() -> bool:
+            data_dir = Path("/root/.cache/autoresearch/data")
+            return not ((data_dir / "train.pt").exists() and (data_dir / "val.pt").exists())
+
+        def coerce_output(value: str | bytes | None) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, bytes):
+                return value.decode(errors="replace")
+            return value
+
+        def classify_result(returncode: int, stdout: str, stderr: str, val_bpb) -> str:
+            lower = f"{stdout}\n{stderr}".lower()
+            if "out of memory" in lower or "cuda oom" in lower:
+                return "oom"
+            if returncode != 0:
+                return "crashed"
+            if val_bpb is None:
+                return "crashed"
+            return "succeeded"
+
+        def parse_summary(stdout: str, stderr: str, returncode: int) -> dict[str, Any]:
+            keys = (
+                "val_bpb",
+                "training_seconds",
+                "total_seconds",
+                "peak_vram_mb",
+                "total_tokens_M",
+                "num_steps",
+                "num_params_M",
+                "depth",
+            )
+            pattern = re.compile(
+                rf"^({'|'.join(re.escape(key) for key in keys)}):\s*"
+                r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)",
+                re.MULTILINE,
+            )
+            metrics = {}
+            for key, raw in pattern.findall(stdout or ""):
+                value = float(raw)
+                metrics[key] = int(value) if key in {"num_steps", "depth"} else value
+            val_bpb = metrics.get("val_bpb")
+            return {
+                **metrics,
+                "val_bpb": float(val_bpb) if val_bpb is not None else None,
+                "status": classify_result(returncode, stdout, stderr, val_bpb),
+            }
+
         t0 = monotonic()
         trial = payload["n"]
-        slug = payload["slug"]
-        print(f"[autoresearch] start trial={trial} slug={slug}", flush=True)
+        trial_slug = payload["slug"]
+        print(f"[autoresearch] start trial={trial} slug={trial_slug}", flush=True)
 
         with tempfile.TemporaryDirectory(prefix="autoresearch-") as tmp:
             root = Path(tmp)
-            artifact_dir = root / "artifacts"
-            artifact_dir.mkdir()
-
-            (root / "train.py").write_text(payload["source"])
+            for relpath, text in payload["files"].items():
+                target = root / relpath
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
 
             env = {
                 **os.environ,
                 "PYTHONUNBUFFERED": "1",
-                "ARTIFACT_DIR": str(artifact_dir),
                 "AUTORESEARCH_RUN_ID": payload["run_id"],
                 "AUTORESEARCH_TRIAL": str(trial),
-                "AUTORESEARCH_SLUG": slug,
+                "AUTORESEARCH_SLUG": trial_slug,
             }
-            if payload.get("seed") is not None:
-                env["AUTORESEARCH_SEED"] = str(payload["seed"])
+
+            prep_stdout = ""
+            prep_stderr = ""
+            if needs_prepare():
+                prep = subprocess.run(
+                    ["uv", "run", "prepare.py"],
+                    cwd=str(root),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=int(payload["timeout_s"]),
+                )
+                prep_stdout = prep.stdout or ""
+                prep_stderr = prep.stderr or ""
+                if prep.returncode != 0:
+                    return {
+                        "status": "infra_error",
+                        "returncode": prep.returncode,
+                        "elapsed_s": monotonic() - t0,
+                        "stdout": prep_stdout,
+                        "stderr": prep_stderr,
+                    }
+                try:
+                    cache_volume.commit()
+                except Exception:
+                    pass
 
             try:
                 train = subprocess.run(
-                    [sys.executable, "-u", "train.py"],
+                    ["uv", "run", "train.py"],
                     cwd=str(root),
                     env=env,
-                    timeout=int(payload["train_budget_s"]),
+                    capture_output=True,
+                    text=True,
+                    timeout=int(payload["timeout_s"]),
                 )
-            except subprocess.TimeoutExpired:
-                print(
-                    f"[autoresearch] train timed out trial={trial} "
-                    f"timeout_s={payload['train_budget_s']}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+            except subprocess.TimeoutExpired as exc:
+                stdout = coerce_output(exc.stdout)
+                stderr = coerce_output(exc.stderr)
                 return {
                     "status": "timeout",
                     "returncode": -1,
                     "elapsed_s": monotonic() - t0,
+                    "stdout": prep_stdout + stdout,
+                    "stderr": prep_stderr + stderr,
                 }
 
+            stdout = prep_stdout + (train.stdout or "")
+            stderr = prep_stderr + (train.stderr or "")
+            parsed = parse_summary(stdout, stderr, train.returncode)
             print(
-                f"[autoresearch] done trial={trial} slug={slug} "
-                f"returncode={train.returncode}",
+                f"[autoresearch] done trial={trial} slug={trial_slug} "
+                f"status={parsed['status']} val_bpb={parsed.get('val_bpb')}",
                 flush=True,
             )
-            result_path = artifact_dir / "result.json"
-            result = json.loads(result_path.read_text()) if result_path.exists() else {}
-            status = (
-                "succeeded"
-                if train.returncode == 0 and result.get("val_bpb") is not None
-                else "crashed"
-            )
             return {
-                **result,
-                "status": status,
+                **parsed,
                 "returncode": train.returncode,
                 "elapsed_s": monotonic() - t0,
-                "artifact_names": sorted(p.name for p in artifact_dir.iterdir()),
+                "stdout": stdout,
+                "stderr": stderr,
             }
 
     payload = {
-        "source": Path(path).read_text(),
-        "train_budget_s": train_budget_s,
+        "files": _pack_trial_dir(Path(path)),
         "slug": slug,
         "n": n,
         "run_id": run_id,
-        "seed": seed,
+        "timeout_s": config.timeout_s,
     }
-    t0 = time.monotonic()
+    # Keep the ephemeral app alive until the remote call finishes. Each rflow
+    # child blocks here, and eager child scheduling lets several children block
+    # on independent Modal calls at the same time.
     with modal.enable_output():
-        with app.run(detach=True):
-            call = run_train.spawn(payload)
+        with app.run():
+            call = run_trial.spawn(payload)
+            job_id = (
+                getattr(call, "object_id", None)
+                or getattr(call, "function_call_id", None)
+                or f"{run_id}:{n}:{slug}"
+            )
+            result = call.get(timeout=config.timeout_s)
 
-    return {
-        "status": "submitted",
-        "val_bpb": None,
-        "stdout": "",
-        "stderr": "",
-        "returncode": None,
-        "elapsed_s": time.monotonic() - t0,
-        "job_id": (
-            getattr(call, "object_id", None)
-            or getattr(call, "function_call_id", None)
-            or f"{run_id}:{n}:{slug}"
-        ),
-        "gpu": config.gpu,
-    }
-
-
-def collect(config: ModalConfig, *, job_id: str, timeout_s: float = 0) -> dict[str, Any]:
-    """Fetch one submitted job result if it is ready."""
-
-    modal = _modal()
-    try:
-        function_call = modal.FunctionCall.from_id(job_id)
-    except AttributeError:
-        from modal.functions import FunctionCall  # pyright: ignore[reportMissingImports]
-
-        function_call = FunctionCall.from_id(job_id)
-
-    try:
-        result = function_call.get(timeout=timeout_s)
-    except TimeoutError:
-        return {"status": "submitted", "job_id": job_id}
     return {
         **(result or {}),
         "job_id": job_id,
@@ -177,15 +284,17 @@ def collect(config: ModalConfig, *, job_id: str, timeout_s: float = 0) -> dict[s
     }
 
 
-def classify_result(returncode: int, stderr: str, val_bpb: float | None) -> str:
-    lower = (stderr or "").lower()
-    if "out of memory" in lower or "cuda oom" in lower:
-        return "oom"
-    if returncode != 0:
-        return "crashed"
-    if val_bpb is None:
-        return "crashed"
-    return "succeeded"
+def _pack_trial_dir(path: Path) -> dict[str, str]:
+    allowed = {"README.md", "prepare.py", "train.py", "program.md", "pyproject.toml", "uv.lock"}
+    files: dict[str, str] = {}
+    for name in sorted(allowed):
+        candidate = path / name
+        if candidate.exists():
+            files[name] = candidate.read_text()
+    missing = {"prepare.py", "train.py", "pyproject.toml"} - set(files)
+    if missing:
+        raise FileNotFoundError(f"trial directory is missing required files: {sorted(missing)}")
+    return files
 
 
 def _modal():
@@ -193,9 +302,23 @@ def _modal():
         import modal  # pyright: ignore[reportMissingImports]
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise RuntimeError(
-            "Modal autoresearch requires the modal extra: pip install -e '.[modal]'"
+            "autoresearch requires the modal extra: pip install -e '.[modal]'"
         ) from exc
     return modal
+
+
+def _secrets(modal, _config: ModalConfig) -> list[Any]:
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if not token:
+        return []
+    return [
+        modal.Secret.from_dict(
+            {
+                "HF_TOKEN": token,
+                "HUGGING_FACE_HUB_TOKEN": token,
+            }
+        )
+    ]
 
 
 def _image(modal, config: ModalConfig):
@@ -207,12 +330,18 @@ def _image(modal, config: ModalConfig):
             "nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04",
             add_python=python_version,
         )
-        .apt_install("git")
+        .apt_install("git", "curl", "build-essential")
         .run_commands(
             "python -m pip install --upgrade pip",
-            "python -m pip install --extra-index-url "
-            "https://download.pytorch.org/whl/cu128 torch==2.9.1",
-            "python -m pip install 'requests>=2.32.0'",
+            "python -m pip install uv",
         )
-        .env({"PYTHONUNBUFFERED": "1"})
+        .env(
+            {
+                "PYTHONUNBUFFERED": "1",
+                "PYTHONPATH": "/root",
+                "CC": "gcc",
+                "CXX": "g++",
+            }
+        )
+        .add_local_file(Path(__file__), "/root/modal_runner.py")
     )

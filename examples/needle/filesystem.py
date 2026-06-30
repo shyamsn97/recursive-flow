@@ -8,6 +8,7 @@ Usage:
     python examples/needle/filesystem.py
     python examples/needle/filesystem.py --no-viz
     python examples/needle/filesystem.py --viewer
+    python examples/needle/filesystem.py --in-process-local
     python examples/needle/filesystem.py --docker-image rlmflow:local
 """
 
@@ -69,6 +70,15 @@ def main():
         help="If set, run agent code inside this Docker image (e.g. rlmflow:local).",
     )
     parser.add_argument(
+        "--in-process-local",
+        action="store_true",
+        help=(
+            "Use in-process LocalRuntime for debugging. This serializes REPL "
+            "blocks that need cwd/env isolation, so it is not true parallel "
+            "filesystem execution."
+        ),
+    )
+    parser.add_argument(
         "--workdir",
         default=None,
         help="Directory to hold haystack/ and run in (default: a temp dir).",
@@ -85,8 +95,10 @@ def main():
 
     if args.docker_image:
         print(f">>> DOCKER RUNTIME  image={args.docker_image}")
+    elif args.in_process_local:
+        print(">>> LOCAL RUNTIME (in-process; REPL blocks may serialize)")
     else:
-        print(">>> LOCAL RUNTIME")
+        print(">>> SUBPROCESS RUNTIME")
 
     tmp = None
     if args.workdir is None:
@@ -106,8 +118,10 @@ def main():
 
         if args.docker_image:
             runtime = rflow.DockerRuntime(args.docker_image, working_directory=workdir)
-        else:
+        elif args.in_process_local:
             runtime = rflow.LocalRuntime(working_directory=workdir)
+        else:
+            runtime = rflow.SubprocessRuntime(working_directory=workdir)
         runtime.register_tools(FILE_TOOLS)
 
         llm_clients = None

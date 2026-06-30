@@ -18,8 +18,8 @@ from rflow import (
 from rflow.prompts.default import MAX_STATIC_PROMPT_CHARS
 from rflow.graph import ChildHandle, WaitRequest
 from rflow.integrations.structured import StructuredOutputError
-from rflow.repl import DoneSignal
 from rflow.runtime.context import EngineContext
+from rflow.runtime.repl import DoneSignal
 from rflow.tools import format_tool_line
 from rflow.tools.builtins import (
     History,
@@ -252,27 +252,30 @@ def test_static_system_prompt_content():
     assert "llm_query_batched" not in SYSTEM_PROMPT
     assert "HISTORY" not in SYSTEM_PROMPT
     assert "launch_subagents" in SYSTEM_PROMPT
+    assert "inside an `async def` helper" in SYSTEM_PROMPT
+    assert "not inside a function" not in SYSTEM_PROMPT
     assert "an over-long `query` is rejected" in SYSTEM_PROMPT
     assert "Never dump large `INPUTS` values" in SYSTEM_PROMPT
     assert 'INPUTS["query"][:' not in SYSTEM_PROMPT
     assert "Use exactly one block per assistant" in SYSTEM_PROMPT
     assert "never include a second ```repl fence" in SYSTEM_PROMPT
     assert "act as an orchestrator, not a solver" in SYSTEM_PROMPT
-    assert "delegate independent branches -> integrate outputs -> verify" in SYSTEM_PROMPT
+    assert "observe -> plan -> delegate independent branches -> integrate outputs -> verify" in SYSTEM_PROMPT
     assert "delegate those branches" in SYSTEM_PROMPT
     assert "keep the root focused on preparing inputs" in SYSTEM_PROMPT
     assert "Keep an orchestration mindset throughout the run" in SYSTEM_PROMPT
     assert "Before doing substantial work inline" in SYSTEM_PROMPT
     assert "Use the root agent for small local steps" in SYSTEM_PROMPT
+    assert "act directly for trivial work" in SYSTEM_PROMPT
     assert "Failed checks are not a final answer" in SYSTEM_PROMPT
     assert 'done({"status": "failed", ...})' in SYSTEM_PROMPT
     assert "fix them or delegate a repair, then re-run the checks" in SYSTEM_PROMPT
-    assert "Do not call `done(...)` on turn 1 without first inspecting `INPUTS`" in SYSTEM_PROMPT
-    # The default prompt has a couple of clean examples that teach parallelization.
-    assert "**Example 1 -- fan out slices with launch_subagents" in SYSTEM_PROMPT
-    assert "**Example 2 -- verify, repair, re-verify" in SYSTEM_PROMPT
-    # No llm_query_batched example; it's documented as a plain builtin tool.
-    assert "**Example 3" not in SYSTEM_PROMPT
+    assert "With non-empty `INPUTS`, turn 1 is an inspection-only observation turn" in SYSTEM_PROMPT
+    assert "Do not call `done(...)`, `launch_subagents(...)`, or effectful tools in that first block" in SYSTEM_PROMPT
+    # The default prompt has clean examples that teach inspection and parallelization.
+    assert "**Example 1 -- observe inputs before acting" in SYSTEM_PROMPT
+    assert "**Example 2 -- fan out slices after observation" in SYSTEM_PROMPT
+    assert "**Example 3 -- verify, repair, re-verify" in SYSTEM_PROMPT
     # The fanout example covers every batch, not a capped sample.
     assert "for i, batch in enumerate(batches)" in SYSTEM_PROMPT
     assert "launch_subagents" in SYSTEM_PROMPT
@@ -287,7 +290,7 @@ def test_static_system_prompt_can_include_llm_query():
     # has no agent graph, so its Tools section is empty regardless.
     prompt = DEFAULT_BUILDER.build(make_flow(include_llm_query=True))
     assert "Route by capability, not habit" not in prompt
-    assert "**Example 3" not in prompt
+    assert "llm_query_batched(" not in prompt
 
 
 def test_flow_implements_base_contract():
@@ -332,6 +335,38 @@ def test_build_system_prompt_has_dynamic_tool_docs():
     assert "`flow_wait(" not in prompt
     # recursion status
     assert "recursion depth" in prompt
+
+
+def test_tool_docs_use_agent_context_before_repl_exists():
+    class ContextualToolFlow(Flow):
+        def build_tools(self, engine_context=None):
+            tools = super().build_tools(engine_context)
+            agent_id = getattr(engine_context, "agent_id", "")
+
+            @tool("Only visible to the root agent.")
+            def root_only() -> None:
+                return None
+
+            @tool("Only visible to child agents.")
+            def child_only() -> None:
+                return None
+
+            if agent_id == "root":
+                tools["root_only"] = root_only
+            else:
+                tools["child_only"] = child_only
+            return tools
+
+    flow = ContextualToolFlow(StubLLM(), max_depth=1)
+    root = flow.start("q")
+    root_prompt = flow.build_system_prompt(root)
+    handle = flow.spawn_child("root", "kid", "child task")
+    child_prompt = flow.build_system_prompt(flow.graph[handle.agent_id])
+
+    assert "`root_only(" in root_prompt
+    assert "`child_only(" not in root_prompt
+    assert "`child_only(" in child_prompt
+    assert "`root_only(" not in child_prompt
 
 
 def test_build_system_prompt_can_include_llm_query_tool():
@@ -407,7 +442,8 @@ def test_first_prompt_has_query_message_manifest_and_depth_note():
     assert "recursion depth 0" in msg
     assert "do a thing" in msg  # query is delivered as the message now
     assert "abc" not in msg  # input values are never dumped
-    assert "Print only small bounded samples" in msg
+    assert "inspection-only observation turn" in msg
+    assert "Wait for that REPL output before planning" in msg
     assert "Think step-by-step" in msg
 
 
@@ -430,24 +466,39 @@ def test_followup_prompt_wraps_new_task_without_first_turn_language():
     assert "full recursion budget" in msg
     assert "You have not interacted with the REPL environment" not in msg
     assert "Your REPL INPUTS contain:" not in msg
-    assert "first REPL block should usually inspect" not in msg
+    assert "inspection-only observation turn" not in msg
 
 
 def test_large_first_prompt_warns_not_to_print_contents():
     flow = make_flow()
     msg = flow.first_prompt("do a thing", {"doc": "x" * 50_001}, depth=0)
-    assert "process the pieces in parallel" in msg
+    assert "task-relevant windows" in msg
+    assert "later turns or subagents" in msg
 
 
-def test_first_prompt_pushes_batched_delegation_at_all_depths():
+def test_first_prompt_delegation_nudge_is_depth_aware():
     flow = make_flow(max_depth=3)
-    for depth in (0, 1):
-        msg = flow.first_prompt("do a thing", {}, depth=depth)
-        normalized = " ".join(msg.split())
-        assert "await launch_subagents" in normalized
-        assert "work can proceed independently" in normalized
-        assert "make the next REPL block launch those branches" in normalized
-        assert "preparing focused inputs" in normalized
+    root_msg = flow.first_prompt("do a thing", {}, depth=0)
+    child_msg = flow.first_prompt("do a thing", {}, depth=1)
+    near_limit_msg = flow.first_prompt("do a thing", {}, depth=2)
+
+    root = " ".join(root_msg.split())
+    assert "root coordinator" in root
+    assert "act directly for simple work" in root
+    assert "make the launch block after the observation turn" in root
+    assert "preparing focused inputs" in root
+
+    child = " ".join(child_msg.split())
+    assert "Own your assigned task" in child
+    assert "solve simple work directly" in child
+    assert "clearly separable subtasks" in child
+    assert "root coordinator" not in child
+
+    near_limit = " ".join(near_limit_msg.split())
+    assert "Own your assigned task" in near_limit
+    assert "near the recursion limit" in near_limit
+    assert "clearly bounded leaf subtask" in near_limit
+    assert "root coordinator" not in near_limit
 
 
 def test_first_prompt_at_depth_limit_omits_delegation_nudge():

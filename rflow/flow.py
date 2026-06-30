@@ -28,7 +28,6 @@ import rflow.prompts.projection as prompt_projection
 from rflow.base import BaseFlow
 from rflow.clients.llm import LLMClient, LLMUsage
 from rflow.clients.llm_channel import LLMChannel
-from rflow.code import check_wait_syntax, find_code_blocks
 from rflow.graph import (
     ChildHandle,
     DoneOutput,
@@ -55,6 +54,7 @@ from rflow.prompts import (
     PromptBuilder,
     messages,
 )
+from rflow.runtime.code import check_wait_syntax, find_code_blocks
 from rflow.runtime.context import EngineContext
 from rflow.runtime.env import agent_process_env
 from rflow.runtime.runtime import LocalRuntime, RemoteRepl, ReplBackend, Runtime
@@ -219,7 +219,7 @@ class Flow(BaseFlow):
     ) -> Graph | None:
         """Open the optional full-screen terminal chat UI for this flow."""
 
-        from rflow.tui import run_tui
+        from rflow.integrations.tui import run_tui
 
         return run_tui(
             self,
@@ -332,7 +332,7 @@ class Flow(BaseFlow):
             output_schema=output_schema,
         )
         plan = self.plan_step()
-        self.run_plan(plan)
+        self.apply_plan(plan)
         return self.graph.copy(deep=True)
 
     def setup_step(
@@ -452,10 +452,10 @@ class Flow(BaseFlow):
                 self._terminate_requested.add(aid)
         return self.graph
 
-    # ── action execution: turn a plan into parallel work ──────────────
+    # ── action application: materialize a plan into graph events ──────
 
-    def run_plan(self, plan: ActionPlan) -> None:
-        """Carry out one step's plan by running each action.
+    def apply_plan(self, plan: ActionPlan) -> None:
+        """Materialize one step's planned actions into the graph.
 
         Each action is independent — it touches only its own agent's slice of
         the graph (mutations are guarded by ``self._lock``) — so the pool can
@@ -469,6 +469,10 @@ class Flow(BaseFlow):
             self.pool.run_until_idle(tasks, self._refill_eager_children)
             return
         self.pool.execute(tasks)
+
+    def run_plan(self, plan: ActionPlan) -> None:
+        """Compatibility alias for :meth:`apply_plan`."""
+        self.apply_plan(plan)
 
     def action_tasks(
         self, plan: ActionPlan, *, task_prefix: str = ""
@@ -681,7 +685,17 @@ class Flow(BaseFlow):
             return
         repl = self.repl_for(agent)
         repl.engine_context.done_result = None
-        suspended, payload = repl.start(code)
+        try:
+            suspended, payload = repl.start(code)
+        except Exception as exc:  # noqa: BLE001 - surface REPL failures as graph state
+            self._append(
+                agent,
+                ErrorOutput(
+                    error="exec_exception",
+                    content=f"REPL execution failed: {type(exc).__name__}: {exc}",
+                ),
+            )
+            return
         self.record_observation(agent, repl, suspended, payload)
 
     def step_after_supervising(self, agent: Graph, sup: SupervisingOutput) -> None:
@@ -692,7 +706,18 @@ class Flow(BaseFlow):
         self._append(agent, ResumeAction(resumed_from=list(sup.waiting_on)))
         repl = self.repl_for(agent)
         repl.engine_context.done_result = None
-        suspended, payload = repl.resume(results)
+        try:
+            suspended, payload = repl.resume(results)
+        except Exception as exc:  # noqa: BLE001 - surface REPL failures as graph state
+            self._append(
+                agent,
+                ErrorOutput(
+                    error="exec_exception",
+                    content=f"REPL resume failed: {type(exc).__name__}: {exc}",
+                    resumed_from=list(sup.waiting_on),
+                ),
+            )
+            return
         self.record_observation(
             agent, repl, suspended, payload, resumed_from=list(sup.waiting_on)
         )
@@ -732,6 +757,8 @@ class Flow(BaseFlow):
                 agent,
                 DoneOutput(result=done, output=out, content=out, resumed_from=rf),
             )
+            if agent.agent_id in self.repls:
+                self.runtime.discard_repl(self.repls, agent.agent_id)
             return
         if suspended:
             request, pre = payload  # type: ignore[misc]
@@ -813,6 +840,7 @@ class Flow(BaseFlow):
     def recovery_prompt(self, agent: Graph, sup: SupervisingOutput) -> str:
         """Prompt shown when a stranded supervisor must recover from graph state."""
         launch_id = sup.launch_id or sup.id
+        launch_label = self._launch_label(agent, sup)
         children = "\n".join(f"- `{aid}`" for aid in sup.waiting_on)
         return "\n\n".join(
             [
@@ -822,9 +850,10 @@ class Flow(BaseFlow):
                     "cannot resume at the line after `await launch_subagents(...)`."
                 ),
                 (
-                    f"Delegation `{launch_id}` is complete. Its immediate child "
-                    "results are available in original launch order."
+                    f"Delegation `{launch_label}` is complete. Its immediate "
+                    "child results are available in original launch order."
                 ),
+                f"Recovery id: `{launch_id}`",
                 f"Immediate children:\n{children or '- <none>'}",
                 (
                     "Call:\n"
@@ -837,6 +866,23 @@ class Flow(BaseFlow):
                 ),
             ]
         )
+
+    def _launch_label(self, agent: Graph, sup: SupervisingOutput) -> str:
+        """Human-readable label for a supervisor's launch in recovery prompts."""
+        if sup.launch_id:
+            return sup.launch_id
+        names = list(sup.launch_names or [])
+        if not names:
+            prefix = agent.agent_id + "."
+            names = [
+                aid.removeprefix(prefix).split(".", 1)[0] for aid in sup.waiting_on
+            ]
+        if not names:
+            return sup.id
+        label = "-".join(names[:3])
+        if len(names) > 3:
+            label += f"-plus-{len(names) - 3}"
+        return f"legacy-launch-{label}"
 
     def _child_result(self, agent_id: str) -> object:
         """Value handed back to a parent's coroutine for one finished child.
@@ -1066,6 +1112,21 @@ class Flow(BaseFlow):
             tools.setdefault(name, fn)
         return tools
 
+    def tool_namespace_for_prompt(self, graph: Graph) -> dict:
+        """Return the REPL namespace used to render prompt-visible tools.
+
+        Prompt sections should not need to know whether an agent's REPL already
+        exists. If it does, use its live namespace; otherwise build the same
+        tool closures without creating a runtime backend.
+        """
+        repl = self.repls.get(graph.agent_id)
+        if repl is not None:
+            return repl.namespace
+        context = EngineContext(
+            agent_id=graph.agent_id, output_schema=graph.output_schema
+        )
+        return self.build_tools(context)
+
     @tool(
         "Send a list of independent one-shot prompts to the model in parallel "
         "and get back a list of replies, in order. Use for simple fanout (no "
@@ -1240,6 +1301,7 @@ class Flow(BaseFlow):
     # ── internal graph mutation (locked) ──────────────────────────────
 
     def _append(self, agent: Graph, node: Node) -> Node:
+        """Commit one durable graph event to an agent trajectory."""
         with self._lock:
             prev = agent.nodes[-1] if agent.nodes else None
             seq = prev.seq + 1 if prev else 0

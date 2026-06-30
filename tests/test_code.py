@@ -1,7 +1,7 @@
 """Phase 0 — code-block parsing + ``await`` pre-flight validation.
 
-Ported from the legacy code-block coverage to the new ``rflow.code`` module
-(was ``rflow.utils.code``). Covers fence extraction edge
+Ported from the legacy code-block coverage to the new ``rflow.runtime.code``
+module. Covers fence extraction edge
 cases (glued fences, EOF, bare labels), first-repl-block replacement, and the
 full ``check_wait_syntax`` matrix that turns unsupported ``await``/``yield`` into
 a single recoverable error string before the block ever runs.
@@ -9,7 +9,11 @@ a single recoverable error string before the block ever runs.
 
 from __future__ import annotations
 
-from rflow.code import check_wait_syntax, find_code_blocks, replace_code_block
+from rflow.runtime.code import (
+    check_wait_syntax,
+    find_code_blocks,
+    replace_code_block,
+)
 
 # ── find_code_blocks ──────────────────────────────────────────────────
 

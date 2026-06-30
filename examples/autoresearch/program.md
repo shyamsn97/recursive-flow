@@ -1,99 +1,83 @@
-# Autoresearch Task
+# autoresearch
 
-You are an autonomous researcher trying to lower `val_bpb` for the training
-script in this directory.
+This is a compact autonomous language-modeling research task.
 
-The experiment contract is intentionally simple:
+Runtime-specific orchestration details, hierarchy, and examples live in the
+runner system prompt. This file describes only the task.
 
-1. Read `INPUTS["task_instructions"]`, `README.md`, and `train.py`.
-2. Establish the baseline with `run_baseline()`.
-3. Submit complete replacement `train.py` files with
-   `run_experiment(source, slug, hypothesis)`.
-4. Use `refresh_results()`, `list_runs()`, `get_runs()`, `get_run(n)`,
-   `latest_run()`, and `best_run()` as the ledger.
+## Files
 
-## Loop
+- `README.md` — repository context.
+- `prepare.py` — fixed dataset preparation, batching, and validation metric. Do
+  not modify it.
+- `train.py` — the editable training script. The agent may change model
+  architecture, optimizer, schedule, regularization, batch size, compile mode,
+  and training loop details here.
 
-Repeat until `submission_status()["remaining_submissions"] == 0`:
+## Task
 
-1. Call `refresh_results()`.
-2. Review `best_run()`, `list_runs()`, and `get_runs()`.
-3. Pick a small, diverse batch of new ideas with unique slugs.
-4. Launch child agents with `launch_subagents`, one idea per child.
-5. Each child writes one complete `train.py` candidate and submits it.
-6. After a batch, refresh results again and choose the next batch based on what
-   scored, crashed, or remained pending.
+Train a small GPT-style language model on TinyStories using the GPT-2 tokenizer.
+Each experiment has a fixed wall-clock training budget.
 
-Do not use git, branches, shell commands, `results.tsv`, or filesystem writes.
-The controller archives candidate files and submits training jobs.
-
-## The Only File That Matters
-
-`train.py` is self-contained. It owns:
-
-- TinyStories download/cache setup,
-- byte-level tokenization,
-- random batch sampling,
-- BPB evaluation,
-- a small GPT model,
-- AdamW and the training loop.
-
-Do not import helper functions from any other local file. A candidate must run as:
-
-```bash
-python -u train.py
-```
-
-It must print a final summary containing:
+The goal is to minimize validation bits per byte:
 
 ```text
 val_bpb: <float>
 ```
 
-Lower `val_bpb` is better.
+Lower is better. `val_bpb` is the metric used for ranking.
 
-## What To Change
+## Constraints
 
-You may change model architecture, depth, width, attention pattern,
-normalization, activation, optimizer settings, learning-rate schedule, batch
-size, gradient accumulation, initialization, regularization, and training-loop
-details inside `train.py`.
+Allowed:
 
-Keep these fixed unless you have a very strong reason:
+- Modify `train.py`.
+- Change model depth, width, heads, MLP, normalization, dropout, optimizer,
+  schedule, gradient clipping, compile mode, and batch size.
+- Simplify code if the validation loss stays the same or improves.
 
-- The BPB evaluation logic and printed `val_bpb` format.
-- The TinyStories data source and cache path.
-- The dependency set in `pyproject.toml`.
+Not allowed:
 
-Do not add dependencies, make new network calls beyond the existing data-cache
-setup, call subprocesses, introduce alternate CLIs, or submit unchanged code
-under a new slug.
+- Modify `prepare.py`.
+- Modify the dataset, validation split, validation function, or metric.
+- Add dependencies.
+- Run expensive training manually. Use the host `submit_trial(...)` tool.
 
-## Running Trials
+## Output Format
 
-If `run_experiment` returns `status: "submitted"`, the job was accepted. Report
-the slug, hypothesis, and source path, then stop that child.
+`train.py` must print a final summary containing:
 
-Before deciding what is best or launching another batch, call
-`refresh_results()` to update any completed submitted jobs.
+```text
+---
+val_bpb:          1.234567
+training_seconds: 180.1
+total_seconds:    195.4
+peak_vram_mb:     1234.5
+total_tokens_M:   12.3
+num_steps:        456
+num_params_M:     12.7
+depth:            4
+```
 
-If a completed row later has `status: "crashed"`, `status: "oom"`, or
-`status: "timeout"`, inspect `stderr_tail` through `get_run(n)` or
-`latest_run()`. Make at most one targeted fix for obvious syntax/import/runtime
-bugs. Do not retry slow, oversized, or fundamentally broken ideas unchanged.
+The host runner parses `val_bpb`.
 
-## Good First Ideas
+## Logging Results
 
-- Tune warmup, warmdown, max LR, or final LR fraction.
-- Try optimizer variants.
-- Trade depth for width, or width for depth.
-- Adjust effective batch size or gradient accumulation.
-- Try different attention implementations or positional embeddings.
-- Test normalization and activation variants.
-- Add or remove dropout and weight decay carefully.
-- Simplify components if the score stays competitive.
+The host runner writes an append-only `ledger.jsonl`.
 
-The parent should keep a diverse portfolio. Before launching a batch, call
-`submission_status()` and avoid exceeding the remaining submission budget. Use
-unique lowercase slugs like `lr_warmdown_tune`, `depth6_wider`, `adamw_only`, or
-`window_l_only`.
+Important fields:
+
+```text
+n
+slug
+hypothesis
+parent_slug
+status
+val_bpb
+trial_dir
+source_path
+log_path
+```
+
+Use `list_runs()` for a compact best-first view, `best_run()` to find the
+current keeper, and `get_run(n)` for full log tails.

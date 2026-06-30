@@ -461,7 +461,7 @@ def test_direct_graph_output_schema_removal_syncs_live_repl():
     )
     flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=5)
     graph = run_to_completion(flow, "structured", output_schema=Out)
-    assert "root" in flow.repls
+    assert "root" not in flow.repls
     assert json.loads(graph.result()) == {"answer": 1, "note": "structured"}
 
     graph.output_schema = None
@@ -484,7 +484,7 @@ def test_done_result_does_not_persist_into_followup_execution():
     flow = Flow(ScriptedLLM(lambda _messages: next(replies)), max_iters=6)
     graph = run_to_completion(flow, "structured", output_schema=Out)
     assert json.loads(graph.result()) == {"answer": 1, "note": "structured"}
-    assert flow.repls["root"].engine_context.done_result is not None
+    assert "root" not in flow.repls
 
     graph.output_schema = None
     graph = flow.step(graph, query="plain follow-up")  # LLMOutput with print only

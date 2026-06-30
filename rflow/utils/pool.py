@@ -70,17 +70,6 @@ class ThreadPool(Pool):
     def run_until_idle(self, tasks: list[Task], refill: Refill) -> dict[str, Any]:
         if self.max_concurrency <= 1:
             return super().run_until_idle(tasks, refill)
-        if len(tasks) <= 1:
-            results: dict[str, Any] = {}
-            pending = list(tasks)
-            while len(pending) == 1:
-                task_id, fn = pending.pop()
-                result = fn()
-                results[task_id] = result
-                pending.extend(refill(task_id, result, set()))
-            if pending:
-                results.update(self.run_until_idle(pending, refill))
-            return results
         futures = {self.executor.submit(fn): task_id for task_id, fn in tasks}
         results: dict[str, Any] = {}
         while futures:

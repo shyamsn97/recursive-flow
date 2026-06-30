@@ -27,7 +27,7 @@ python examples/summarizer.py --sections 10 --no-viz
 |---|---|
 | [`needle/`](needle/) | Needle-in-haystack (in-memory + filesystem variants) |
 | [`coding/`](coding/) | Interactive file-editing agent |
-| [`autoresearch/`](autoresearch/) | Karpathy-style research loop + circle-packing benchmark |
+| [`autoresearch/`](autoresearch/) | TinyStories autoresearch loop with Modal GPU trials |
 
 ## Tours & integrations
 
@@ -74,6 +74,13 @@ python examples/coding/agent.py --workdir ./proj --docker-image rlmflow:local
 Examples that use file tools register them on the runtime
 (`runtime.register_tools(FILE_TOOLS)`) and set `working_directory`, so relative
 paths resolve into that directory the same way in local and Docker modes.
+
+For true parallel local REPL/code execution, prefer `SubprocessRuntime`: it runs
+one local Python process per agent, so cwd and `RFLOW_*` metadata are isolated per
+agent. The in-process `LocalRuntime` is useful for low-overhead debugging, but
+code blocks that need cwd/env isolation are serialized inside the host process.
+Use `DockerRuntime` or a cloud sandbox runtime when you also need container-level
+isolation.
 
 A finished run is saved automatically under `_runs/`; reopen it with:
 

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import time
 from dataclasses import dataclass, field
+from threading import Lock
 
 import rflow
 
@@ -54,9 +55,11 @@ class TimelineLLM(rflow.LLMClient):
     thread_safe = True
     started_at: float = field(default_factory=time.perf_counter)
     events: list[tuple[float, str]] = field(default_factory=list)
+    lock: Lock = field(default_factory=Lock)
 
     def mark(self, label: str) -> None:
-        self.events.append((time.perf_counter() - self.started_at, label))
+        with self.lock:
+            self.events.append((time.perf_counter() - self.started_at, label))
 
     def chat(self, messages, *args, **kwargs) -> str:
         self.last_usage = rflow.LLMUsage(input_tokens=1, output_tokens=1)
@@ -90,7 +93,21 @@ class TimelineLLM(rflow.LLMClient):
         )
 
 
-def run_case(*, eager_children: bool) -> None:
+@dataclass
+class CaseResult:
+    eager_children: bool
+    steps: int
+    result: str
+    events: list[tuple[float, str]]
+
+    def time_of(self, label: str) -> float:
+        for t, event_label in self.events:
+            if event_label == label:
+                return t
+        raise KeyError(label)
+
+
+def run_case(*, eager_children: bool) -> CaseResult:
     llm = TimelineLLM()
     flow = rflow.Flow(
         llm,
@@ -119,11 +136,44 @@ def run_case(*, eager_children: bool) -> None:
         "eager-children",
         out_dir=_example_run_dir(__file__, "eager-children") / suffix,
     )
+    return CaseResult(
+        eager_children=eager_children,
+        steps=steps,
+        result=str(graph.result()),
+        events=list(llm.events),
+    )
+
+
+def check_timeline(lazy: CaseResult, eager: CaseResult) -> None:
+    """Assert the visible scheduling difference this example is meant to show."""
+
+    lazy_b2 = lazy.time_of("childb.task_2 start")
+    lazy_a_done = lazy.time_of("childa.task_1 finish")
+    eager_b2 = eager.time_of("childb.task_2 start")
+    eager_a_done = eager.time_of("childa.task_1 finish")
+
+    print("\n=== verdict ===")
+    print(
+        "non-eager barrier:",
+        f"child B step 2 starts at {lazy_b2:0.3f}s,",
+        f"after child A finishes at {lazy_a_done:0.3f}s",
+    )
+    print(
+        "eager refill:",
+        f"child B step 2 starts at {eager_b2:0.3f}s,",
+        f"before child A finishes at {eager_a_done:0.3f}s",
+    )
+
+    if lazy_b2 <= lazy_a_done:
+        raise AssertionError("non-eager mode did not wait for the sibling barrier")
+    if eager_b2 >= eager_a_done:
+        raise AssertionError("eager mode did not refill ready child work immediately")
 
 
 def main() -> None:
-    run_case(eager_children=False)
-    run_case(eager_children=True)
+    lazy = run_case(eager_children=False)
+    eager = run_case(eager_children=True)
+    check_timeline(lazy, eager)
 
 
 if __name__ == "__main__":

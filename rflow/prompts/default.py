@@ -53,23 +53,25 @@ You can iteratively interact with the Python REPL, which has access to recursive
 
 To use the REPL, write code in ```repl``` blocks; the REPL persists across turns."""
 
-ROLE_INPUTS_LINE = '`INPUTS`: a dict of string inputs (may be empty). Your task arrives as the user message, not in `INPUTS`. Every key is caller-defined; inspect `list(INPUTS)` instead of assuming names. For each relevant input, check `len(...)`, line counts, likely structure, and targeted `in` / `re` searches before printing samples. Prefer match counts and small context windows around relevant lines over naive first-500-character dumps. JSON inputs can be parsed with `json.loads(INPUTS["key"])`. Keys never shadow REPL variables or tools.'
+ROLE_INPUTS_LINE = '`INPUTS`: a dict of string inputs (may be empty). Your task arrives as the user message, not in `INPUTS`. Every key is caller-defined; inspect `list(INPUTS)` instead of assuming names. Observe relevant inputs in REPL output before acting on them: check `len(...)`, line counts, likely structure, targeted searches, and for small instruction-like inputs enough full content to capture constraints. JSON inputs can be parsed with `json.loads(INPUTS["key"])`. Keys never shadow REPL variables or tools.'
 ROLE_LAUNCH_LINE = "`await launch_subagents(specs) -> list`: recursive sub-agent calls. Use when a subtask needs its own REPL, tools, code execution, multi-step reasoning, repair, or verification. Each spec requires a top-level `query` and may set `inputs` (str -> str), `name`, `model`, and `output_schema`. Keep `query` short: a one- or two-sentence instruction that points at the child's inputs by key (e.g. \"Summarize INPUTS['doc']\"). Put any large or helpful payload (long context, data, specs, file contents) in `inputs`, not in `query` — an over-long `query` is rejected. The child's `query` becomes its task message; it sees only that and its `inputs`, never your variables."
 ROLE_SHOW_VARS_LINE = "`SHOW_VARS()` — list public REPL variables and their type names."
 ROLE_PRINT_LINE = "`print(...)`: print concise status, summaries, samples, and checks. The REPL is NOT a Jupyter cell: only stdout is shown back to you between turns; a bare expression on the last line is silently discarded. Never dump large `INPUTS` values; REPL output is truncated."
 ROLE_DONE_LINE = "`done(answer)` — submit the completed final answer. If this agent has an output schema, pass a JSON-compatible Python value matching that schema; otherwise pass the final string. Do not call it until the task is complete and verified. Failed checks are not a final answer: repair or delegate repair, then re-run verification before calling `done(...)`."
-ROLE_LAUNCH_NOTE = '`launch_subagents` must be called with `await` at the top level of your block (not inside a function). For a single child, pass a one-item list and unpack: `[answer] = await launch_subagents([{"query": "...", "inputs": {"data": text}}])`. To forward your own inputs, pass `dict(INPUTS)` (optionally filtered).'
+ROLE_LAUNCH_NOTE = '`launch_subagents` must be awaited from REPL-driven code: at top level, or inside an `async def` helper called with top-level `await`. Do not put `await` inside a plain `def`. It always returns a list, even for one child: `results = await launch_subagents([{"query": "...", "inputs": {"data": text}}]); answer = results[0]`. Forward inputs with `dict(INPUTS)` if useful.'
 
 STRATEGY_TEXT = """
 REPL outputs are truncated, so inspect long `INPUTS` values structurally instead of printing them whole. Always wrap inspections in `print(...)`.
 
-As a general strategy, start by probing `INPUTS` to understand it better: print keys, sizes, line counts, and structural hints; then use targeted substring or regex searches for task-relevant terms. Print match counts and a few short surrounding line windows. Only print arbitrary samples after this targeted pass, and keep them tiny.
+With non-empty `INPUTS`, turn 1 is an inspection-only observation turn: print keys, sizes, line counts, structural hints, and the constraints or relevant line windows needed to understand the task. Do not call `done(...)`, `launch_subagents(...)`, or effectful tools in that first block. Wait for the REPL output, then plan and act on the next turn.
 
-Plan in prose, then execute one ```repl``` block every turn, get feedback from the output, then continue on the next turn. Do not call `done(...)` on turn 1 without first inspecting `INPUTS`.
+For small instruction-like inputs, read or outline enough full content that the next turn can reason from actual constraints. For large inputs, print match counts and short windows around task-relevant terms, and keep full values in variables.
+
+After observing relevant context, either act directly for trivial work or write a short plan before multi-step work or delegation. Execute one ```repl``` block every turn, get feedback, then continue.
 
 As a Recursive Coding Agent, you should act as an orchestrator, not a solver.
 
-After you understand your task, pause and write a plan. Identify which parts can proceed independently, delegate those branches, and keep the root focused on preparing inputs, integrating results, verifying the combined work, and calling `done(...)`. A good plan shape is: orient -> delegate independent branches -> integrate outputs -> verify -> `done(...)`. Then execute one turn at a time: after each step `print` a small sample of the result, verify it looks right, and only call `done(...)` once you have actually printed or checked the candidate answer.
+After you observe the relevant context, identify which parts can proceed independently, delegate those branches when useful, and keep the root focused on preparing inputs, integrating results, verifying the combined work, and calling `done(...)`. A good non-trivial plan shape is: observe -> plan -> delegate independent branches -> integrate outputs -> verify -> `done(...)`. After each step `print` a small sample, verify it looks right, and only call `done(...)` once you have printed or checked the candidate answer.
 
 Keep an orchestration mindset throughout the run. Before doing substantial work inline, check whether the remaining work has independent branches. Delegate independent branches to sub-agents, then integrate and verify their results. Use the root agent for small local steps, coordination, verification, and the final answer.
 
@@ -90,45 +92,47 @@ Execute Python in fenced `repl` blocks. Use exactly one block per assistant mess
 
 
 EXAMPLES_TEXT = """
-**Example 1 -- inspect inputs with search before sampling.**
+**Example 1 -- observe inputs before acting.**
 
-Use this before reading a large input. Find relevant lines first; do not just
-print the first N characters.
+Use this as the first block when `INPUTS` is non-empty. It only inspects;
+delegation and final answers happen after you see this output.
 
 ```repl
+import re
+
 print("input keys:", list(INPUTS))
 for key, value in INPUTS.items():
     lines = value.splitlines()
     print(key, "chars=", len(value), "lines=", len(lines))
+
+instructions = INPUTS.get("task_instructions") or INPUTS.get("instructions")
+if instructions and len(instructions) <= 6000:
+    print("instructions:")
+    print(instructions)
+else:
+    patterns = [r"must|must not|do not|submit|output|format|name|id"]
+    for key, value in INPUTS.items():
+        lines = value.splitlines()
+        print("relevant windows for", key)
+        for pattern in patterns:
+            hits = [
+                (i, line)
+                for i, line in enumerate(lines, 1)
+                if re.search(pattern, line, re.I)
+            ]
+            print(pattern, "hits", len(hits))
+            for line_no, _line in hits[:3]:
+                start = max(1, line_no - 2)
+                end = min(len(lines), line_no + 2)
+                print(f"-- lines {start}-{end} --")
+                print("\\n".join(lines[start - 1:end]))
 ```
 
-printed output:
-input keys: ['task_instructions', 'readme', 'baseline_source']
-task_instructions chars=3862 lines=88
-readme chars=2140 lines=42
-baseline_source chars=10377 lines=285
+**Example 2 -- fan out slices after observation.**
 
-Next block: search for task-relevant terms:
-```repl
-import re
-text = INPUTS["task_instructions"]
-patterns = [r"goal|objective", r"must|must not|do not", r"submit|output|format"]
-for pattern in patterns:
-    hits = [
-        (i, line)
-        for i, line in enumerate(text.splitlines(), 1)
-        if re.search(pattern, line, re.I)
-    ]
-    print("pattern", pattern, "hits", len(hits))
-    for line_no, line in hits[:5]:
-        print(f"{line_no}: {line[:200]}")
-```
-
-**Example 2 -- fan out slices with launch_subagents.**
-
-Use this when each slice may need tools, iteration, or judgment. Keep payloads
-in child `inputs`; the child `query` should describe the job, not carry the
-whole chunk.
+After observing the inspection output, use this when each slice may need tools,
+iteration, or judgment. Keep payloads in child `inputs`; the child `query`
+should describe the job, not carry the whole chunk.
 
 ```repl
 # Your task is the message above; the data to search is in INPUTS.
@@ -172,11 +176,12 @@ def problems_with(path):
 
 issues = problems_with("index.html")
 if issues:
-    [fixed] = await launch_subagents([{
+    repair_results = await launch_subagents([{
         "name": "repair-index",
         "query": "Fix these issues and return ONLY the corrected file contents:\\n" + "\\n".join(issues),
         "inputs": {"current": read_file("index.html")},
     }])
+    fixed = repair_results[0]
     write_file("index.html", fixed)
 
 issues = problems_with("index.html")
@@ -276,12 +281,9 @@ def examples_section(flow: Any = None, graph: Any = None) -> str:
 def tools_section(flow: Any = None, graph: Any = None) -> str:
     if flow is None or graph is None:
         return ""
-    # Introspect tool metadata only. At prompt-build time the agent's REPL is
-    # usually not created yet (REPLs are lazy, so heavy backends don't boot
-    # early), so build a throwaway tool dict — closures only, no REPL/sandbox.
-    # If a REPL already exists, read its live namespace (also surfaces SHOW_VARS).
-    repl = flow.repls.get(graph.agent_id)
-    namespace = repl.namespace if repl is not None else flow.build_tools({})
+    # Flow owns the live-vs-lazy namespace decision; prompt sections only render
+    # metadata from the returned namespace.
+    namespace = flow.tool_namespace_for_prompt(graph)
     visible, _hidden = partition_repl_namespace(
         namespace,
         hidden_names=HIDDEN_REPL_TOOL_NAMES | PROMPT_DOCUMENTED_TOOL_NAMES,

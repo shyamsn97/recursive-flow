@@ -18,7 +18,7 @@ import pytest
 import rflow
 
 from rflow import Flow, Graph
-from rflow.code import find_code_blocks, replace_code_block
+from rflow.runtime.code import find_code_blocks, replace_code_block
 from rflow.utils import export, viewer, viz
 from rflow.utils.trace import load_trace, save_trace
 from rflow.utils.tracing import json_logs
@@ -277,6 +277,39 @@ def test_graph_plot_figure_builds(final_graph):
     fig = viewer.graph_plot(final_graph, "graph")
     assert type(fig).__name__ == "Figure"
     assert fig.data  # has traces
+
+
+def test_graph_plot_centers_supervising_over_waited_children():
+    pytest.importorskip("plotly")
+    root_q = rflow.UserQuery(agent_id="root", seq=0, content="fan out")
+    root_wait = rflow.SupervisingOutput(
+        agent_id="root",
+        seq=1,
+        waiting_on=["root.child"],
+    )
+    root_done = rflow.DoneOutput(agent_id="root", seq=2, result="done")
+    child_q = rflow.UserQuery(agent_id="root.child", seq=0, content="child")
+    child_done = rflow.DoneOutput(agent_id="root.child", seq=1, result="ok")
+    child = rflow.Graph.from_meta_dict(
+        {
+            "agent_id": "root.child",
+            "depth": 1,
+            "parent_agent_id": "root",
+            "parent_node_id": root_wait.id,
+            "query": "child",
+        },
+        nodes=[child_q, child_done],
+    )
+    graph = rflow.Graph.from_meta_dict(
+        {"agent_id": "root", "depth": 0, "query": "fan out"},
+        nodes=[root_q, root_wait, root_done],
+        children={child.agent_id: child},
+    )
+
+    fig = viewer.graph_plot(graph, "graph")
+    positions = viewer._node_positions_from_figure(fig)
+
+    assert positions[root_wait.id][0] == pytest.approx(positions[child_q.id][0])
 
 
 def test_graph_plot_marker_mult_overrides_dense_cap():

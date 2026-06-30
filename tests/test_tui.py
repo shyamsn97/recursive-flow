@@ -16,7 +16,7 @@ from rflow import (
     SupervisingOutput,
     UserQuery,
 )
-from rflow.tui import (
+from rflow.integrations.tui import (
     _context_inputs,
     agent_table,
     chat_bubbles,

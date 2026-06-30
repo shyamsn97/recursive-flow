@@ -1,6 +1,6 @@
-"""Phase 0 — the in-process REPL (``rflow.repl``).
+"""Phase 0 — the in-process REPL (``rflow.runtime.repl``).
 
-Ported from the legacy REPL-yield coverage to the new ``rflow.repl.REPL``
+Ported from the legacy REPL-yield coverage to the new ``rflow.runtime.repl.REPL``
 (no namespace ctor arg; ``repl.namespace`` is public). Covers top-level-await
 detection, suspend/resume on ``WaitRequest``, the unsupported-await guard in the
 driver, and BaseException capture (errors and ``SystemExit`` become recorded
@@ -12,7 +12,7 @@ from __future__ import annotations
 import ast
 
 from rflow.graph import WaitRequest
-from rflow.repl import REPL, _has_top_level_await
+from rflow.runtime.repl import REPL, _has_top_level_await
 
 # ── top-level await detection ─────────────────────────────────────────
 

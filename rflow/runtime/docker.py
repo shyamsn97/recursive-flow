@@ -23,18 +23,17 @@ directly if you want full control.
 
 from __future__ import annotations
 
-import json
-import subprocess as sp
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from rflow.runtime.runtime import RemoteRepl, ReplBackend, Runtime
+from rflow.runtime.popen import PopenRepl
+from rflow.runtime.runtime import ReplBackend, Runtime
 
 if TYPE_CHECKING:
     from rflow.graph import Graph
 
 
-class DockerRepl(RemoteRepl):
+class DockerRepl(PopenRepl):
     """A :class:`RemoteRepl` whose transport is a ``docker run`` subprocess."""
 
     def __init__(
@@ -52,92 +51,27 @@ class DockerRepl(RemoteRepl):
         extra_args: list[str] | None = None,
         docker_bin: str = "docker",
         entrypoint_argv: list[str] | None = None,
+        repl_timeout: float | None = None,
     ) -> None:
-        super().__init__()
         self.image = image
-        self.cwd = cwd
-        self.argv = build_argv(
-            image,
-            mounts=mounts,
-            env=env,
-            network=network,
-            cpus=cpus,
-            memory=memory,
-            user=user,
-            workdir=workdir,
-            extra_args=extra_args,
-            docker_bin=docker_bin,
-            entrypoint_argv=entrypoint_argv,
+        super().__init__(
+            build_argv(
+                image,
+                mounts=mounts,
+                env=env,
+                network=network,
+                cpus=cpus,
+                memory=memory,
+                user=user,
+                workdir=workdir,
+                extra_args=extra_args,
+                docker_bin=docker_bin,
+                entrypoint_argv=entrypoint_argv,
+            ),
+            cwd=cwd,
+            label="Docker REPL subprocess",
+            repl_timeout=repl_timeout,
         )
-        self.proc: sp.Popen | None = None
-
-    def _ensure_proc(self) -> sp.Popen:
-        if self.proc is None:
-            self.proc = sp.Popen(
-                self.argv,
-                stdin=sp.PIPE,
-                stdout=sp.PIPE,
-                stderr=sp.PIPE,
-                cwd=str(self.cwd) if self.cwd is not None else None,
-                bufsize=0,
-            )
-        return self.proc
-
-    def send(self, msg: dict) -> None:
-        proc = self._ensure_proc()
-        assert proc.stdin is not None
-        proc.stdin.write((json.dumps(msg) + "\n").encode())
-        proc.stdin.flush()
-
-    def recv(self) -> dict:
-        assert self.proc is not None and self.proc.stdout is not None
-        line = self.proc.stdout.readline()
-        if not line:
-            err = b""
-            if self.proc.stderr is not None:
-                try:
-                    err = self.proc.stderr.read() or b""
-                except Exception:  # noqa: BLE001
-                    pass
-            raise RuntimeError(
-                f"REPL subprocess {self.argv!r} exited unexpectedly. "
-                f"stderr: {err.decode(errors='replace')}"
-            )
-        return json.loads(line)
-
-    def close(self) -> None:
-        """Tear down the container subprocess and release its pipe FDs.
-
-        Closing stdin sends EOF, which ends the server's ``serve()`` loop and
-        (with ``--rm``) wipes the container. Escalate to terminate/kill only if
-        it's still alive, then close pipes and reap so FDs aren't leaked.
-        """
-        proc, self.proc = self.proc, None
-        if proc is None:
-            return
-        try:
-            if proc.stdin is not None and not proc.stdin.closed:
-                proc.stdin.close()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            proc.wait(timeout=2)
-        except sp.TimeoutExpired:
-            for action in (proc.terminate, proc.kill):
-                try:
-                    action()
-                    proc.wait(timeout=2)
-                    break
-                except Exception:  # noqa: BLE001
-                    continue
-        except Exception:  # noqa: BLE001
-            pass
-        for stream in (proc.stdout, proc.stderr):
-            try:
-                if stream is not None and not stream.closed:
-                    stream.close()
-            except Exception:  # noqa: BLE001
-                pass
 
 
 class DockerRuntime(Runtime):
@@ -173,6 +107,7 @@ class DockerRuntime(Runtime):
         extra_args: list[str] | None = None,
         docker_bin: str = "docker",
         entrypoint_argv: list[str] | None = None,
+        repl_timeout: float | None = None,
     ) -> None:
         super().__init__(working_directory=working_directory)
         self.image = image
@@ -195,6 +130,7 @@ class DockerRuntime(Runtime):
             extra_args=extra_args,
             docker_bin=docker_bin,
             entrypoint_argv=entrypoint_argv,
+            repl_timeout=repl_timeout,
         )
 
     def open(self, agent: Graph) -> ReplBackend:

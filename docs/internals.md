@@ -257,15 +257,18 @@ observation just like `step_exec`.
 
 ## The REPL `await` protocol
 
+> Status note: older versions used separate internal delegate/wait primitives.
+> The current agent-facing and runtime contract is `await launch_subagents([...])`,
+> which directly spawns children and yields a `WaitRequest`; cold-start recovery
+> now uses durable graph metadata plus `get_subagent_result(...)`, not coroutine
+> replay.
+
 Agents delegate through one launcher — `await launch_subagents([...])`. This is
-a plain `async def` installed in the REPL namespace; it spawns its children via
-the internal `flow_delegate(...)`
-primitive and then performs a single `await flow_wait(*handles)`. So while
-agents only ever write the launchers, the value the engine actually suspends on
-is still the `WaitRequest` produced by that internal `flow_wait` — which
-propagates up through the launcher's `await` chain to the top-level driver. The
-rest of this section describes that suspension point; `flow_delegate` /
-`flow_wait` are internal plumbing, not part of the agent-facing surface.
+a plain `async def` installed in the REPL namespace. It validates child specs,
+spawns children through the engine's host spawn hook, then awaits a
+`WaitRequest`. That `WaitRequest` propagates up through the launcher's `await`
+chain to the top-level driver, where the engine records a `SupervisingOutput`
+and schedules the children.
 
 The engine **only** intercepts top-level `await` values that resolve to a
 `WaitRequest`.
@@ -365,8 +368,8 @@ whole block a coroutine. (This mirrors why a `yield` inside a nested
 
 #### Decision 2 — suspend or finish?
 
-Once the block is a coroutine, the engine drives it with `send()`. Each
-suspension surfaces whatever `flow_wait(...)` awaited:
+Once the block is a coroutine, the engine drives it with `send()`. A suspension
+surfaces the `WaitRequest` yielded by `launch_subagents(...)`:
 
 ```python
 request = coro.send(prev_value)        # advance to the next await
@@ -375,10 +378,9 @@ if isinstance(request, WaitRequest):
 # else: TypeError — only a launcher's WaitRequest can suspend
 ```
 
-A launcher's internal `await flow_wait(...)` evaluates to a `WaitRequest`, which
-is the only value the engine knows how to suspend on. Awaiting anything else is
-an error. When the coroutine raises `StopIteration`, the block is done and
-the engine records the captured stdout.
+`WaitRequest` is the only value the engine knows how to suspend on. Awaiting
+anything else is an error. When the coroutine raises `StopIteration`, the block
+is done and the engine records the captured stdout.
 
 ### Net effect on the graph
 
@@ -423,10 +425,9 @@ results = await launch_subagents([
 print(len(results))
 ```
 
-the flow is (the launcher spawns each child via the internal `flow_delegate` and
-suspends on a single `await flow_wait(*handles)`):
+the flow is:
 
-1. The parent REPL runs until the launcher's `await flow_wait(*handles)`.
+1. The parent REPL runs until `launch_subagents(...)` awaits its `WaitRequest`.
 2. The coroutine suspends. The assignment to `results` has **not**
    happened yet.
 3. The graph records a `SupervisingOutput(waiting_on=[a, b])`.
@@ -437,7 +438,7 @@ suspends on a single `await flow_wait(*handles)`):
 6. The line becomes equivalent to `results = child_results`.
 7. The same stateful REPL continues and runs `print(len(results))`.
 8. If the resumed code ends without `done(...)` or another
-   `await flow_wait(...)`, the engine records an `ExecOutput`
+   `await launch_subagents(...)`, the engine records an `ExecOutput`
    (`resumed_from=[...]`) and the next LLM turn continues in the same
    stateful REPL — variables assigned after the wait are still in
    scope.
@@ -487,10 +488,10 @@ results = await launch_subagents([
 print(f"got {len(results)} child results")
 ```
 
-Runtime execution (the launcher expands to `flow_delegate` + `await flow_wait`):
+Runtime execution:
 
-1. The launcher's `flow_delegate(...)` calls create four child agents.
-2. Its single `await flow_wait(*handles)` suspends the root coroutine.
+1. `launch_subagents(...)` creates four child agents through the host spawn hook.
+2. Its `WaitRequest` suspends the root coroutine.
 3. The graph records `SupervisingOutput(waiting_on=[...4 ids...])`.
 
 ```
@@ -509,7 +510,7 @@ root.analyst       [0] UserQuery
 ```
 
 Data location: child outputs do not exist yet. Root REPL is suspended
-inside the launcher at `await flow_wait(*handles)`. `results` does not exist
+inside `launch_subagents(...)`. `results` does not exist
 yet in the top-level namespace.
 
 #### Step 2 — children run
@@ -649,45 +650,31 @@ turn and the second block's code runs in a *fresh* REPL submission
 
 ## Cold-start replay
 
-When the engine is attached to a freshly-loaded workspace
-(`Workspace.fork(...)` or just opening a saved run later), the
-durable graph contains every `SupervisingOutput` that was recorded —
-but the live Python coroutine that suspended inside the runtime is
-gone.
+> Superseded: current `Flow` recovery does not replay old Python code to
+> recreate suspended coroutine frames. When a live coroutine is unavailable,
+> the graph-backed recovery path injects a recovery observation and exposes
+> completed immediate child results through `get_subagent_result(...)`.
 
-`engine/replay.py::replay_to_suspension(graph, target, runtime)` handles
-this. It re-runs the action code with `flow_delegate` in *replay mode*
-(returns existing child handles instead of spawning new ones), so the
-coroutine pauses again at the same `await` the original recorded. The
-regular resume path then takes over.
+When a saved or edited graph contains a completed `SupervisingOutput` but the
+live Python coroutine is gone, the engine cannot jump back to the source line
+after `await launch_subagents(...)`. Instead, it appends a recovery observation
+for that supervising node. The next LLM turn can call
+`get_subagent_result(...)` to read the completed immediate child results from
+the graph, then continue the parent task in ordinary Python.
 
 ```python
 def step_after_supervising(self, graph, last):
     if not can_resume(graph, last):
         return                      # children still need to advance
-    results = results_for_supervise(graph, last)
-    resume_action = ResumeAction(...)
-    append_node(self.session, graph, resume_action)
-    runtime = self.inject_env(graph, resume_action)
-    if not runtime.suspended:
-        # Live coroutine is gone — process restart, fork, etc.
-        # Replay action code with flow_delegate in replay mode so the
-        # coroutine pauses at the same await we recorded.
-        replay_to_suspension(graph, last, runtime)
-    # Now the runtime is suspended at the right await; resume.
-    suspended, raw, errored = runtime.resume_code(results)
+    if runtime_has_live_coroutine(graph.agent_id):
+        resume_live_coroutine_with_child_results(...)
+    else:
+        append_recovery_observation_with_get_subagent_result_hint(...)
     ...
 ```
 
-`replay_to_suspension` walks the trajectory back to the originating
-`LLMOutput.code`, sets `runtime.env["_REPLAY_QUEUE"]` to the agent
-IDs the original `await` was waiting on, runs the code, and verifies
-that the new `WaitRequest.agent_ids` matches what we recorded. On
-divergence, it raises.
-
-For multi-wait blocks, it walks the prior `SupervisingOutput`/
-`ResumeAction` chain in the same execution and replays each `await` in
-order.
+Recovery is intentionally best-effort: it preserves graph durability without
+pretending arbitrary Python coroutine frames can always be reconstructed.
 
 ---
 
@@ -772,10 +759,9 @@ hits    = CONTEXT.grep(r"TODO") # lineno:line rows
 full    = CONTEXT.read()        # full payload
 ```
 
-The launchers forward their `context=` argument to the internal
-`flow_delegate(*, name, query, context)`, which writes the child's context
-payload under `context/<child_id>/context.txt` before the child's first
-`UserQuery` is appended.
+Child specs carry supporting payloads in `inputs`, a `dict[str, str]` exposed to
+the child as its own `INPUTS` dict. The child's `query` remains the task message;
+large context should go in `inputs`, not in `query`.
 
 ---
 
@@ -804,12 +790,10 @@ Three methods own the lifecycle:
   `PARENT_NODE_ID`, `DONE_RESULT`, `DELEGATED`, plus `CONTEXT` /
   `SESSION` proxies.
 
-`register_tools(runtime)` binds the core `done` / `flow_wait` /
-`flow_delegate` closures to `runtime.env`. The `flow_delegate` closure
-captures `self.spawn_child` so it can call back into engine state. The
-agent-facing `launch_subagents` launcher is registered as a real core tool and
-composes over those closures at call time, so it works identically on local and
-remote runtimes.
+Core tool seeding binds `done`, `launch_subagents`, `_rflow_spawn_child`, and
+`get_subagent_result`. In remote runtimes, `launch_subagents` is rebuilt inside
+the sandbox from the private host spawn proxy so child creation still mutates
+the host graph while ordinary tools can run in the sandbox.
 
 See [`runtimes.md`](runtimes.md) for the `Runtime` protocol and
 shipped variants.
@@ -968,9 +952,9 @@ if parent.depth >= self.config.max_depth:
     return f"[refused: max depth {self.config.max_depth}] Do this directly."
 ```
 
-The string return is the documented refusal protocol — `flow_delegate(...)`
-in the REPL gets back a string instead of a `ChildHandle`, so the
-parent's code can detect it (`isinstance(h, str)`) and recover.
+The string return is the documented refusal protocol: `launch_subagents(...)`
+places the refusal string in that child's result slot so the parent can handle
+the refused task inline.
 
 ---
 

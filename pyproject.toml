@@ -126,7 +126,12 @@ exclude_lines = [
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-extend-exclude = ["examples/notebooks", "examples/_data"]
+extend-exclude = [
+    "examples/notebooks",
+    "examples/_data",
+    "examples/autoresearch_mini/prepare.py",
+    "examples/autoresearch_mini/train.py",
+]
 
 [tool.ruff.lint.per-file-ignores]
-"examples/autoresearch/train.py" = ["E402"]
+"examples/autoresearch_mini/train.py" = ["E402"]

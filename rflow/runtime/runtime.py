@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from rflow.graph import ChildHandle, WaitRequest
-from rflow.repl import REPL, DoneSignal
 from rflow.runtime.context import EngineContext
+from rflow.runtime.repl import REPL, DoneSignal
 
 if TYPE_CHECKING:
     from rflow.graph import Graph
@@ -75,7 +75,7 @@ def deserialize(value: Any) -> Any:
 class ReplBackend(Protocol):
     """Where an agent's code runs (in-process REPL or a remote sandbox).
 
-    Outcome contract (matches :class:`rflow.repl.REPL`):
+    Outcome contract (matches :class:`rflow.runtime.repl.REPL`):
 
     * ``start`` / ``resume`` return ``(False, stdout: str)`` on completion or
       error (``errored`` distinguishes them), or ``(True, (WaitRequest,
@@ -331,7 +331,7 @@ class Runtime(ABC):
     ``working_directory`` agent code runs in and the tools registered with
     :meth:`register_tools`. :class:`~rflow.flow.Flow` calls :meth:`open` once per
     agent to mint a fresh :class:`ReplBackend` (the in-process
-    :class:`~rflow.repl.REPL`, a Docker container, or a cloud sandbox).
+    :class:`~rflow.runtime.repl.REPL`, a Docker container, or a cloud sandbox).
 
     Subclass and implement :meth:`open` to add a backend; that is the supported
     extension point (there is no ``repl_factory`` — the runtime *is* the
@@ -444,7 +444,7 @@ class Runtime(ABC):
 class LocalRuntime(Runtime):
     """Run agent code in the current Python process.
 
-    :meth:`open` mints an in-process :class:`~rflow.repl.REPL` bound to
+    :meth:`open` mints an in-process :class:`~rflow.runtime.repl.REPL` bound to
     ``working_directory`` (defaults to the current directory). When a working
     directory is set, each code block runs with the process cwd switched into it
     (serialized across agents), so the filesystem tools and any ``open(...)`` in

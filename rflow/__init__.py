@@ -85,10 +85,10 @@ from rflow.prompts import (
     create_final_action_message,
     create_nudge_message,
 )
-from rflow.repl import REPL, DoneSignal
-from rflow.runtime import DockerRuntime, LocalRuntime, Runtime
+from rflow.runtime.repl import REPL, DoneSignal
+from rflow.runtime import DockerRuntime, LocalRuntime, Runtime, SubprocessRuntime
 from rflow.tools import FILE_TOOLS, get_tool_metadata, tool
-from rflow.tui import tui
+from rflow.integrations.tui import tui
 from rflow.utils.trace import Trace, load_trace, save_trace
 
 __all__ = [
@@ -132,6 +132,7 @@ __all__ = [
     "Runtime",
     "SYSTEM_PROMPT",
     "SupervisingOutput",
+    "SubprocessRuntime",
     "TinkerClient",
     "Trace",
     "UserQuery",

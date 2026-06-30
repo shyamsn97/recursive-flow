@@ -625,6 +625,21 @@ def _build_graph_figure(
         if not moved:
             break
 
+    # The tidy-tree pass centers each node over all outgoing children, including
+    # the same-agent continuation. For supervising states, the semantic center is
+    # the group of child agents being awaited. Re-center those markers after the
+    # collision-spacing pass so dense child fanouts still read as owned by the
+    # supervising state.
+    for node in nodes:
+        if not is_supervising(node) or node.id not in pos:
+            continue
+        child_ids = [cid for cid in spawn_children.get(node.id, []) if cid in pos]
+        if not child_ids:
+            continue
+        child_xs = [pos[cid][0] for cid in child_ids]
+        x, y = pos[node.id]
+        pos[node.id] = ((min(child_xs) + max(child_xs)) / 2.0, y)
+
     if fixed_positions is not None:
         for nid in list(pos):
             if nid in fixed_positions:

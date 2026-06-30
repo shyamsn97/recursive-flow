@@ -5,7 +5,7 @@ Runs *inside* the sandbox (container image must ``pip install rlmflow``):
     python -m rflow.runtime.repl_server [--workdir DIR]
 
 It reads one JSON command per stdin line and writes one JSON response per stdout
-line. Code execution is delegated to the in-process :class:`rflow.repl.REPL`
+line. Code execution is delegated to the in-process :class:`rflow.runtime.repl.REPL`
 (top-level-await detection, suspension, stdout capture, ``DoneSignal``) — this
 module only adds the wire protocol and the host-call proxies.
 
@@ -32,7 +32,7 @@ import sys
 from types import SimpleNamespace
 from typing import TextIO
 
-from rflow.repl import REPL, DoneSignal
+from rflow.runtime.repl import REPL, DoneSignal
 from rflow.runtime.runtime import deserialize, serialize
 from rflow.tools.builtins import (
     DEFAULT_MAX_QUERY_CHARS,
