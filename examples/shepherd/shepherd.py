@@ -321,9 +321,10 @@ async def play_jam(
     """
 
     async def land(node: Node) -> Node:
-        return (await flow.step(node)).created
+        return await flow.step(node)
 
-    setup = worker.frontier.append(LLMOutput(content="construct the Sokoban game", code=construct))
+    setup = LLMOutput(content="construct the Sokoban game", code=construct)
+    worker.frontier.append(setup)
     yield setup
     action = await land(setup)
     yield action
@@ -331,7 +332,8 @@ async def play_jam(
 
     reply = f"{JAM_REASON}\n\n```repl\n{jam_code}\n```"
     for _ in range(pushes):
-        turn = worker.frontier.append(LLMOutput(content=reply, code=jam_code))
+        turn = LLMOutput(content=reply, code=jam_code)
+        worker.frontier.append(turn)
         yield turn
         action = await land(turn)
         yield action

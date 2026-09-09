@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -110,6 +112,44 @@ def test_tinker_stream_is_one_chunk_from_completion():
     chunks = list(_StubTinker().stream([{"role": "user", "content": "hi"}]))
     assert [chunk.text for chunk in chunks] == ["sampled"]
     assert chunks[-1].usage == LLMUsage(3, 4)
+
+
+def test_tinker_extracts_text_from_new_cookbook_content_blocks():
+    parsed = SimpleNamespace(
+        content=[
+            {"type": "thinking", "thinking": "hidden chain of thought"},
+            {"type": "text", "text": "```repl\nprint(1)\n```"},
+        ]
+    )
+
+    assert TinkerClient._message_text(parsed) == "```repl\nprint(1)\n```"
+
+
+def test_tinker_serializes_renderer_tokenizer_borrows():
+    class BorrowCheckedRenderer:
+        def __init__(self):
+            self.borrowed = threading.Lock()
+
+        def build_generation_prompt(self, messages):
+            if not self.borrowed.acquire(blocking=False):
+                raise RuntimeError("Already borrowed")
+            try:
+                time.sleep(0.01)
+                return messages
+            finally:
+                self.borrowed.release()
+
+        def get_stop_sequences(self):
+            return []
+
+    client = object.__new__(TinkerClient)
+    client.renderer = BorrowCheckedRenderer()
+    client._renderer_lock = threading.Lock()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(client._render_prompt, [[{"content": "a"}], [{"content": "b"}]]))
+
+    assert [prompt for prompt, _stop in results] == [[{"content": "a"}], [{"content": "b"}]]
 
 
 def test_join_matches_stream_chunks():

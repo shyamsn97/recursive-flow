@@ -1,8 +1,8 @@
 # Prompt Customization
 
-`Flow` builds a system prompt from named sections. Most customization should derive from the default builder instead of replacing the whole prompt, because the default sections carry the REPL protocol, delegation API, and runtime manifests while leaving planning free-form.
+`Flow.build_system_prompt(node)` renders the inherited protocol prompt. `UserQuery.build_system_prompt(flow)` is what a turn actually sends: the default is that same string, and query nodes wrap it. Actions and outputs have no prompt hook. User turns are `Turn N/M:` plus a first-turn “look at INPUTS first” safeguard.
 
-Use full replacement only when you want to own that entire protocol yourself.
+Most customization should subclass `PromptBuilder` and concatenate after `super().__call__(flow, node)`, because the default template carries the REPL protocol and live API list. Use a full string replacement only when you want to own that entire protocol yourself.
 
 ## Inspect The Prompt
 
@@ -13,157 +13,69 @@ import rlmflow
 
 flow = rlmflow.Flow(llm)
 root = flow.start("Summarize this document.", inputs={"document": document})
-print(flow.system_prompt.render(flow, root))
+print(flow.build_system_prompt(root))
 ```
 
-`render(flow, agent)` renders against that agent's config — its query, inputs, model, and output schema — and the flow's current prompt and tool configuration. To see the whole conversation instead, `flow.build_messages(root.frontier)` returns the message list the model receives, whose first entry is this same text.
+That is the inherited protocol: tools, INPUTS sizes, depth. To see the system message a working turn actually sends (protocol plus orchestrator policy when the agent can spawn), step to a `PlanQuery` or call `node.build_system_prompt(flow)` on that query. `flow.build_messages(node)` returns the full message list; on a `UserQuery` the first entry is that wrapped system text, and on any other node it is the inherited protocol.
 
-## Default Builder Shape
+## Default Shape
 
-The default builder has these sections, in order:
+The default `PromptBuilder` fills one official-style template:
 
-| Section                    | Purpose                                                                                                                                        |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `role`                     | Opening recursive-agent contract.                                                                                                              |
-| `builtins`                 | Runtime-aware `finish(...)` and delegation API.                                                                                                |
-| `context`                  | Persistent REPL working memory and bounded observations.                                                                                       |
-| `format`                   | One `repl` block per turn; use `print(...)` for short observations only.                                                                       |
-| `examples`                 | Input inspection, bounded local work, and coherent fan-out trajectories, rendered only when the agent can use them.                            |
-| `final`                    | `finish(...)` contract and repair discipline.                                                                                                  |
-| `structured-output`        | Per-agent `finish(value)` schema when the agent has an `output_schema`.                                                                        |
-| `structured-output-option` | How to request structured output from subagents (only when `enable_structured_output=True` and the agent can spawn children).                  |
-| `tools`                    | Runtime-generated tool list (custom tools registered with the runtime, plus extra model aliases).                                              |
-| `inputs`                   | Runtime-generated metadata-only manifest of the agent's `INPUTS` (keys and sizes, never values).                                               |
-| `status`                   | Runtime-generated agent depth / spawn-budget status.                                                                                           |
-| `strategy`                 | Final stable system instruction: inspect inputs, keep small work local, orchestrate substantial independent work, and retain parent synthesis. |
+- You are a Recursive Language Model with a Python REPL that persists across turns.
+- `INPUTS` is the long context; inspect it with `print(...)`.
+- Live REPL bindings (`finish`, `SHOW_VARS`, `launch_subagent`, `llm_query*` when enabled, plus host tools) fill `{tools}`.
+- REPL stdout over ~20K characters is truncated; only `print(...)` is shown back.
+- Do not `finish(...)` on turn 1 without inspecting `INPUTS`.
 
-The static text sections render back-to-back so the prompt reads as one continuous narrative; the split exists so each piece is independently swappable via `prompt.sections.update(name, ...)`. `builtins`, `strategy`, `examples`, `tools`, `inputs`, `status`, and `structured-output*` are callable sections filled from the current Flow and Node at build time.
+`Flow.render_tools(node)` is the dynamic “Available in the REPL” list. `Flow.render_inputs(node)` is INPUTS sizes plus per-agent schema and depth.
 
-## Recommended: Edit `SystemPromptBuilder().sections`
+`PlanQuery.build_system_prompt` appends the orchestrator addendum when the agent can spawn. `FinalQuery.build_system_prompt` appends last-turn submit guidance and drops the “don’t finish on turn 1” line. Skipping `PlanQuery` (capability-only already does this) drops the orchestrator policy without a second prompt flag.
 
-The system prompt is a `SystemPromptBuilder`. Its `.sections` is a mutable, name-addressable list (`Sections`); edit it in place and hand the builder to the flow. Construct a fresh `SystemPromptBuilder()` rather than mutating the shared `DEFAULT_BUILDER`.
+## Recommended: Subclass `PromptBuilder`
 
-The `.sections` editing methods (`add`, `update`, `drop`) mutate in place and return the list, so edits read top-to-bottom.
+`PromptBuilder` is equivalent to a `(flow, node) -> str` function. Anything that depends on the live flow is a named method on `Flow` (`render_tools`, `render_inputs`), not a private helper.
+
+```python
+from rlmflow import PromptBuilder
+
+class SkillsPrompt(PromptBuilder):
+    def __init__(self, library):
+        self.library = library
+
+    def __call__(self, flow=None, node=None) -> str:
+        extra = self.library.render()
+        text = super().__call__(flow, node)
+        return f"{text}\n\n{extra}" if extra else text
+
+flow = rlmflow.Flow(llm, system_prompt=SkillsPrompt(library))
+```
+
+The same pattern covers project rules, a persona, or an adapter prompt: concatenate after `super().__call__`. `PlanQuery` still sees those extras because it starts from `flow.build_system_prompt(self)`.
 
 ### Add Project Rules
 
-`add` inserts a section `before`/`after` a named one (or appends):
-
 ```python
-import rlmflow
-from rlmflow import SystemPromptBuilder
+from rlmflow import PromptBuilder
 
-project_rules = """
+PROJECT_RULES = """
 - Preserve API compatibility unless the task explicitly asks for a breaking change.
 - Prefer small patches with focused tests.
-- When changing public behavior, update docs in the same pass.
 """
 
-prompt = SystemPromptBuilder()
-prompt.sections.add("project_rules", project_rules, title="Project Rules", after="final")
+class ProjectPrompt(PromptBuilder):
+    def __call__(self, flow=None, node=None) -> str:
+        return super().__call__(flow, node) + "\n\n" + PROJECT_RULES.strip()
 
-flow = rlmflow.Flow(llm, system_prompt=prompt)
-# or set it after construction:
-flow.system_prompt = prompt
+flow = rlmflow.Flow(llm, system_prompt=ProjectPrompt())
 ```
 
-### Swap A Single Section
+### Replace The Protocol
 
-`update` swaps a section's body, keeping its position:
-
-```python
-domain_strategy = """
-**When to delegate:** choose coherent work packages large enough to repay a full
-agent's coordination cost. Group related small outputs and keep cross-package
-integration in the root. Verify children mechanically before `finish()`.
-"""
-
-prompt = SystemPromptBuilder()
-prompt.sections.update("strategy", domain_strategy)
-```
-
-### Prepend A Persona
-
-Slip a small role section before `role` rather than overwriting the protocol:
-
-```python
-prompt = SystemPromptBuilder()
-prompt.sections.add(
-    "persona",
-    "You are a recursive security auditor. Reproduce concrete risks and "
-    "propose minimal fixes.",
-    title="Persona",
-    before="role",
-)
-```
-
-### Remove A Section
-
-`drop` removes a section by name — but removing core sections like `role`, `strategy`, `format`, or `final` strips the delegation/REPL protocol. Prefer dropping only sections you added.
-
-```python
-prompt = SystemPromptBuilder()
-prompt.sections.drop("project_rules")
-```
-
-### Reusable Customization: Subclass
-
-For a customization you want every time, subclass and override `default_sections` (the static baseline).
-
-```python
-from rlmflow import SystemPromptBuilder
-
-class AuditPrompt(SystemPromptBuilder):
-    def default_sections(self):
-        return super().default_sections().add(
-            "rules", RULES, title="Rules", after="final"
-        )
-
-flow = rlmflow.Flow(llm, system_prompt=AuditPrompt())
-```
-
-### Build A Prompt From Scratch
-
-Override `default_sections` to return your own `Sections`. Include the built-in callable sections if you want the standard runtime-generated tools/status blocks.
+A string with `{tools}` is a template filled by `flow.render_tools(node)`. Any other string is a constant replacement.
 
 ````python
-from rlmflow import SystemPromptBuilder
-from rlmflow.prompts import Sections, status_section, tools_section
-
-class MinimalPrompt(SystemPromptBuilder):
-    def default_sections(self):
-        return (
-            Sections()
-            .add("role", "You are a minimal REPL agent.", title="Role")
-            .add(
-                "protocol",
-                """
-- Use exactly one ```repl``` block per assistant message.
-- Call `finish(answer)` exactly once when finished.
-- Use tools to inspect or modify files.
-""",
-                title="Protocol",
-            )
-            .add("tools", tools_section, title="Tools")
-            .add("status", status_section, title="Status")
-        )
-
-flow = rlmflow.Flow(llm, system_prompt=MinimalPrompt())
-````
-
-## The `system_prompt` Source
-
-`system_prompt` (constructor arg or settable attribute) accepts any of three things — a `SystemPromptBuilder`, a plain string, or a `(flow, agent) -> str` function — and is resolved fresh on every turn:
-
-- **`SystemPromptBuilder`** (the default, `DEFAULT_BUILDER`) — the section machinery described above.
-- **string** — a constant prompt, bypassing the builder entirely.
-- **function** — a dynamic prompt without subclassing anything.
-
-````python
-import rlmflow
-
-# constant string (most fragile — you own the whole protocol)
-flow = Flow(
+flow = rlmflow.Flow(
     llm,
     system_prompt="""
 You are a Python REPL agent.
@@ -173,69 +85,55 @@ You are a Python REPL agent.
 - Call `finish(answer)` exactly once when finished.
 """,
 )
+````
 
-# or a function of (flow, agent)
-def prompt_for(flow, agent):
-    depth = agent.config.depth
+A `(flow, node) -> str` function is also accepted:
+
+```python
+def prompt_for(flow, node):
+    depth = node.parent_agent.config.depth
     tail = "Return an executive summary." if depth == 0 else "Return findings only."
     return f"You are an auditor. {tail}"
 
 flow = rlmflow.Flow(llm, system_prompt=prompt_for)
-````
-
-A string that omits `launch_subagent`, `INPUTS`, `HISTORY`, or the `finish(...)` rule means the model will not reliably use those features — prefer a `SystemPromptBuilder` unless you intend to own the entire protocol.
-
-## Dynamic Prompts
-
-When the prompt should depend on the current agent, depth, query, available tools, or project state, override `render` on a `SystemPromptBuilder` subclass. It receives `(flow, agent)` — the `AgentStart` whose prompt is being built — assembles `Sections`, and renders them with `self.build(...)`. The agent's query is `agent.content`, and its model, inputs, depth, and output schema are on `agent.config`.
-
-```python
-import rlmflow
-from rlmflow import SystemPromptBuilder
-
-
-class AuditPrompt(SystemPromptBuilder):
-    def render(self, flow=None, agent=None) -> str:
-        sections = self.default_sections()
-        extra = (
-            "At root depth, produce an executive summary after verification."
-            if agent is None or agent.config.depth == 0
-            else "As a child call, return only structured findings."
-        )
-        sections.add("audit_depth_rules", extra, title="Depth Rules", after="strategy")
-        return self.build(sections, flow, agent)
-
-
-flow = rlmflow.Flow(llm, system_prompt=AuditPrompt())
 ```
 
-You can also replace narrower callable sections directly:
+A string that omits `launch_subagent`, `INPUTS`, or the `finish(...)` rule means the model will not reliably use those features — prefer a `PromptBuilder` subclass unless you intend to own the entire protocol.
+
+## The `system_prompt` Source
+
+`system_prompt` (constructor arg or settable attribute) accepts a `PromptBuilder`, a plain string, or a `(flow, node) -> str` function, and is resolved fresh on every turn. `None` uses `PromptBuilder()`.
+
+`Flow.build_system_prompt(node)` picks `profile.system` or `flow.system_prompt` or `PromptBuilder()`. `UserQuery.build_system_prompt(flow)` defaults to that string; query nodes wrap it. `can_spawn(agent)` is `rlmflow.graph.config.can_spawn` (also re-exported from `rlmflow.graph.nodes` and `rlmflow.prompts.prompts`):
 
 ```python
-from rlmflow import SystemPromptBuilder
-from rlmflow.prompts import tools_section
+class UserQuery(Node):
+    def build_system_prompt(self, flow) -> str:
+        return flow.build_system_prompt(self)
 
 
-def careful_tools(flow, agent):
-    return tools_section(flow, agent) + "\n- Prefer read-only tools before write tools."
+class PlanQuery(UserQuery):
+    def build_system_prompt(self, flow) -> str:
+        text = flow.build_system_prompt(self)
+        if can_spawn(self.parent_agent):
+            return f"{text}\n\n{ORCHESTRATOR_ADDENDUM}"
+        return text
 
 
-prompt = SystemPromptBuilder()
-prompt.sections.update("tools", careful_tools)
+class FinalQuery(UserQuery):
+    def build_system_prompt(self, flow) -> str:
+        return f"{flow.build_system_prompt(self)}\n\n{LAST_TURN_ADDENDUM}"
 ```
 
-(Assigning `flow.system_prompt` — a builder, or any `(flow, agent) -> str` callable — still works if you'd rather own the whole prompt at the flow level, and `prompt_profiles` with a `prompt_router` picks one per agent.)
-
-## Callable Sections
-
-The dynamic prompt hook above works, but it is heavier than it needs to be for small additions like project rules or runtime notes. A prompt section can be either static text or a function:
+A custom node can replace or wrap the same way:
 
 ```python
-def section(flow: rlmflow.Flow, agent: rlmflow.AgentStart) -> str:
-    ...
+class ReviewQuery(UserQuery):
+    def build_system_prompt(self, flow) -> str:
+        return flow.build_system_prompt(self) + "\n\nReview rules."
 ```
 
-The signature is intentionally just `flow, agent`. There is no context dict and no separate prompt context object. If a section needs runtime tools, model registrations, config, or the current agent id, those are already reachable from `flow` and `agent`.
+Methods live on the class, so they survive load. There is no `prompt_extra`, no `Flow(orchestrator=)`, and no `Node.system_prompt` ClassVar.
 
 ## Child-Specific Prompts
 
@@ -248,13 +146,6 @@ api = await launch_subagent(
         name="api",
         inputs={"spec": api_spec},
 )
-tests = await launch_subagent(
-        "Implement tests for src/api.py. Return ONLY JSON {\"files\": [str], \"checks\": [str]}.",
-        model="default",
-        name="tests",
-        inputs={"spec": test_spec},
-)
-results = [await api.wait_for_result(), await tests.wait_for_result()]
 ```
 
 ## Per-child prompts
@@ -285,9 +176,6 @@ By default, Flow reads the profile name from the agent's config. With a non-empt
 impl = await launch_subagent(
     "...", model="default", name="impl", prompt_profile="coder"
 )
-review = await launch_subagent(
-    "...", model="default", name="review", prompt_profile="reviewer"
-)
 ```
 
 Pass a callable `prompt_router` only when host policy should choose the profile dynamically. A custom router also suppresses profile advertising:
@@ -300,7 +188,7 @@ flow = rlmflow.Flow(
 )
 ```
 
-The launch call's `prompt_profile` is stored on `UserQuery.prompt_profile` and serialized. When omitted, a cold child inherits its immediate parent agent's profile; a prepared branch keeps its own profile. Without a router, that stamp is authoritative. With a router, the callable's result is authoritative. Unknown names raise `ValueError`.
+The launch call's `prompt_profile` is stored on the child config and serialized. When omitted, a cold child inherits its immediate parent agent's profile. Without a router, that stamp is authoritative. With a router, the callable's result is authoritative. Unknown names raise `ValueError`.
 
 ## Customizing The User Turns
 
@@ -309,14 +197,15 @@ Everything above shapes the *system* message. The rest of the conversation — t
 - **canonical history** — each `Node.render()` returns a list of messages, and `node.project()` flattens those lists while walking history;
 - **current frontier** — `Flow(render_fn=...)` or `PromptProfile(render_fn=...)` may render the node currently being sent differently without rewriting historical projection.
 
-The default current renderer calls `node.render()` and adds live background-agent status. Inspect, plan, final, continue, and truncation instructions are typed nodes, not injected strings.
+The default current renderer calls `node.render()` and adds live background-agent status. Recurring plan-and-act, final-answer, and truncation instructions are typed nodes, not injected strings.
 
-`Flow.build_messages` reserves the current renderer's messages inside `keep_n_messages`, projects the remaining capacity from `node.prev`, prepends the system message, and preserves every rendered message in order. Adjacent messages with the same role remain separate.
+`PlanQuery.instruction()` is `Turn {n}/{max}:` from `agent.llm_turns()` and `agent.config.max_iters`. Turn 1 also includes the official first-turn safeguard (“you have not interacted with the REPL… look at INPUTS first”). Last-budget-turn user content stays on `FinalQuery`; the submit instruction lives on `FinalQuery.build_system_prompt`. `format_transition_footer` is engine bookkeeping, not prompt policy.
+
+`Flow.build_messages` reserves the current renderer's messages inside `keep_n_messages`, projects the remaining capacity from `node.prev`, prepends `UserQuery.build_system_prompt(self)` when the frontier is a query (otherwise the inherited protocol), and preserves every rendered message in order. Adjacent messages with the same role remain separate.
 
 Override a node's canonical `render()` when the representation must persist in future history:
 
 ```python
-import rlmflow
 from rlmflow import ExecOutput
 
 
@@ -330,7 +219,7 @@ class LabeledOutput(ExecOutput):
         ]
 ```
 
-Use a `render_fn` for live material which applies only to the current frontier. `Flow` passes its runtime explicitly, so the renderer can inspect the current agent's REPL without closing over the flow. This is the renderer used by the Shepherd example:
+Use a `render_fn` for live material which applies only to the current frontier. `Flow` passes its runtime explicitly, so the renderer can inspect the current agent's REPL without closing over the flow:
 
 ```python
 def render_worker(runtime: Runtime, node: Node) -> list[dict[str, str]]:
@@ -351,4 +240,4 @@ flow = rlmflow.Flow(
 
 `RenderFn` is `(Runtime, Node) -> list[dict[str, str]]`. Keep `Node.render()` runtime-independent so saved graphs retain a canonical projection; use the current renderer for transient state such as REPL `ENV`.
 
-A `UserQuery` subclass inherits the user turn with no builder edit. Node types that are tree bookkeeping rather than turns (`ExecAction`, `DoneOutput`) render as `[]`. To customize an engine instruction, subclass its typed node or replace the relevant `StepFunction`.
+A `UserQuery` subclass inherits the user turn with no builder edit. Node types that are tree bookkeeping rather than turns (`ExecAction`, `DoneOutput`) render as `[]`. To customize an engine instruction, subclass its typed node or register `@Flow.transitions.on(...)`.

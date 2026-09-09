@@ -34,7 +34,7 @@ The implementation is deliberately split by responsibility:
   - `Flow.run_streaming`: the driver loop;
   - `Flow.step`: one complete Node transition;
   - `Flow.launch_tool`: child creation, submission, and joining;
-  - `rlmflow.engine.steps`: class-based `StepFunction` handlers.
+  - `rlmflow.engine.steps`: `@Flow.transitions.on` producers.
 - [`rlmflow/engine/execution.py`](https://github.com/shyamsn97/rlmflow/blob/main/rlmflow/engine/execution.py)
   - `Transition`: submitted Node, created Node, and infrastructure error;
   - `TaskQueue`: active tasks, completed transitions, child-terminal wake-ups;
@@ -67,21 +67,23 @@ Pool / Runtime
 
 `TaskQueue` does not inspect roots, boundaries, transcripts, or graph topology. It can run Nodes from several independent graphs in the same queue.
 
-## One step, one Transition
+## One step, one node
 
-`Flow.step(node)` consumes one frontier Node and creates its next durable Node:
+`Flow.step(node)` consumes one frontier Node and returns its next durable Node:
 
 ```text
-AgentStart ──> LLMRequestStep ─> PlanQuery | LLMOutput
-UserQuery  ──> LLMRequestStep ─> PlanQuery | LLMOutput
-ExecOutput ──> LLMRequestStep ─> FinalQuery | LLMOutput
-ErrorOutput─> LLMRequestStep  ─> LLMOutput
+AgentStart ──> to_plan / to_final          ─> PlanQuery | FinalQuery
+UserQuery  ──> complete / to_plan / guards ─> LLMOutput | PlanQuery | FinalQuery | TruncationSummary
+ExecOutput ──> to_plan                     ─> PlanQuery
+ErrorOutput─> to_plan / to_final           ─> PlanQuery | FinalQuery
 
-LLMOutput  ──> LLMOutputStep ─> ExecAction
-ExecAction ──> ExecActionStep─> ExecOutput | ErrorOutput | ReplDead | DoneOutput
+LLMOutput  ──> to_action ─> ExecAction
+ExecAction ──> run_repl  ─> ExecOutput | ErrorOutput | ReplDead | DoneOutput | selected UserQuery
 ```
 
-The return value records both sides:
+Named choices are the direct `ExecAction -> UserQuery` case. `Transitions.choices(CurrentQuery, *targets)` declares the allowed targets, and `transition("name")` selects one without creating an intermediate `ExecOutput`.
+
+The queue records both sides of that step:
 
 ```python
 @dataclass(slots=True)
@@ -95,8 +97,8 @@ class Transition:
         return isinstance(self.created, AgentStart)
 ```
 
-- `submitted` is the frontier passed to `Flow.step`.
-- `created` is the durable Node returned by that step.
+- `submitted` is the frontier passed to the driver.
+- `created` is the durable Node `Flow.step` returns.
 - `error` carries an infrastructure exception after the failure has been recorded in the graph.
 
 For a normal model turn:
@@ -403,13 +405,13 @@ The scheduler separates lightweight orchestration from bounded compute:
 ```text
 TaskQueue._run
     │
-    └─ Flow.step(node)                 orchestration; no scarce slot
+    └─ Flow._drive(node)               orchestration; no scarce slot
           │
-          ├─ LLMRequestStep
+          ├─ complete
           │    └─ PooledLLMClient(...)
           │         └─ Pool.stream(client.stream)
           │
-          └─ ExecActionStep
+          └─ run_repl
                └─ Runtime.execute(...)
                                               REPL/runtime placement
 ```

@@ -37,6 +37,10 @@ class MissingReplError(ValueError):
     """Agent response did not contain executable REPL code."""
 
 
+class _CellStopIteration(Exception):
+    """StopIteration from cell code, lifted out of the async runner (PEP 479)."""
+
+
 #: Observation returned for a reply with no code, so the retry knows what to fix.
 MISSING_REPL_NOTE = f"""{MissingReplError.__name__}: missing ```repl``` block, so
 nothing ran and this turn produced no observation. Reply with exactly
@@ -286,6 +290,9 @@ class LocalRepl:
             )
         except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
             raise
+        except _CellStopIteration:
+            buffer.write("StopIteration")
+            return ReplRun(output=buffer.getvalue().strip(), status=ReplStatus.ERROR)
         except BaseException as exc:  # noqa: BLE001 - agent exceptions are results
             buffer.write(f"{type(exc).__name__}: {exc}")
             return ReplRun(output=buffer.getvalue().strip(), status=ReplStatus.ERROR)
@@ -301,9 +308,16 @@ class LocalRepl:
             "exec",
             flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
         )
-        result = eval(compiled, self.namespace)
-        if inspect.isawaitable(result):
-            await result
+        try:
+            result = eval(compiled, self.namespace)
+            if inspect.isawaitable(result):
+                await result
+        except StopIteration:
+            raise _CellStopIteration from None
+        except RuntimeError as exc:
+            if str(exc) != "coroutine raised StopIteration":
+                raise
+            raise _CellStopIteration from None
 
 
 __all__ = [

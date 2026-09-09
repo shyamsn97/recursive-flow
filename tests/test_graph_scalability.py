@@ -22,7 +22,9 @@ def chain(length: int) -> tuple[AgentStart, list[Node]]:
     nodes: list[Node] = [root]
     frontier: Node = root
     for index in range(length - 1):
-        frontier = frontier.append(UserQuery(content=str(index)))
+        nxt = UserQuery(content=str(index))
+        frontier.append(nxt)
+        frontier = nxt
         nodes.append(frontier)
     return root, nodes
 
@@ -86,14 +88,15 @@ def test_fork_and_persistence_preserve_full_config_without_sharing_values(tmp_pa
 
 def test_run_index_tracks_counts_usage_agents_and_errors():
     root = start("indexed")
-    output = root.append(
-        LLMOutput(
-            content="answer",
-            usage=LLMUsage(input_tokens=7, output_tokens=3),
-        )
+    output = LLMOutput(
+        content="answer",
+        usage=LLMUsage(input_tokens=7, output_tokens=3),
     )
-    action = output.append(ExecAction(code="delegate"))
-    child = action.append(AgentStart(content="child", config=root.config.child("child")))
+    root.append(output)
+    action = ExecAction(code="delegate")
+    output.append(action)
+    child = AgentStart(content="child", config=root.config.child("child"))
+    action.append(child)
     child.append(ErrorOutput(content="failed"))
 
     assert root.usage == LLMUsage(input_tokens=7, output_tokens=3)
@@ -158,13 +161,13 @@ def test_graph_file_is_the_atomic_save_commit_point(tmp_path, monkeypatch):
 def test_large_inputs_are_content_addressed_once_across_graph_views(tmp_path):
     large = "payment,row\n" + ("merchant,100.00\n" * 8_000)
     root = start("root", inputs={"data": large})
-    action = root.append(ExecAction(code="delegate"))
-    child = action.append(
-        AgentStart(
-            content="child",
-            config=root.config.child("child", inputs={"data": large}),
-        )
+    action = ExecAction(code="delegate")
+    root.append(action)
+    child = AgentStart(
+        content="child",
+        config=root.config.child("child", inputs={"data": large}),
     )
+    action.append(child)
 
     run = persistence.save(root, tmp_path / "run")
     graph_text = (run / "graph.json").read_text(encoding="utf-8")

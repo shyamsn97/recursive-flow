@@ -1,28 +1,15 @@
-"""Immutable control-flow policy for model-selectable behavioral nodes."""
+"""Empty table of ``@transitions.on`` producers and named choice menus."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
-from rlmflow.graph.nodes import (
-    AgentStart,
-    DoneOutput,
-    ErrorOutput,
-    ExecOutput,
-    FinalQuery,
-    LLMOutput,
-    Node,
-    PlanQuery,
-    TruncationSummary,
-    UserQuery,
-)
+from rlmflow.graph.nodes import Node, UserQuery
 
 Guard = Callable[[Node], bool]
-SOURCES = (AgentStart, UserQuery, ErrorOutput, ExecOutput)
-ACT_NAME = "act"
-RESERVED_NAMES = frozenset({ACT_NAME, "finish"})
-LEGACY_ACTION_NAMES = frozenset({"inspect", "plan"})
+Producer = Callable[..., Node]
+RESERVED_NAMES = frozenset({"finish"})
 
 
 class TransitionPolicyError(ValueError):
@@ -31,10 +18,6 @@ class TransitionPolicyError(ValueError):
 
 class TransitionProtocolError(RuntimeError):
     """Invalid transition selection produced by the model."""
-
-
-class MissingTransitionError(TransitionProtocolError):
-    """A successful action returned without selecting its next behavior."""
 
 
 class InvalidTransitionError(TransitionProtocolError):
@@ -47,174 +30,152 @@ class InvalidTransitionError(TransitionProtocolError):
         self.available = choices
 
 
-@dataclass(frozen=True)
-class TransitionRule:
-    """One graph edge, either host-selected or model-selectable."""
-
-    source: type[Node] | tuple[type[Node], ...]
-    target: type[UserQuery]
+@dataclass(frozen=True, slots=True)
+class Row:
+    sources: tuple[type[Node], ...]
+    fn: Producer
     when: Guard | None = None
-    selectable: bool = False
 
-    def matches(self, node: Node, *, behavior: UserQuery | None = None) -> bool:
-        source = behavior if self.selectable else node
-        return (
-            source is not None
-            and isinstance(source, self.source)
-            and (self.when is None or self.when(node))
-        )
+    def matches(self, node: Node) -> bool:
+        return isinstance(node, self.sources) and (self.when is None or self.when(node))
 
 
 @dataclass(frozen=True)
 class TransitionOption:
     name: str
     description: str
-    target: type[UserQuery] | None
+    target: type[UserQuery]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class ChoiceSet:
+    current: type[UserQuery]
+    targets: tuple[type[UserQuery], ...]
+    when: Guard | None = None
+
+
 class Transitions:
-    """Owner-layered transition rules, most-specific layer first."""
+    """Producer rows plus named ``transition("...")`` choices. Starts empty."""
 
-    layers: tuple[tuple[TransitionRule, ...], ...] = ((),)
+    def __init__(self) -> None:
+        self._rows: list[Row] = []
+        self._choices: list[ChoiceSet] = []
+        self._base: Transitions | None = None
 
     def derive(self) -> Transitions:
-        """Add a most-specific owner layer without mutating inherited policy."""
-        return replace(self, layers=((), *self.layers))
+        """Child table: own rows win, then this table."""
+        child = Transitions()
+        child._base = self
+        return child
 
-    def always(
-        self,
-        source: type[Node] | tuple[type[Node], ...],
-        target: type[UserQuery],
-        *,
-        when: Guard | None = None,
-    ) -> Transitions:
-        _validate_sources(source)
-        if not isinstance(target, type) or not issubclass(target, UserQuery):
-            raise TransitionPolicyError("transition target must be a UserQuery class")
-        head, *rest = self.layers
-        rule = TransitionRule(source=source, target=target, when=when)
-        return replace(self, layers=((*head, rule), *rest))
+    def on(self, *sources: type[Node], when: Guard | None = None):
+        """Register a producer. ``@table.on(UserQuery)`` or stacked."""
+        _validate_sources(sources)
 
-    def on(
+        def register(fn: Producer) -> Producer:
+            self._rows.append(Row(sources=sources, fn=fn, when=when))
+            return fn
+
+        return register
+
+    def choices(
         self,
         current: type[UserQuery],
-        targets: Iterable[type[UserQuery]],
-        *,
+        *targets: type[UserQuery],
         when: Guard | None = None,
     ) -> Transitions:
+        """Allow ``transition("...")`` to select a target from ``current``."""
         _validate_behavior(current)
-        normalized = tuple(targets)
-        if not normalized:
+        if not targets:
             raise TransitionPolicyError("a transition choice list cannot be empty")
-        for target in normalized:
+        for target in targets:
             _validate_behavior(target)
-        names = [target.name for target in normalized]
+        names = [target.name for target in targets]
         if len(names) != len(set(names)):
             raise TransitionPolicyError(
                 f"duplicate transition names from {current.__name__}: {names!r}"
             )
-        head, *rest = self.layers
-        existing = {rule.target.name for rule in head if rule.selectable and rule.source is current}
+        existing = {
+            target.name
+            for choices in self._own_choices(current)
+            for target in choices.targets
+        }
         repeated = existing.intersection(names)
         if repeated:
             raise TransitionPolicyError(
                 f"duplicate transition names from {current.__name__}: {sorted(repeated)!r}"
             )
-        rules = tuple(
-            TransitionRule(
-                source=current,
-                target=target,
-                when=when,
-                selectable=True,
-            )
-            for target in normalized
-        )
-        return replace(self, layers=((*head, *rules), *rest))
+        self._choices.append(ChoiceSet(current=current, targets=targets, when=when))
+        return self
 
-    def rules(self, *, selectable: bool | None = None) -> Iterator[TransitionRule]:
-        for layer in self.layers:
-            for rule in layer:
-                if selectable is None or rule.selectable is selectable:
-                    yield rule
+    def _own_choices(self, current: type[UserQuery]) -> Iterator[ChoiceSet]:
+        for choices in self._choices:
+            if choices.current is current:
+                yield choices
 
-    def resolve_automatic(self, node: Node) -> TransitionRule | None:
-        return next(
-            (rule for rule in self.rules(selectable=False) if rule.matches(node)),
-            None,
-        )
+    def resolve(self, node: Node) -> Producer:
+        for row in self._rows:
+            if row.matches(node):
+                return row.fn
+        if self._base is not None:
+            return self._base.resolve(node)
+        raise TypeError(f"cannot step {type(node).__name__}")
 
     def available(self, node: Node) -> tuple[TransitionOption, ...]:
         behavior = self.current_behavior(node)
         if behavior is None:
             return ()
         found: dict[str, TransitionOption] = {}
-        action_description = getattr(behavior, "action_description", None)
-        if action_description is not None:
-            found[ACT_NAME] = TransitionOption(
-                name=ACT_NAME,
-                description=action_description,
-                target=None,
-            )
-        for rule in self.rules(selectable=True):
-            if not rule.matches(node, behavior=behavior):
+        for choices in self._walk_choices():
+            if not isinstance(behavior, choices.current):
                 continue
-            target = rule.target
-            found.setdefault(
-                target.name,
-                TransitionOption(
-                    name=target.name,
-                    description=target.transition_description,
-                    target=target,
-                ),
-            )
+            if choices.when is not None and not choices.when(node):
+                continue
+            for target in choices.targets:
+                found.setdefault(
+                    target.name,
+                    TransitionOption(
+                        name=target.name,
+                        description=target.transition_description,
+                        target=target,
+                    ),
+                )
         return tuple(found.values())
 
     def current_behavior(self, node: Node) -> UserQuery | None:
-        """Return the latest selectable or action-capable query."""
-        behavior_types: dict[type[UserQuery], None] = {}
-        for rule in self.rules(selectable=True):
-            sources = rule.source if isinstance(rule.source, tuple) else (rule.source,)
-            for source in sources:
-                if issubclass(source, UserQuery):
-                    behavior_types.setdefault(source, None)
-            behavior_types.setdefault(rule.target, None)
-        classes = tuple(behavior_types)
+        """Return the latest query participating in a choice set."""
+        classes: dict[type[UserQuery], None] = {}
+        for choices in self._walk_choices():
+            classes.setdefault(choices.current, None)
+            for target in choices.targets:
+                classes.setdefault(target, None)
+        if not classes:
+            return None
+        kinds = tuple(classes)
         return next(
-            (
-                item
-                for item in node.iter_backwards()
-                if (
-                    classes
-                    and isinstance(item, classes)
-                    or isinstance(item, UserQuery)
-                    and getattr(item, "action_description", None) is not None
-                )
-            ),
+            (item for item in node.iter_backwards() if isinstance(item, kinds)),
             None,
         )
 
-    def resolve(self, node: Node, name: str) -> TransitionOption | None:
-        options = self.available(node)
-        selected = next((option for option in options if option.name == name), None)
-        if selected is not None:
-            return selected
-        if name in LEGACY_ACTION_NAMES:
-            return next((option for option in options if option.name == ACT_NAME), None)
-        return None
+    def resolve_choice(self, node: Node, name: str) -> TransitionOption | None:
+        return next((option for option in self.available(node) if option.name == name), None)
+
+    def _walk_choices(self) -> Iterator[ChoiceSet]:
+        current: Transitions | None = self
+        while current is not None:
+            yield from current._choices
+            current = current._base
 
     def __str__(self) -> str:
         lines = []
-        for rule in self.rules():
-            source = _source_name(rule.source)
-            guard = f" when {rule.when.__name__}" if rule.when is not None else ""
-            mode = "on" if rule.selectable else "always"
-            lines.append(f"{source} -> {rule.target.__name__}{guard} ({mode})")
+        for row in self._rows:
+            source = "|".join(item.__name__ for item in row.sources)
+            guard = f" when {row.when.__name__}" if row.when is not None else ""
+            lines.append(f"{source} -> {row.fn.__name__}{guard}")
         return "\n".join(lines)
 
 
-def _validate_sources(source: type[Node] | tuple[type[Node], ...]) -> None:
-    sources = source if isinstance(source, tuple) else (source,)
+def _validate_sources(sources: tuple[type[Node], ...]) -> None:
     if not sources or any(
         not isinstance(item, type) or not issubclass(item, Node) for item in sources
     ):
@@ -232,83 +193,13 @@ def _validate_behavior(target: type[UserQuery]) -> None:
     description = getattr(target, "transition_description", None)
     if not isinstance(description, str) or not description.strip():
         raise TransitionPolicyError(f"{target.__name__} has no transition description")
-    action_description = getattr(target, "action_description", None)
-    if action_description is not None and (
-        not isinstance(action_description, str) or not action_description.strip()
-    ):
-        raise TransitionPolicyError(
-            f"{target.__name__}.action_description must be a non-empty string"
-        )
-
-
-def _source_name(source: type[Node] | tuple[type[Node], ...]) -> str:
-    if isinstance(source, tuple):
-        return "|".join(item.__name__ for item in source)
-    return source.__name__
-
-
-def at_final(agent: AgentStart) -> bool:
-    limit = agent.config.max_iters
-    return limit is not None and agent.llm_turns() == limit - 1
-
-
-def budget_nearly_spent(node: Node) -> bool:
-    """Whether one more average turn would exhaust the token budget."""
-    limit = node.parent_agent.config.max_budget
-    root = node.root
-    if limit is None or root is None:
-        return False
-    turns = root.stats.node_counts.get(LLMOutput.type, 0)
-    if turns == 0:
-        return False
-    spent = root.usage.total
-    return spent + spent / turns >= limit
-
-
-def out_of_room(node: Node) -> bool:
-    return not isinstance(node, FinalQuery) and (
-        at_final(node.parent_agent) or budget_nearly_spent(node)
-    )
-
-
-def child_returned(node: Node) -> bool:
-    return type(node) is UserQuery and isinstance(node.prev, DoneOutput)
-
-
-def needs_truncation(node: Node) -> bool:
-    if isinstance(node, (FinalQuery, TruncationSummary)):
-        return False
-    keep = node.parent_agent.config.keep_n_messages
-    if keep is None:
-        return False
-    keep = max(keep, 1)
-    return len(node.project(keep=keep + 1)) > keep
-
-
-DEFAULT_TRANSITIONS = (
-    Transitions()
-    .always(SOURCES, FinalQuery, when=out_of_room)
-    .always(AgentStart, PlanQuery)
-    .always(UserQuery, PlanQuery, when=child_returned)
-    .always(SOURCES, TruncationSummary, when=needs_truncation)
-)
 
 
 __all__ = [
-    "ACT_NAME",
-    "DEFAULT_TRANSITIONS",
-    "SOURCES",
     "InvalidTransitionError",
-    "MissingTransitionError",
     "RESERVED_NAMES",
     "TransitionOption",
     "TransitionPolicyError",
     "TransitionProtocolError",
-    "TransitionRule",
     "Transitions",
-    "at_final",
-    "budget_nearly_spent",
-    "child_returned",
-    "needs_truncation",
-    "out_of_room",
 ]

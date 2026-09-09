@@ -147,17 +147,16 @@ class RolloutFlow(Flow):
             request_kwargs={"sample_sink": sink},
         )
 
-    async def step(self, node: Node) -> Transition:
-        transition = await super().step(node)
+    async def _drive(self, node: Node) -> Transition:
+        transition = await super()._drive(node)
         created = transition.created
         agent = created.parent_agent
         sink = self._sample_sinks.pop(
             agent.id if agent is not None else "",
             [],
         )
-        if isinstance(created, LLMOutput):
-            if sink:
-                self.samples[created.id] = sink[-1]
+        if isinstance(created, LLMOutput) and sink:
+            self.samples[created.id] = sink[-1]
         return transition
 
     def turns(self, agent: AgentStart) -> list[TurnSample]:

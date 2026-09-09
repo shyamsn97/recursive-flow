@@ -3,6 +3,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import inspect
+import threading
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -554,6 +555,7 @@ class TinkerClient(LLMClient):
 
         self.sampling_client = sampling_client
         self.renderer = renderer_obj
+        self._renderer_lock = threading.Lock()
         self.base_model = base_model
         self.model_path = model_path
         self.max_tokens = max_tokens
@@ -580,10 +582,10 @@ class TinkerClient(LLMClient):
                 "`pip install tinker tinker-cookbook` or `pip install rlmflow[tinker]`."
             ) from exc
 
-        prompt = self.renderer.build_generation_prompt(messages)
+        prompt, renderer_stop = self._render_prompt(messages)
         stop = self.stop
-        if stop is None and hasattr(self.renderer, "get_stop_sequences"):
-            stop = self.renderer.get_stop_sequences()
+        if stop is None:
+            stop = renderer_stop
 
         params_kwargs = {
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
@@ -601,14 +603,30 @@ class TinkerClient(LLMClient):
         )
         output = self._future_result(future, timeout=kwargs.get("timeout"))
         tokens = self._first_sequence_tokens(output)
-        message = self.renderer.parse_response(tokens)
-        text = self._message_text(message)
+        text = self._parse_tokens(tokens)
         usage = LLMUsage(
             input_tokens=self._token_count(prompt),
             output_tokens=self._token_count(tokens),
         )
         self.last_usage = usage
         return text, usage
+
+    def _render_prompt(self, messages: list[dict[str, str]]) -> tuple[object, object]:
+        # Cookbook renderers wrap a Rust tokenizer that cannot be borrowed by
+        # concurrent Python threads. Sampling itself remains concurrent.
+        with self._renderer_lock:
+            prompt = self.renderer.build_generation_prompt(messages)
+            stop = (
+                self.renderer.get_stop_sequences()
+                if hasattr(self.renderer, "get_stop_sequences")
+                else None
+            )
+        return prompt, stop
+
+    def _parse_tokens(self, tokens: object) -> str:
+        with self._renderer_lock:
+            message = self.renderer.parse_response(tokens)
+        return self._message_text(message)
 
     @staticmethod
     def _future_result(future, *, timeout: float | None):
@@ -635,11 +653,33 @@ class TinkerClient(LLMClient):
     @staticmethod
     def _message_text(parsed) -> str:
         message = parsed[0] if isinstance(parsed, tuple) else parsed
+        if isinstance(message, list):
+            parts = []
+            for block in message:
+                if isinstance(block, dict):
+                    if block.get("type") in ("text", "output_text"):
+                        parts.append(str(block.get("text", "")))
+                    elif "content" in block:
+                        parts.append(TinkerClient._message_text(block))
+                    continue
+                text = getattr(block, "text", None)
+                if text is not None:
+                    parts.append(str(text))
+            return "".join(parts)
         if isinstance(message, dict):
-            return str(message.get("content", ""))
+            content = message.get("content", "")
+            return (
+                TinkerClient._message_text(content)
+                if isinstance(content, (list, tuple, dict))
+                else str(content)
+            )
         content = getattr(message, "content", None)
         if content is not None:
-            return str(content)
+            return (
+                TinkerClient._message_text(content)
+                if isinstance(content, (list, tuple, dict))
+                else str(content)
+            )
         text = getattr(message, "text", None)
         if text is not None:
             return str(text)

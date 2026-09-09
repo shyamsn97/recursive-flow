@@ -55,7 +55,9 @@ class ScriptedLLM:
     last_usage = LLMUsage(input_tokens=20, output_tokens=20)
 
     def chat(self, messages):
-        query = messages[-1]["content"]
+        query = "\n\n".join(
+            message["content"] for message in messages if message["role"] == "user"
+        )
         if "Append 'shared-child'" in query:
             return SHARED_REPLY
         if "whether a global named 'shared'" in query:
@@ -65,7 +67,12 @@ class ScriptedLLM:
 
 def main() -> None:
     flow = Flow(ScriptedLLM())
-    root = flow.start("Demonstrate explicit shared and isolated child REPLs.", max_depth=1)
+    root = flow.start(
+        "Demonstrate explicit shared and isolated child REPLs.",
+        max_depth=1,
+        max_iters=3,
+        child_max_iters=2,
+    )
     try:
         result = flow.run(root)
         print(result)

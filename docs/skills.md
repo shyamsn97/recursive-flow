@@ -2,7 +2,7 @@
 
 Skills are ordinary repo files that become part of an agent's prompt when they matter. Use them for stable guidance you want to reuse across runs: project style guides, domain playbooks, child-agent contracts, benchmark heuristics, or lessons distilled from previous traces.
 
-rlmflow keeps skills as files. Add a callable prompt section that decides which files belong in the current agent's context. See [`examples/skills.py`](https://github.com/shyamsn97/rlmflow/blob/main/examples/skills.py) for a small runnable version.
+rlmflow keeps skills as files. Subclass `PromptBuilder` and concatenate the files that belong in the current agent's context. See [`examples/skills.py`](https://github.com/shyamsn97/rlmflow/blob/main/examples/skills.py) for a small runnable version.
 
 ## Suggested Layout
 
@@ -29,18 +29,17 @@ Load project conventions into every agent:
 from pathlib import Path
 
 import rlmflow
-from rlmflow import SystemPromptBuilder
+from rlmflow import PromptBuilder
 from rlmflow.llm import OpenAIClient
 
 
-def project_skill(flow: rlmflow.Flow, node: rlmflow.Node) -> str:
-    return Path("skills/project-style/SKILL.md").read_text(encoding="utf-8")
+class ProjectSkillPrompt(PromptBuilder):
+    def __call__(self, flow=None, node=None) -> str:
+        skill = Path("skills/project-style/SKILL.md").read_text(encoding="utf-8")
+        return super().__call__(flow, node) + "\n\n" + skill
 
 
-flow = rlmflow.Flow(OpenAIClient(model="gpt-4o-mini"))
-prompt = SystemPromptBuilder()
-prompt.sections.add("project_skill", project_skill, title="Project Skill", before="tools")
-flow.system_prompt = prompt
+flow = rlmflow.Flow(OpenAIClient(model="gpt-4o-mini"), system_prompt=ProjectSkillPrompt())
 ```
 
 ## Query-Selected Skills
@@ -51,7 +50,7 @@ Choose domain skills from the current task:
 from pathlib import Path
 
 import rlmflow
-from rlmflow import SystemPromptBuilder
+from rlmflow import PromptBuilder
 from rlmflow.llm import OpenAIClient
 
 SKILL_DIR = Path("skills")
@@ -65,24 +64,24 @@ def _read_skill(name: str) -> str:
     return f"### {name}\n{body}"
 
 
-def workspace_skills(flow: rlmflow.Flow, agent: rlmflow.AgentStart) -> str:
-    query = agent.content.lower()
-    skills = [_read_skill("project-style")]
+class WorkspaceSkillsPrompt(PromptBuilder):
+    def __call__(self, flow=None, node=None) -> str:
+        agent = None if node is None else node.parent_agent
+        query = (agent.content if agent is not None else "").lower()
+        skills = [_read_skill("project-style")]
+        if "numpy" in query or "linear algebra" in query:
+            skills.append(_read_skill("numpy-linear-algebra"))
+        if agent is not None and agent.config.depth > 0:
+            skills.append(_read_skill("child-agent-contract"))
+        extra = "\n\n".join(skill for skill in skills if skill)
+        text = super().__call__(flow, node)
+        return f"{text}\n\n{extra}" if extra else text
 
-    if "numpy" in query or "linear algebra" in query:
-        skills.append(_read_skill("numpy-linear-algebra"))
-    if agent.config.depth > 0:
-        skills.append(_read_skill("child-agent-contract"))
 
-    return "\n\n".join(skill for skill in skills if skill)
-
-
-flow = rlmflow.Flow(OpenAIClient(model="gpt-4o-mini"))
-prompt = SystemPromptBuilder()
-prompt.sections.add(
-    "workspace_skills", workspace_skills, title="Workspace Skills", before="tools"
+flow = rlmflow.Flow(
+    OpenAIClient(model="gpt-4o-mini"),
+    system_prompt=WorkspaceSkillsPrompt(),
 )
-flow.system_prompt = prompt
 ```
 
 ## Child-Only Skills
@@ -93,22 +92,26 @@ Give spawned agents a tighter contract than the root planner:
 from pathlib import Path
 
 import rlmflow
-from rlmflow import SystemPromptBuilder
+from rlmflow import PromptBuilder
 from rlmflow.llm import OpenAIClient
 
 
-def child_contract(flow: rlmflow.Flow, agent: rlmflow.AgentStart) -> str:
-    if agent.config.depth == 0:
-        return ""
-    return Path("skills/child-agent-contract/SKILL.md").read_text(encoding="utf-8")
+class ChildContractPrompt(PromptBuilder):
+    def __call__(self, flow=None, node=None) -> str:
+        agent = None if node is None else node.parent_agent
+        text = super().__call__(flow, node)
+        if agent is None or agent.config.depth == 0:
+            return text
+        contract = Path("skills/child-agent-contract/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        return f"{text}\n\n{contract}"
 
 
-flow = rlmflow.Flow(OpenAIClient(model="gpt-4o-mini"))
-prompt = SystemPromptBuilder()
-prompt.sections.add(
-    "child_contract", child_contract, title="Child Agent Contract", after="strategy"
+flow = rlmflow.Flow(
+    OpenAIClient(model="gpt-4o-mini"),
+    system_prompt=ChildContractPrompt(),
 )
-flow.system_prompt = prompt
 ```
 
 ## Run-Memory Skills
@@ -119,38 +122,39 @@ Turn lessons from previous runs into reusable guidance:
 from pathlib import Path
 
 import rlmflow
-from rlmflow import SystemPromptBuilder
+from rlmflow import PromptBuilder
 from rlmflow.llm import OpenAIClient
 
 MEMORY_DIR = Path("skills/run-memory")
 
 
-def run_memory(flow: rlmflow.Flow, node: rlmflow.Node) -> str:
-    blocks = []
-    for path in sorted(MEMORY_DIR.glob("*.md")):
-        text = path.read_text(encoding="utf-8").strip()
-        if text:
-            blocks.append(f"### {path.stem}\n{text}")
-    return "\n\n".join(blocks)
+class RunMemoryPrompt(PromptBuilder):
+    def __call__(self, flow=None, node=None) -> str:
+        blocks = []
+        for path in sorted(MEMORY_DIR.glob("*.md")):
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                blocks.append(f"### {path.stem}\n{text}")
+        extra = "\n\n".join(blocks)
+        text = super().__call__(flow, node)
+        return f"{text}\n\n{extra}" if extra else text
 
 
-flow = rlmflow.Flow(OpenAIClient(model="gpt-4o-mini"))
-prompt = SystemPromptBuilder()
-prompt.sections.add("run_memory", run_memory, title="Run Memory", before="examples")
-flow.system_prompt = prompt
+flow = rlmflow.Flow(
+    OpenAIClient(model="gpt-4o-mini"),
+    system_prompt=RunMemoryPrompt(),
+)
 ```
 
 ## Combining Skills With Other Prompt Changes
 
-Skills are prompt sections, so they compose with the rest of the prompt builder — just keep editing `.sections`:
+Skills are just more text after `super().__call__`, so they compose with other extras in the same subclass:
 
 ```python
-prompt = SystemPromptBuilder()
-prompt.sections.add(
-    "workspace_skills", workspace_skills, title="Workspace Skills", before="tools"
-)
-prompt.sections.add("run_memory", run_memory, title="Run Memory", before="examples")
-flow.system_prompt = prompt
+class CombinedPrompt(PromptBuilder):
+    def __call__(self, flow=None, node=None) -> str:
+        parts = [super().__call__(flow, node), workspace_skills(flow, node), run_memory()]
+        return "\n\n".join(part for part in parts if part)
 ```
 
 For lower-level prompt mechanics, see [`prompt_customization.md`](prompt_customization.md).

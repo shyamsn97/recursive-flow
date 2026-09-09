@@ -30,7 +30,7 @@ from rlmflow import (
     start,
     tool,
 )
-from rlmflow.llm import LLMClient, LLMUsage
+from rlmflow.llm import LLMClient, LLMUsage, OpenAIClient
 
 
 @runner("rlmflow-local", aliases=["rlmflow"])
@@ -44,8 +44,10 @@ class RLMFlowLocalRunner(Runner):
         live_save: bool = True,
         max_steps: int | None = None,
         use_llm_query: bool = True,
+        use_llm_query_batched: bool = True,
         prompt_condition: str = "current_policy",
         use_agent_tree: bool = False,
+        worker_model: str | None = None,
     ) -> None:
         self.max_iters = max_iters
         self.child_max_iters = child_max_iters
@@ -54,8 +56,10 @@ class RLMFlowLocalRunner(Runner):
         self.live_save = live_save
         self.max_steps = max_steps
         self.use_llm_query = use_llm_query
+        self.use_llm_query_batched = use_llm_query_batched
         self.prompt_condition = DelegationCondition.parse(prompt_condition)
         self.use_agent_tree = use_agent_tree
+        self.worker_model = worker_model
 
     def run(self, example: Example, model: Model, ctx: RunContext) -> Prediction:
         graph_dir = ctx.artifact_dir / "graph"
@@ -64,6 +68,11 @@ class RLMFlowLocalRunner(Runner):
         materialize_fixtures(example, work_dir)
         inputs = _example_inputs(example)
         max_depth = 0 if self.prompt_condition is DelegationCondition.LOCAL else self.max_depth
+        llm_clients = (
+            {"worker": OpenAIClient(self.worker_model)}
+            if self.worker_model is not None
+            else None
+        )
         flow = Flow(
             _ModelClient(model),
             root_config=AgentConfig(
@@ -75,8 +84,10 @@ class RLMFlowLocalRunner(Runner):
             runtime=LocalRuntime(working_directory=work_dir),
             system_prompt=system_prompt_for(self.prompt_condition),
             tools=_example_tools(example),
-            enable_structured_output=False,
+            llm_clients=llm_clients,
+            delegation_model="worker" if llm_clients is not None else None,
             use_llm_query=self.use_llm_query,
+            use_llm_query_batched=self.use_llm_query_batched,
             use_agent_tree=self.use_agent_tree,
         )
         apply_condition(flow, self.prompt_condition)

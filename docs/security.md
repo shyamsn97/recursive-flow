@@ -32,9 +32,9 @@ Mount only what the agent needs. A hostile agent inside the container can still 
 Independent of the runtime:
 
 - `max_depth=1` — recursion limit.
-- `max_iters=30` — LLM calls per agent (`None` explicitly opts out).
-- `max_budget=100_000` — total tokens across the run (`None` opts out).
-- `max_output_length` — truncate oversized stdout.
+- `max_iters=None` — LLM calls per agent (set a number to cap).
+- `max_budget=None` — total tokens across the run (set a number to cap).
+- `max_output_length=20_000` — truncate oversized stdout (official RLM's per-block cap).
 - `workers` — cap concurrent blocking LLM calls on the flow's thread pool.
 
 ## Proxied tools

@@ -132,10 +132,13 @@ def tree(query="build a house", **overrides):
 
 
 def child_of(agent, name, goal="sub goal"):
-    action = agent.frontier.append(
-        ExecAction(code=f"launch_subagent({goal!r}, model='default', name={name!r})")
+    action = ExecAction(
+        code=f"launch_subagent({goal!r}, model='default', name={name!r})"
     )
-    return action.append(AgentStart(content=goal, config=agent.config.child(name)))
+    agent.frontier.append(action)
+    child = AgentStart(content=goal, config=agent.config.child(name))
+    action.append(child)
+    return child
 
 
 def finish(agent, result="ok"):
@@ -406,8 +409,7 @@ def delegating(child_goal="chop wood", child_item="wood", root_item="plank"):
             return block(
                 f"handle = await launch_subagent("
                 f"{child_goal!r}, model='default', name='w')\n"
-                "print(await handle.wait_for_result())\n"
-                "transition('act')"
+                "print(await handle.wait_for_result())"
             )
         return block(f"print(await env_step(item={root_item!r}))\nfinish('built')")
 

@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from typing import Any, ClassVar, Literal
 
 from rlmflow import boundaries
+from rlmflow.engine import delegation, restore
 from rlmflow.engine.boundaries import StepUntil
 from rlmflow.engine.execution import Pool, TaskQueue, ThreadPool, Transition
-from rlmflow.engine.steps import DEFAULT_STEPS, MessageBuilder, StepFunction
-from rlmflow.engine.transitions import (
-    DEFAULT_TRANSITIONS,
-    Transitions,
-)
+from rlmflow.engine.transitions import Transitions
 from rlmflow.graph.nodes import (
-    DEFAULT_QUERY,
     AgentConfig,
     AgentStart,
     DoneOutput,
@@ -25,105 +22,26 @@ from rlmflow.graph.nodes import (
     LLMOutput,
     LLMUsage,
     Node,
-    TruncationSummary,
-    TurnMode,
-    UserQuery,
     start,
-    validate_agent_name,
 )
 from rlmflow.llm import LLMChunk, PooledLLMClient
 from rlmflow.prompts import (
-    DEFAULT_BUILDER,
+    PromptBuilder,
     PromptProfile,
     RenderFn,
     SystemPromptSource,
     as_system_prompt_fn,
     default_render,
-    format_transition_footer,
+    messages,
 )
+from rlmflow.prompts.prompts import render_inputs_text
 from rlmflow.runtime import ExecutionGuard, LocalRuntime, Runtime, WrappedRuntime
-from rlmflow.runtime.env import RLMFLOW_REPLAY
-from rlmflow.runtime.repl import DoneSignal, Repl, ReplRun, TransitionSignal
-from rlmflow.runtime.repl_client import current_rpc_call_id
-from rlmflow.structured import json_schema_for, parse_structured_answer
-from rlmflow.tools import RESERVED_TOOLS, tool
-from rlmflow.tools.agents import (
-    AGENT_OBSERVE_TOOL,
-    AGENT_WAIT_TOOL,
-    AGENTS_BINDING,
-    AgentHandle,
-    build_agent_directory,
-)
+from rlmflow.runtime.repl import Repl, ReplRun
+from rlmflow.tools import namespace
 from rlmflow.tools.builtins import BuiltIns
 from rlmflow.tools.llm_query import llm_query, llm_query_batched
-from rlmflow.tools.tools import is_toolset, toolset_members
-from rlmflow.utils.helpers import tool_name
 
 BUDGET_EXCEEDED = "[budget exceeded]"
-
-
-def as_tool_items(tools: Any) -> list[Any]:
-    """Normalize ``Flow(tools=...)`` to a list of tools and toolsets.
-
-    A toolset is one item, same as a function. ``tools=[FILE_TOOLS, grep_extra]``
-    and ``tools=FILE_TOOLS`` both work; the list is not "one toolset or many
-    functions."
-    """
-    if tools is None:
-        return []
-    if is_toolset(tools) or callable(tools):
-        return [tools]
-    if isinstance(tools, Iterable) and not isinstance(tools, (str, bytes)):
-        return list(tools)
-    raise TypeError(
-        f"tools must be a tool, a toolset, or a sequence of them, not {type(tools).__name__}"
-    )
-
-
-class FlowMessages(MessageBuilder):
-    """``Flow.build_messages`` as the step-level message builder."""
-
-    def __init__(self, flow: Flow) -> None:
-        self.flow = flow
-
-    def build(self, node: Node) -> list[dict[str, str]]:
-        return self.flow.build_messages(node)
-
-
-class _TransitionMethod:
-    """Bind one immutable policy update to a Flow class or instance."""
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __get__(self, instance: Flow | None, owner: type[Flow]):
-        target = owner if instance is None else instance
-
-        def configure(*args: Any, **kwargs: Any):
-            target.transitions = getattr(target.transitions, self.name)(*args, **kwargs)
-            return target
-
-        return configure
-
-
-class _TransitionGuardMethod:
-    """Register a guarded selectable edge as a decorator."""
-
-    def __get__(self, instance: Flow | None, owner: type[Flow]):
-        target = owner if instance is None else instance
-
-        def when(current: Any, destination: Any):
-            def register(guard: Callable[[Node], bool]):
-                target.transitions = target.transitions.on(
-                    current,
-                    [destination],
-                    when=guard,
-                )
-                return guard
-
-            return register
-
-        return when
 
 
 @contextmanager
@@ -141,10 +59,7 @@ def timed(node: Node) -> Iterator[None]:
 class Flow:
     """Own the model, tools, prompts, and REPLs. The queue owns running agents."""
 
-    transitions: ClassVar[Transitions] = DEFAULT_TRANSITIONS
-    always = _TransitionMethod("always")
-    on = _TransitionMethod("on")
-    when = _TransitionGuardMethod()
+    transitions: ClassVar[Transitions] = Transitions()
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -164,12 +79,14 @@ class Flow:
         runtime: Runtime | None = None,
         execution_guard: ExecutionGuard | None = None,
         llm_clients: dict[str, Any] | None = None,
+        delegation_model: str | None = None,
         llm_request_timeout: float | None = None,
         workers: int | None = None,
         pool: Pool | None = None,
         use_llm_query: bool = False,
+        use_llm_query_batched: bool = True,
         use_agent_tree: bool = False,
-        enable_structured_output: bool = False,
+        enable_structured_output: bool = True,
         transitions: Transitions | None = None,
     ) -> None:
         if restore not in ("replay", "lazy"):
@@ -179,12 +96,13 @@ class Flow:
         self.root_config = root_config or AgentConfig()
         self.restore = restore
         self.llm_request_timeout = llm_request_timeout
-        self.system_prompt = system_prompt or DEFAULT_BUILDER
+        self.system_prompt = PromptBuilder() if system_prompt is None else system_prompt
         self.render_fn = render_fn or default_render
         self.prompt_profiles = dict(prompt_profiles or {})
         self.prompt_router = prompt_router
         self.use_agent_tree = use_agent_tree
         self.use_llm_query = use_llm_query
+        self.use_llm_query_batched = use_llm_query and use_llm_query_batched
         self.enable_structured_output = enable_structured_output
         self.transitions = (transitions or type(self).transitions).derive()
         self.runtime = runtime or LocalRuntime()
@@ -194,16 +112,21 @@ class Flow:
         self._restored_agents: set[int] = set()
         self._restore_lock = asyncio.Lock()
         self._llm_clients = {"default": llm, **(llm_clients or {})}
+        if delegation_model is not None and delegation_model not in self._llm_clients:
+            available = ", ".join(sorted(self._llm_clients))
+            raise ValueError(
+                f"unknown delegation model {delegation_model!r}; available models: {available}"
+            )
+        self.delegation_model = delegation_model
         self.tools: dict[str, Any] = {}
         self.toolsets: list[Any] = []
         self._bind_toolset(BuiltIns())
-        for item in as_tool_items(tools):
+        for item in namespace.as_tool_items(tools):
             self.add_tool(item)
         if use_llm_query:
             self.add_tool(llm_query(self), name="llm_query")
-            self.add_tool(llm_query_batched(self), name="llm_query_batched")
-        self.steps = dict(DEFAULT_STEPS)
-        self.messages = FlowMessages(self)
+            if use_llm_query_batched:
+                self.add_tool(llm_query_batched(self), name="llm_query_batched")
         self.wrapped_runtime = WrappedRuntime(
             self.runtime,
             self.build_tools,
@@ -233,75 +156,28 @@ class Flow:
 
     def build_messages(self, node: Node) -> list[dict[str, str]]:
         """The prompt as of ``node``: system message, then that agent's turns."""
-        agent = node.parent_agent
-        profile = self.profile(agent)
-        render_fn = profile.render_fn or self.render_fn
-        current_messages = render_fn(self.runtime, node)
-        keep = agent.config.keep_n_messages
-        if keep is not None:
-            current_messages = current_messages[-keep:] if keep > 0 else []
-        footer = self.transition_footer(node)
-        if footer:
-            current_messages = list(current_messages)
-            user_index = next(
-                (
-                    index
-                    for index in range(len(current_messages) - 1, -1, -1)
-                    if current_messages[index]["role"] == "user"
-                ),
-                None,
-            )
-            if user_index is None:
-                current_messages.append({"role": "user", "content": footer})
-            else:
-                message = dict(current_messages[user_index])
-                content = message.get("content", "").rstrip()
-                message["content"] = f"{content}\n\n{footer}" if content else footer
-                current_messages[user_index] = message
-        previous_keep = None if keep is None else max(keep - len(current_messages), 0)
-        previous_messages = [] if node.prev is None else node.prev.project(keep=previous_keep)
-        if keep is not None:
-            summary = next(
-                (item for item in node.iter_backwards() if isinstance(item, TruncationSummary)),
-                None,
-            )
-            if summary is not None:
-                notice = summary.render()
-                visible = [*previous_messages, *current_messages]
-                if any(message not in visible for message in notice):
-                    previous_messages = [*notice, *previous_messages]
-        system = as_system_prompt_fn(profile.system or self.system_prompt)(self, node)
-        return [
-            {"role": "system", "content": system},
-            *previous_messages,
-            *current_messages,
-        ]
+        return messages.build_messages(self, node)
+
+    def build_system_prompt(self, node: Node) -> str:
+        """The inherited protocol string for ``node``'s agent.
+
+        Resolves ``profile.system`` / ``flow.system_prompt`` / ``PromptBuilder()``.
+        Query nodes wrap this in ``UserQuery.build_system_prompt``.
+        """
+        profile = self.profile(node.parent_agent)
+        source = profile.system or self.system_prompt or PromptBuilder()
+        return as_system_prompt_fn(source)(self, node)
+
+    def render_tools(self, node: Node) -> str:
+        """Live ``Available in the REPL`` list: gated builtins plus host tools."""
+        return messages.render_tools(self, node)
+
+    def render_inputs(self, node: Node) -> str:
+        """Per-agent INPUTS sizes, output schema, and depth."""
+        return render_inputs_text(self, node)
 
     def transition_footer(self, node: Node) -> str:
-        behavior = self.transitions.current_behavior(node)
-        owner = (
-            node
-            if node.turn_mode is TurnMode.FINAL
-            else behavior or (node if isinstance(node, UserQuery) else None)
-        )
-        finish_description = getattr(
-            owner,
-            "finish_description",
-            UserQuery.finish_description,
-        )
-        if node.turn_mode is TurnMode.FINAL:
-            return format_transition_footer(
-                [],
-                finish_description=finish_description,
-                final=True,
-            )
-        if node.turn_mode is not TurnMode.ACTION:
-            return ""
-        options = [(option.name, option.description) for option in self.transitions.available(node)]
-        return format_transition_footer(
-            options,
-            finish_description=finish_description,
-        )
+        return messages.transition_footer(self, node)
 
     async def call_stream(
         self,
@@ -370,37 +246,22 @@ class Flow:
 
     # -- Steps ------------------------------------------------------------
 
-    def update_step_fn(
-        self,
-        node_type: type[Node],
-        step_type: type[StepFunction],
-    ) -> None:
-        self.steps[node_type] = step_type
+    async def step(self, node: Node) -> Node:
+        """Take one graph step and return the created node."""
+        return (await self._drive(node)).created
 
-    def get_step_fn(self, node: Node) -> type[StepFunction]:
-        for node_type in type(node).__mro__:
-            step_type = self.steps.get(node_type)
-            if step_type is not None:
-                return step_type
-        raise TypeError(f"cannot step {type(node).__name__}")
-
-    async def step(self, node: Node) -> Transition:
-        """Take one complete graph step; only cancellation escapes as an exception."""
+    async def _drive(self, node: Node) -> Transition:
+        """Queue entry: one step, with infrastructure failure as a terminal node."""
         error: BaseException | None = None
 
         with timed(node):
             try:
                 if self.budget_exceeded(node):
-                    landed = node.append(DoneOutput(result=BUDGET_EXCEEDED))
+                    landed = DoneOutput(result=BUDGET_EXCEEDED)
                 else:
-                    step_type = self.get_step_fn(node)
-                    step = step_type(
-                        llm=self.llm_for_step(node),
-                        messages=self.messages,
-                        runtime=self.wrapped_runtime,
-                        transitions=self.transitions,
-                    )
-                    landed = await step(node)
+                    produced = self.transitions.resolve(node)(self, node)
+                    landed = await produced if inspect.isawaitable(produced) else produced
+                node.append(landed)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - a failed step is a transition
@@ -408,12 +269,11 @@ class Flow:
                 detail = str(exc)
                 text = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
                 scope = "run" if node.parent_agent is node.root else "child"
-                landed = node.parent_agent.frontier.append(
-                    DoneOutput(
-                        content=text,
-                        result=f"[{scope} failed: {text}]",
-                    )
+                landed = DoneOutput(
+                    content=text,
+                    result=f"[{scope} failed: {text}]",
                 )
+                node.parent_agent.frontier.append(landed)
 
         return Transition(submitted=node, created=landed, error=error)
 
@@ -436,171 +296,38 @@ class Flow:
     # -- Tools ------------------------------------------------------------
 
     def inject(self, name: str, value: Any) -> None:
-        if name in RESERVED_TOOLS:
-            raise ValueError(f"{name!r} is reserved")
-        self.tools[name] = value
-        self.runtime.inject_live(name, value)
+        namespace.inject(self, name, value)
 
     def add_tool(self, fn: Any, *, name: str | None = None) -> None:
-        if is_toolset(fn):
-            instance = fn() if isinstance(fn, type) else fn
-            self._bind_toolset(instance)
-            return
-        self.inject(name or tool_name(fn), fn)
+        namespace.add_tool(self, fn, name=name)
 
     def _bind_toolset(self, instance: Any) -> None:
-        for existing in self.toolsets:
-            if type(existing) is type(instance):
-                raise ValueError(f"toolset {type(instance).__name__!r} is already bound")
-        pending: list[tuple[str, Any]] = []
-        for tool_name_, method in toolset_members(instance):
-            meta = getattr(getattr(method, "__func__", method), "_tool_meta", None)
-            if meta is None or not meta.inject:
-                continue
-            if tool_name_ in RESERVED_TOOLS:
-                raise ValueError(f"{tool_name_!r} is reserved")
-            if tool_name_ in self.tools:
-                raise ValueError(
-                    f"tool {tool_name_!r} from {type(instance).__name__} collides "
-                    f"with an already-bound name"
-                )
-            pending.append((tool_name_, method))
-        self.toolsets.append(instance)
-        for tool_name_, method in pending:
-            self.inject(tool_name_, method)
+        namespace.bind_toolset(self, instance)
 
     def remove_tool(self, name: str) -> Any:
-        if name in RESERVED_TOOLS:
-            raise ValueError(f"{name!r} is reserved")
-        self.runtime.remove_live(name)
-        return self.tools.pop(name, None)
+        return namespace.remove_tool(self, name)
 
     def tool_namespace_for_prompt(self, node: Node) -> dict[str, Any]:
-        namespace = self.runtime.namespace_for(node)
-        return namespace if namespace is not None else self.build_tools(node)
+        bound = self.runtime.namespace_for(node)
+        return bound if bound is not None else self.build_tools(node)
 
     def build_tools(self, node: Node) -> dict[str, Any]:
-        finish = self.finish_tool(node)
-        running = (
-            tuple(current for current, _task in self.queue.running.values())
-            if self.queue is not None
-            else ()
-        )
-        agents = build_agent_directory(node.parent_agent, running_nodes=running)
-        namespace = {
-            **self.tools,
-            "finish": finish,
-            "transition": self.transition_tool(node),
-            "launch_subagent": self.launch_tool(node),
-            "asyncio": asyncio,
-            "INPUTS": node.parent_agent.config.inputs,
-            AGENTS_BINDING: agents,
-            AGENT_OBSERVE_TOOL: self.observe_agent_tool(node),
-            AGENT_WAIT_TOOL: self.wait_agent_tool(node),
-        }
-        if self.use_agent_tree:
-            namespace["AGENTS"] = agents
-        return namespace
+        return namespace.build_namespace(self, node)
 
     def transition_tool(self, node: Node):
-        @tool(
-            "End this action and select the next displayed behavior.",
-            proxy=True,
-        )
-        def transition(name: str) -> None:
-            raise TransitionSignal(str(name))
-
-        return transition
+        return namespace.transition_tool(self, node)
 
     def wait_agent_tool(self, node: Node):
-        @tool("Wait for an existing agent and return its result.", proxy=True)
-        async def wait_agent(agent_id: str) -> Any:
-            root = node.root
-            if root is None:
-                raise RuntimeError("node is detached")
-            target = root.find_agent(agent_id)
-            if target is None:
-                raise KeyError(f"unknown agent {agent_id!r}")
-            if not target.terminal:
-                queue = self.queue
-                if queue is None:
-                    raise RuntimeError("waiting for an agent requires an active stream")
-                await queue.join(target)
-            if isinstance(node, ExecAction):
-                node.mark_agent_retrieved(agent_id)
-            return target.result()
-
-        return wait_agent
+        return namespace.wait_agent_tool(self, node)
 
     def observe_agent_tool(self, node: Node):
-        @tool("Record access to one completed agent result.", proxy=True)
-        def observe_agent(agent_id: str) -> None:
-            root = node.root
-            if root is None:
-                raise RuntimeError("node is detached")
-            target = root.find_agent(agent_id)
-            if target is None:
-                raise KeyError(f"unknown agent {agent_id!r}")
-            if not target.terminal:
-                raise asyncio.InvalidStateError(f"agent {target.config.path!r} is not completed")
-            if isinstance(node, ExecAction):
-                node.mark_agent_retrieved(agent_id)
-
-        return observe_agent
+        return namespace.observe_agent_tool(self, node)
 
     def finish_tool(self, node: Node):
-        schema = node.parent_agent.config.output_schema
-
-        @tool("Submit this agent's final answer and end its run.", proxy=True)
-        def finish(answer: object) -> None:
-            value = parse_structured_answer(answer, schema) if schema is not None else str(answer)
-            raise DoneSignal(value)
-
-        return finish
+        return namespace.finish_tool(self, node)
 
     def launch_tool(self, node: Node):
-        mutation_lock = asyncio.Lock()
-
-        @tool(
-            "Spawn or resume one focused child agent with an explicitly chosen "
-            "registered model; the caller remains responsible for final synthesis.",
-            proxy=True,
-        )
-        async def launch_subagent(
-            goal: str,
-            *,
-            model: str,
-            name: str | None = None,
-            inputs: dict[str, str] | None = None,
-            output_schema: Any = None,
-            prompt_profile: str | None = None,
-            reuse_repl: bool = False,
-        ) -> AgentHandle:
-            if not isinstance(node, ExecAction):
-                raise TypeError("launch_subagent requires an ExecAction")
-            if not isinstance(goal, str):
-                raise TypeError("launch_subagent goal must be a string")
-            spec = {
-                "query": goal,
-                "name": name,
-                "inputs": dict(inputs or {}),
-                "model": model,
-                "output_schema": output_schema,
-                "prompt_profile": prompt_profile,
-                "reuse_repl": reuse_repl,
-            }
-            async with mutation_lock:
-                existing = {id(child) for child in node.children if isinstance(child, AgentStart)}
-                resolved = self.resolve_child(node, spec, current_rpc_call_id())
-                if id(resolved) not in existing:
-                    self.submit_child(resolved)
-            return AgentHandle(
-                agent_id=resolved.id,
-                name=resolved.config.name,
-                path=resolved.config.path,
-            )
-
-        return launch_subagent
+        return delegation.launch_tool(self, node)
 
     def resolve_child(
         self,
@@ -609,61 +336,11 @@ class Flow:
         call_id: int,
     ) -> AgentStart:
         """Resolve one launch call to a direct child or refusal."""
-        explicit_name = spec.get("name")
-        existing = next(
-            (
-                child
-                for child in action.children
-                if isinstance(child, AgentStart)
-                and (
-                    child.config.launch_call_id == call_id
-                    or (explicit_name is not None and child.config.name == explicit_name)
-                )
-            ),
-            None,
-        )
-        if existing is not None:
-            return existing
-
-        parent = action.parent_agent
-        query = spec.get("query", "")
-        if explicit_name is None:
-            used = {child.config.name for child in parent.sub_agents}
-            index = call_id
-            while f"child{index}" in used:
-                index += 1
-            name = f"child{index}"
-        else:
-            name = explicit_name
-        validate_agent_name(name)
-        if any(child.config.name == name for child in parent.sub_agents):
-            raise ValueError(f"duplicate child name {name!r}")
-
-        if parent.config.depth >= parent.config.max_depth:
-            raise ValueError(f"cannot launch beyond max depth {parent.config.max_depth}")
-        if len(query) > parent.config.max_query_chars:
-            raise ValueError(f"subagent goal exceeds {parent.config.max_query_chars} characters")
-        model = spec["model"]
-        if model not in self._llm_clients:
-            available = ", ".join(sorted(self._llm_clients))
-            raise ValueError(f"unknown model {model!r}; available models: {available}")
-        return self.new_child(action, name, spec, call_id=call_id)
+        return delegation.resolve_child(self, action, spec, call_id)
 
     def submit_child(self, child: AgentStart) -> None:
         """Submit a newly attached child and all unfinished restored leaves."""
-        queue = self.queue
-        if queue is None:
-            raise RuntimeError("launch_subagent requires an active stream")
-        if child.terminal:
-            return
-        for leaf in child.leaves():
-            owner = leaf.parent_agent
-            if owner is not None and not owner.terminal:
-                queue.submit(
-                    leaf,
-                    self.step,
-                    publish=isinstance(leaf, AgentStart),
-                )
+        delegation.submit_child(self, child)
 
     def new_child(
         self,
@@ -674,99 +351,17 @@ class Flow:
         call_id: int,
     ) -> AgentStart:
         """Open a child agent of ``node``'s agent, attached to ``node``."""
-        schema = spec.get("output_schema")
-        overrides = {
-            key: value
-            for key, value in {
-                "inputs": dict(spec.get("inputs") or {}),
-                "model": spec.get("model"),
-                "prompt_profile": spec.get("prompt_profile"),
-                "output_schema": (json_schema_for(schema) if schema is not None else None),
-                "reuse_repl": spec.get("reuse_repl"),
-                "launch_call_id": call_id,
-            }.items()
-            if value is not None
-        }
-        child = AgentStart(
-            content=spec.get("query") or DEFAULT_QUERY,
-            config=node.parent_agent.config.child(name, **overrides),
-        )
-        attached = node.append(child)
-        node.children.sort(
-            key=lambda value: (
-                not isinstance(value, AgentStart),
-                (
-                    value.config.launch_call_id
-                    if isinstance(value, AgentStart) and value.config.launch_call_id is not None
-                    else 0
-                ),
-            )
-        )
-        parent = node.parent_agent
-        parent.sub_agents.sort(
-            key=lambda value: (
-                value.parent.seq if value.parent is not None else 0,
-                value.config.launch_call_id if value.config.launch_call_id is not None else 0,
-            )
-        )
-        return attached
+        return delegation.new_child(self, node, name, spec, call_id=call_id)
 
     # -- Running ----------------------------------------------------------
 
     async def replay(self, root: AgentStart) -> None:
-        """Rebuild the namespaces of a graph we did not run, from its recorded code.
-
-        Appends nothing: ``launch_subagent`` resolves children already attached
-        to each action and reads finished results from their terminal nodes. A block
-        that failed the first time fails the same way here, leaving the same partial
-        bindings, which is why output and errors are discarded.
-        """
-        actions = [
-            node
-            for node in root.walk()
-            if isinstance(node, ExecAction) and node is not node.parent_agent.frontier
-        ]
-        actions.sort(
-            key=lambda node: (
-                node.repl_execution_order is None,
-                node.repl_execution_order or 0,
-                node.created_at,
-            )
-        )
-        for node in actions:
-            agent = node.parent_agent
-            if agent.terminal and not agent.config.reuse_repl:
-                continue  # it answered; nothing will run in this namespace again
-            repl = self.runtime.repl_for(agent)
-            repl.structured_output = agent.config.output_schema is not None
-            repl.seed(self.build_tools(node), agent.config.inputs)
-            repl.update_env({RLMFLOW_REPLAY: "1"})
-            try:
-                await self.runtime.execute(node, node.code)
-            finally:
-                repl.update_env({RLMFLOW_REPLAY: "0"})
+        """Rebuild the namespaces of a graph we did not run, from its recorded code."""
+        await restore.replay(self, root)
 
     async def ensure_replayed(self, agent: AgentStart) -> None:
         """Restore an unfinished namespace immediately before its first execution."""
-        if id(agent) in self._restored_agents:
-            return
-        async with self._restore_lock:
-            if id(agent) in self._restored_agents:
-                return
-            if self.runtime.get(agent) is not None:
-                self._restored_agents.add(id(agent))
-                return
-
-            root = agent
-            while root.config.reuse_repl and root.parent is not None:
-                parent = root.parent.parent_agent
-                if parent is None or self.runtime.get(parent) is not None:
-                    break
-                root = parent
-            await self.replay(root)
-            self._restored_agents.update(
-                id(node) for node in root.walk() if isinstance(node, AgentStart)
-            )
+        await restore.ensure_replayed(self, agent)
 
     async def run_streaming(
         self,
@@ -809,7 +404,7 @@ class Flow:
                     if owner is not None and not owner.terminal:
                         if self.restore == "lazy" and isinstance(leaf, ExecAction):
                             await self.ensure_replayed(owner)
-                        queue.submit(leaf, self.step)
+                        queue.submit(leaf, self._drive)
 
             while driving and queue:
                 transition = await queue.next()
@@ -836,7 +431,7 @@ class Flow:
                 elif not transition.is_agent_start and not node.parent_agent.terminal:
                     if self.restore == "lazy" and isinstance(node, ExecAction):
                         await self.ensure_replayed(node.parent_agent)
-                    queue.submit(node, self.step)
+                    queue.submit(node, self._drive)
 
                 if root_error is not None:
                     raise root_error
@@ -887,5 +482,7 @@ class Flow:
             self.pool.close()
             self.runtime.close()
 
+
+import rlmflow.engine.steps  # noqa: F401, E402
 
 __all__ = ["Flow", "StepUntil", "start"]

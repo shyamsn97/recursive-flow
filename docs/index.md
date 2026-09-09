@@ -18,13 +18,20 @@ Pick the doc that matches what you're trying to do.
 - [Observability](observability.md) — querying the Node tree, run layout, stream consumers, and reading a saved run.
 - [Node model](node_model.md) — the typed node hierarchy, its transitions, and how delegation is recorded.
 - [Runtimes](runtimes.md) — `Runtime` protocol, shipped runtimes (Local / subprocess / Docker / Modal), writing your own.
-- [Prompt customization](prompt_customization.md) — `SystemPromptBuilder` sections, `PromptProfile` / `prompt_profile` / `prompt_router`, full replacement.
+- [Prompt customization](prompt_customization.md) — `PromptBuilder`, `Flow.build_system_prompt` / `UserQuery.build_system_prompt`, `PromptProfile` / `prompt_profile` / `prompt_router`.
+- [Benchmarks](benchmarks.md) — named sets (`smoke`, `reasoning`, `long-context`, `delegation`, `task-graph`, `research`, `code`) and how to run them.
+- [Delegation problem set](delegation_problems.md) — 16 items to A/B `max_depth=0` vs `1`: local and query controls, foreground/background spawn, fresh-context verify. Not wired yet; spec only.
 - [Security](security.md) — trust model, Docker isolation knobs, engine-level caps, proxied tools, approval gates.
 - [Example smoke runner](https://github.com/shyamsn97/rlmflow/blob/main/examples/run_examples.py) — run the offline examples and opt into optional, live, sandbox, or manual checks.
 
 ## Extend rlmflow
 
 - [**Internals**](internals.md) — Node structure, Flow transitions, the task queue and pools, Runtime identity, replay, forks, and persistence.
+- [Step table](step_table.md) — `transitions = Transitions()`, then `@Flow.transitions.on(...)` functions.
+- [`Node.append`](node_append.md) — `append` is inplace and returns `None`; the step returns the created node.
+- [Flow extract](flow_extract.md) — `Flow` stays the facade; restore, builtin factories, and child launch become `(flow, ...)` functions.
+- [Step table](step_table.md) — automatic producers, named choices, and direct `transition("name")` routing.
+- [Historical colocation review](colocate.md) — the design audit that led to colocated default policy and direct named transitions.
 
 ## Historical and experimental research notes
 
@@ -38,3 +45,4 @@ These records explain experiments and design lineage. They are not API reference
 - [Speculative programmatic tool calling](research/spec_ptc.md) — implement Zhang's sPTC algorithm in `rlmflow.speculate` (shadow REPL, claim-or-run futures) without depending on the spec-ptc package.
 - [Shepherd run analysis](research/shepherd_run_analysis.md) — a concrete rewind/replay/fan-out walkthrough from a saved eight-branch Sokoban run, including outcomes, parallelism, process boundaries, persistence, and the terminal-worker lifecycle bug exposed by the artifacts.
 - [DeLM vs. rlmflow](research/delm_vs_rlmflow.md) — how DeLM-style coordination could sit on top of recursive execution graphs.
+- [Runtime harness optimization](research/runtime_harness.md) — ACE / Continual Harness / GEPA / RHO mapped onto the live Node tree, with copy-paste sketches against `Flow` (not weight training).

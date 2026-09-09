@@ -3,11 +3,17 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 import pytest
+from helpers import StubLLM, TestRuntime, counting_replies
 
 from rlmflow import (
+    ErrorOutput,
+    ExecAction,
+    ExecOutput,
     FinalQuery,
     Flow,
-    InspectQuery,
+    InvalidTransitionError,
+    LLMOutput,
+    LocalRuntime,
     PlanQuery,
     TransitionPolicyError,
     Transitions,
@@ -15,8 +21,16 @@ from rlmflow import (
     UserQuery,
     start,
 )
-from rlmflow.engine.transitions import DEFAULT_TRANSITIONS
+from rlmflow.engine.steps import complete, to_final, to_plan
 from rlmflow.prompts import format_transition_footer
+
+
+@dataclass
+class WorkQuery(UserQuery):
+    type: ClassVar[str] = "work_query"
+    name: ClassVar[str] = "work"
+    transition_description: ClassVar[str] = "Continue working from the latest result."
+    finish_description: ClassVar[str] = "Submit the current candidate."
 
 
 @dataclass
@@ -24,43 +38,49 @@ class VerifyQuery(UserQuery):
     type: ClassVar[str] = "verify_query"
     name: ClassVar[str] = "verify"
     transition_description: ClassVar[str] = "Choose when a candidate needs verification."
-    action_description: ClassVar[str] = "Continue verifying the current candidate."
     finish_description: ClassVar[str] = "Submit the verified candidate."
 
 
 def test_selectable_policy_defines_behavior_without_a_marker_base():
-    transitions = Transitions().on(InspectQuery, [VerifyQuery])
+    transitions = Transitions().choices(WorkQuery, VerifyQuery)
     root = start("query")
-    inspect = root.append(InspectQuery())
-    verify = inspect.append(VerifyQuery())
+    work = WorkQuery()
+    root.append(work)
+    verify = VerifyQuery()
+    work.append(verify)
 
     assert transitions.current_behavior(verify) is verify
-    assert [option.name for option in transitions.available(verify)] == ["act"]
+    assert transitions.available(verify) == ()
 
 
 def test_utility_control_does_not_erase_policy_registered_behavior():
-    transitions = Transitions().on(InspectQuery, [VerifyQuery]).on(
+    transitions = Transitions().choices(WorkQuery, VerifyQuery).choices(
         VerifyQuery,
-        [InspectQuery],
+        WorkQuery,
     )
     root = start("query")
-    verify = root.append(InspectQuery()).append(VerifyQuery())
-    summary = verify.append(TruncationSummary())
+    work = WorkQuery()
+    root.append(work)
+    verify = VerifyQuery()
+    work.append(verify)
+    summary = TruncationSummary()
+    verify.append(summary)
 
     assert transitions.current_behavior(summary) is verify
-    assert [option.name for option in transitions.available(summary)] == [
-        "act",
-        "inspect",
-    ]
+    assert [option.name for option in transitions.available(summary)] == ["work"]
 
 
-def test_newer_action_capable_query_replaces_an_older_custom_behavior():
-    transitions = Transitions().on(InspectQuery, [VerifyQuery])
-    verify = start("query").append(InspectQuery()).append(VerifyQuery())
-    plan = verify.append(PlanQuery())
+def test_unregistered_query_does_not_replace_a_custom_behavior():
+    transitions = Transitions().choices(WorkQuery, VerifyQuery)
+    work = WorkQuery()
+    start("query").append(work)
+    verify = VerifyQuery()
+    work.append(verify)
+    plan = PlanQuery()
+    verify.append(plan)
 
-    assert transitions.current_behavior(plan) is plan
-    assert [option.name for option in transitions.available(plan)] == ["act"]
+    assert transitions.current_behavior(plan) is verify
+    assert transitions.available(plan) == ()
 
 
 def test_selectable_controls_require_explicit_model_facing_metadata():
@@ -69,10 +89,10 @@ def test_selectable_controls_require_explicit_model_facing_metadata():
         type: ClassVar[str] = "utility_query"
 
     with pytest.raises(TransitionPolicyError, match="no transition name"):
-        Transitions().on(UtilityQuery, [InspectQuery])
+        Transitions().choices(UtilityQuery, VerifyQuery)
 
 
-def test_selectable_transition_names_are_unique_per_owner_and_cannot_shadow_exits():
+def test_selectable_transition_names_are_unique_and_cannot_shadow_finish():
     @dataclass
     class DuplicateVerifyQuery(UserQuery):
         type: ClassVar[str] = "duplicate_verify_query"
@@ -83,62 +103,142 @@ def test_selectable_transition_names_are_unique_per_owner_and_cannot_shadow_exit
     class ActQuery(UserQuery):
         type: ClassVar[str] = "act_query"
         name: ClassVar[str] = "act"
-        transition_description: ClassVar[str] = "Shadow the built-in action."
+        transition_description: ClassVar[str] = "Choose the host-defined act behavior."
+
+    @dataclass
+    class FinishQuery(UserQuery):
+        type: ClassVar[str] = "finish_query"
+        name: ClassVar[str] = "finish"
+        transition_description: ClassVar[str] = "Shadow completion."
 
     with pytest.raises(TransitionPolicyError, match="duplicate transition names"):
         (
             Transitions()
-            .on(InspectQuery, [VerifyQuery])
-            .on(InspectQuery, [DuplicateVerifyQuery])
+            .choices(WorkQuery, VerifyQuery)
+            .choices(WorkQuery, DuplicateVerifyQuery)
         )
-    with pytest.raises(TransitionPolicyError, match="'act' is reserved"):
-        Transitions().on(InspectQuery, [ActQuery])
+    transitions = Transitions().choices(WorkQuery, ActQuery)
+    work = WorkQuery()
+    start("query").append(work)
+    assert [option.name for option in transitions.available(work)] == ["act"]
+    with pytest.raises(TransitionPolicyError, match="'finish' is reserved"):
+        Transitions().choices(WorkQuery, FinishQuery)
 
 
 def test_builtin_transition_footer_is_short_and_describes_every_exit():
-    plan = start("query").append(PlanQuery())
+    plan = PlanQuery()
+    start("query").append(plan)
     options = [
         (option.name, option.description)
-        for option in DEFAULT_TRANSITIONS.available(plan)
+        for option in Flow.transitions.available(plan)
     ]
 
     assert format_transition_footer(options) == (
-        "End the REPL block with one:\n"
-        '- transition("act") — Continue working from the latest result.\n'
+        "End the REPL block normally to continue.\n"
         "- finish(answer) — Submit your final answer."
     )
 
 
-def test_persisted_inspection_state_continues_as_one_working_state():
-    inspect = start("query").append(InspectQuery())
+def test_undeclared_transition_names_do_not_resolve():
+    plan = PlanQuery()
+    start("query").append(plan)
 
-    options = DEFAULT_TRANSITIONS.available(inspect)
+    options = Flow.transitions.available(plan)
 
-    assert [option.name for option in options] == ["act"]
-    assert options[0].description == "Continue working from the latest result."
-    assert DEFAULT_TRANSITIONS.resolve(inspect, "inspect") == options[0]
-    assert DEFAULT_TRANSITIONS.resolve(inspect, "plan") == options[0]
+    assert options == ()
+    assert Flow.transitions.resolve_choice(plan, "act") is None
+    assert Flow.transitions.resolve_choice(plan, "inspect") is None
+    assert Flow.transitions.resolve_choice(plan, "plan") is None
 
 
-def test_current_query_owns_action_and_finish_guidance():
-    transitions = Transitions().on(InspectQuery, [VerifyQuery]).on(
+def test_current_query_owns_finish_and_selectable_transition_guidance():
+    transitions = Transitions().choices(WorkQuery, VerifyQuery).choices(
         VerifyQuery,
-        [InspectQuery],
+        WorkQuery,
     )
-    verify = start("query").append(InspectQuery()).append(VerifyQuery())
+    work = WorkQuery()
+    start("query").append(work)
+    verify = VerifyQuery()
+    work.append(verify)
+    summary = TruncationSummary()
+    verify.append(summary)
 
     footer = Flow(object(), transitions=transitions).transition_footer(verify)
     utility_footer = Flow(object(), transitions=transitions).transition_footer(
-        verify.append(TruncationSummary())
+        summary
     )
 
-    assert '- transition("act") — Continue verifying the current candidate.' in footer
+    assert "End the REPL block normally to continue." in footer
+    assert '- transition("work") — Continue working from the latest result.' in footer
     assert footer.endswith("- finish(answer) — Submit the verified candidate.")
     assert utility_footer.endswith("- finish(answer) — Submit the verified candidate.")
 
 
+def test_transition_lands_the_selected_query_without_an_intermediate_output():
+    transitions = Flow.transitions.derive().choices(WorkQuery, VerifyQuery)
+    flow = Flow(
+        StubLLM(
+            counting_replies(
+                '```repl\ntransition("verify")\n```',
+                '```repl\nfinish("verified")\n```',
+            )
+        ),
+        runtime=TestRuntime(),
+        transitions=transitions,
+    )
+    root = start("query")
+    work = WorkQuery()
+    root.append(work)
+
+    assert flow.run(root) == "verified"
+
+    transcript = root.transcript()
+    transition_action = next(
+        node
+        for node in transcript
+        if isinstance(node, ExecAction) and 'transition("verify")' in node.code
+    )
+    assert isinstance(transition_action.prev, LLMOutput)
+    assert isinstance(transition_action.next, VerifyQuery)
+    assert not isinstance(transition_action.next, ExecOutput)
+
+
+def test_unknown_transition_fails_through_the_running_flow():
+    transitions = Flow.transitions.derive().choices(WorkQuery, VerifyQuery)
+    flow = Flow(
+        StubLLM(lambda _messages: '```repl\ntransition("missing")\n```'),
+        runtime=TestRuntime(),
+        transitions=transitions,
+    )
+    root = start("query")
+    root.append(WorkQuery())
+
+    with pytest.raises(InvalidTransitionError, match="'missing'.*'verify'"):
+        flow.run(root)
+
+
+def test_worker_proxy_transition_lands_the_selected_query():
+    transitions = Flow.transitions.derive().choices(WorkQuery, VerifyQuery)
+    flow = Flow(
+        StubLLM(
+            counting_replies(
+                '```repl\ntransition("verify")\n```',
+                '```repl\nfinish("verified")\n```',
+            )
+        ),
+        runtime=LocalRuntime(repl_timeout=5),
+        transitions=transitions,
+    )
+    root = start("query")
+    root.append(WorkQuery())
+
+    assert flow.run(root, close_repls=True) == "verified"
+    assert any(isinstance(node, VerifyQuery) for node in root.transcript())
+
+
 def test_final_query_owns_its_finish_guidance():
-    final = start("query").append(FinalQuery())
+    final = FinalQuery()
+    start("query").append(final)
 
     footer = Flow(object()).transition_footer(final)
 
@@ -148,16 +248,39 @@ def test_final_query_owns_its_finish_guidance():
 def test_final_guard_preempts_normal_startup():
     root = start("query", max_iters=1)
 
-    rule = DEFAULT_TRANSITIONS.resolve_automatic(root)
+    assert Flow.transitions.resolve(root) is to_final
 
-    assert rule is not None
-    assert rule.target is FinalQuery
+
+def test_startup_always_enters_a_planning_action():
+    with_inputs = start("query", inputs={"context": "material"})
+    without_inputs = start("query")
+
+    assert Flow.transitions.resolve(with_inputs) is to_plan
+    assert Flow.transitions.resolve(without_inputs) is to_plan
+
+
+def test_observations_enter_a_fresh_planning_action_without_self_looping():
+    root = start("query")
+    plan = PlanQuery()
+    root.append(plan)
+
+    assert Flow.transitions.resolve(plan) is complete
+    for observation_type, content in (
+        (ExecOutput, "observed"),
+        (ErrorOutput, "failed"),
+    ):
+        prior = PlanQuery()
+        start("query").append(prior)
+        observation = observation_type(content=content)
+        prior.append(observation)
+        assert Flow.transitions.resolve(observation) is to_plan
 
 
 def test_specialized_queries_still_run_automatic_guards_before_chat():
     root = start("query", keep_n_messages=1)
-    plan = root.append(InspectQuery()).append(PlanQuery())
+    plan = PlanQuery()
+    root.append(plan)
 
     result = asyncio.run(Flow(object()).step(plan))
 
-    assert isinstance(result.created, TruncationSummary)
+    assert isinstance(result, TruncationSummary)

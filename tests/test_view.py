@@ -34,16 +34,22 @@ from rlmflow.view.figure import LABEL_ADVANCE, LABEL_SIZE, layout_graph
 def ran() -> AgentStart:
     """A run with a sub-agent, so the figure has a fan in it."""
     root = start("do a thing", max_depth=2)
-    action = root.append(LLMOutput(content="delegate")).append(
-        ExecAction(code="await launch_subagent('sub')")
-    )
-    child = action.append(AgentStart(content="sub", config=root.config.child("count")))
-    child.append(LLMOutput(content="calculate")).append(ExecAction(code="print(2 + 2)")).append(
-        ExecOutput(content="4")
-    ).append(DoneOutput(content="four", result="four"))
-    action.append(ExecOutput(content="four")).append(
-        DoneOutput(content="finished", result="finished")
-    )
+    reply = LLMOutput(content="delegate")
+    root.append(reply)
+    action = ExecAction(code="await launch_subagent('sub')")
+    reply.append(action)
+    child = AgentStart(content="sub", config=root.config.child("count"))
+    action.append(child)
+    calc = LLMOutput(content="calculate")
+    child.append(calc)
+    child_action = ExecAction(code="print(2 + 2)")
+    calc.append(child_action)
+    child_output = ExecOutput(content="4")
+    child_action.append(child_output)
+    child_output.append(DoneOutput(content="four", result="four"))
+    output = ExecOutput(content="four")
+    action.append(output)
+    output.append(DoneOutput(content="finished", result="finished"))
     return root
 
 
@@ -99,7 +105,9 @@ def test_deep_chains_stay_a_readable_size() -> None:
     root = start("deep")
     node: Node = root
     for i in range(400):
-        node = node.append(UserQuery(content=f"step {i}"))
+        nxt = UserQuery(content=f"step {i}")
+        node.append(nxt)
+        node = nxt
     _, height = dimensions(graph_svg(timeline(root), title="deep"))
     assert height <= 4000, f"figure is {height}px tall"
 
@@ -108,7 +116,9 @@ def test_svg_and_html_render_past_the_recursion_limit() -> None:
     root = start("deep")
     node: Node = root
     for i in range(2_000):
-        node = node.append(UserQuery(content=f"step {i}"))
+        nxt = UserQuery(content=f"step {i}")
+        node.append(nxt)
+        node = nxt
 
     assert graph_svg(timeline(root), title="deep").startswith("<svg")
     assert render_html(root).startswith("<!doctype html>")
@@ -118,7 +128,9 @@ def test_layout_handles_ten_thousand_node_chain() -> None:
     root = start("deep")
     node: Node = root
     for i in range(9_999):
-        node = node.append(UserQuery(content=f"step {i}"))
+        nxt = UserQuery(content=f"step {i}")
+        node.append(nxt)
+        node = nxt
 
     layout = layout_graph(list(root.walk()))
 

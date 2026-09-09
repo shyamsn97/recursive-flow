@@ -29,7 +29,9 @@ class ScriptedLLM:
     last_usage = LLMUsage(input_tokens=20, output_tokens=10)
 
     def chat(self, messages):
-        query = messages[-1]["content"]
+        query = "\n\n".join(
+            message["content"] for message in messages if message["role"] == "user"
+        )
         if "Return alpha." in query:
             return "```python\nfinish('alpha finished')\n```"
         if "Return beta." in query:
@@ -41,7 +43,12 @@ class ScriptedLLM:
 
 def main() -> None:
     flow = Flow(ScriptedLLM(), workers=3)
-    root = flow.start("Queue two children, then collect them on a later turn.", max_depth=1)
+    root = flow.start(
+        "Queue two children, then collect them on a later turn.",
+        max_depth=1,
+        max_iters=3,
+        child_max_iters=2,
+    )
     try:
         result = flow.run(root)
         child_results = {child.config.name: child.result() for child in root.sub_agents}

@@ -141,8 +141,7 @@ def test_a_subagent_gathers_in_its_parents_real_env(base_url):
             return block(
                 "handle = await launch_subagent("
                 "'chop wood', model='default', name='w')\n"
-                    "print(await handle.wait_for_result())\n"
-                    "transition('act')"
+                    "print(await handle.wait_for_result())"
             )
         return block("print(await env_step(item='stone'))\nfinish('built')")
 

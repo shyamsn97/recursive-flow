@@ -49,15 +49,16 @@ def _text(renderable) -> str:
 def _delegating_run() -> tuple[AgentStart, ExecAction, AgentStart]:
     """A root that launched one child and is waiting on it."""
     root = start("research the thing")
-    thinking = root.append(
-        LLMOutput(
-            content="I will inspect it.",
-            code='print("checking")',
-            usage=LLMUsage(10, 6),
-        )
+    thinking = LLMOutput(
+        content="I will inspect it.",
+        code='print("checking")',
+        usage=LLMUsage(10, 6),
     )
-    action = thinking.append(ExecAction(code="await launch_subagent(...)"))
-    child = action.append(AgentStart(content="lookup", config=root.config.child("lookup")))
+    root.append(thinking)
+    action = ExecAction(code="await launch_subagent(...)")
+    thinking.append(action)
+    child = AgentStart(content="lookup", config=root.config.child("lookup"))
+    action.append(child)
     return root, action, child
 
 
@@ -123,7 +124,8 @@ def test_waiting_table_reports_running_children_then_clears():
 
 def test_waiting_table_says_none_without_delegation():
     root = start("query")
-    thinking = root.append(LLMOutput(content="thinking"))
+    thinking = LLMOutput(content="thinking")
+    root.append(thinking)
 
     assert "none" in _text(waiting_table(root))
 
@@ -134,11 +136,13 @@ def test_waiting_table_says_none_without_delegation():
 
 def test_error_table_lists_failures_and_says_none_when_clean():
     root = start("query")
-    thinking = root.append(LLMOutput(content="thinking"))
+    thinking = LLMOutput(content="thinking")
+    root.append(thinking)
 
     assert "none" in _text(error_table(root))
 
-    action = thinking.append(ExecAction(code="boom()"))
+    action = ExecAction(code="boom()")
+    thinking.append(action)
     action.append(ErrorOutput(content="NameError: boom is not defined", error="exec"))
     rendered = _text(error_table(root))
     assert "NameError: boom is not defined" in rendered
@@ -162,7 +166,8 @@ def test_dashboard_tables_do_not_walk_all_transcript_nodes():
 
 def test_latest_table_reports_recent_nodes_and_is_bounded():
     root = start("query")
-    node = root.append(LLMOutput(content="thinking"))
+    node = LLMOutput(content="thinking")
+    root.append(node)
 
     assert "-" in _text(latest_table([]))
 
@@ -176,7 +181,8 @@ def test_latest_table_reports_recent_nodes_and_is_bounded():
 
 def test_node_panel_prefers_the_result_of_a_done_node():
     root = start("query")
-    done = root.append(DoneOutput(content="", result="the answer"))
+    done = DoneOutput(content="", result="the answer")
+    root.append(done)
 
     rendered = _text(node_panel(done))
 
@@ -186,8 +192,10 @@ def test_node_panel_prefers_the_result_of_a_done_node():
 
 def test_chat_shows_printed_output_and_skips_empty_exec():
     root = start("query")
-    printed = root.append(ExecOutput(content="hello from the repl"))
-    silent = printed.append(ExecOutput(content="   "))
+    printed = ExecOutput(content="hello from the repl")
+    root.append(printed)
+    silent = ExecOutput(content="   ")
+    printed.append(silent)
 
     assert _in_chat(printed)
     assert not _in_chat(silent)
@@ -206,14 +214,16 @@ def test_chat_shows_the_root_query_and_attached_inputs():
 
 def test_node_panel_falls_back_to_the_node_type_when_empty():
     root = start("query")
-    node = root.append(LLMOutput(content=""))
+    node = LLMOutput(content="")
+    root.append(node)
 
     assert "(llm_output)" in _text(node_panel(node))
 
 
 def test_flow_tui_tracks_the_root_off_the_streamed_node():
     root = start("query")
-    node = root.append(LLMOutput(content="thinking"))
+    node = LLMOutput(content="thinking")
+    root.append(node)
     ui = FlowTUI()
 
     ui.handle(node)
@@ -225,7 +235,8 @@ def test_flow_tui_tracks_the_root_off_the_streamed_node():
 def test_flow_tui_keeps_only_the_last_hundred_nodes():
     root = start("query")
     ui = FlowTUI(root)
-    node = root.append(LLMOutput(content="thinking"))
+    node = LLMOutput(content="thinking")
+    root.append(node)
 
     for _ in range(150):
         ui.handle(node)
@@ -235,7 +246,8 @@ def test_flow_tui_keeps_only_the_last_hundred_nodes():
 
 def test_flow_tui_coalesces_dashboard_refreshes():
     root = start("query")
-    node = root.append(LLMOutput(content="thinking"))
+    node = LLMOutput(content="thinking")
+    root.append(node)
 
     class FakeApp:
         def __init__(self) -> None:
@@ -278,9 +290,12 @@ class FakeFlow:
 
     async def run_streaming(self, root, until="done"):
         self.until = until
-        thinking = root.frontier.append(LLMOutput(content="thinking"))
+        thinking = LLMOutput(content="thinking")
+        root.frontier.append(thinking)
         yield thinking
-        yield thinking.append(DoneOutput(result="answered"))
+        done = DoneOutput(result="answered")
+        thinking.append(done)
+        yield done
 
 
 def test_flow_tui_turn_starts_a_run_then_continues_the_same_one():
@@ -325,7 +340,8 @@ def test_flow_tui_run_has_no_legacy_drive_callback():
 def test_flow_tui_forwards_to_its_sink():
     """A checkpointer or renderer composed onto the dashboard sees every node."""
     root = start("query")
-    node = root.append(LLMOutput(content="thinking"))
+    node = LLMOutput(content="thinking")
+    root.append(node)
     seen: list[str] = []
 
     class Recorder(StreamConsumer):
@@ -363,8 +379,10 @@ def test_importing_rlmflow_does_not_pull_in_textual():
 def test_panels_survive_an_exec_output_only_run():
     """A run with no delegation and no errors still renders every panel."""
     root = start("query")
-    thinking = root.append(LLMOutput(content="thinking", code="print(1)"))
-    action = thinking.append(ExecAction(code="print(1)"))
+    thinking = LLMOutput(content="thinking", code="print(1)")
+    root.append(thinking)
+    action = ExecAction(code="print(1)")
+    thinking.append(action)
     action.append(ExecOutput(content="1"))
 
     for table in (

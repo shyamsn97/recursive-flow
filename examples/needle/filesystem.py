@@ -170,7 +170,7 @@ def main():
         print(f"\n{'=' * 40}")
         print(f"Result:         {root.result()}")
         print(f"Actual answer:  {answer}")
-        print(f"Correct:        {answer in root.result()}")
+        print(f"Correct:        {answer in str(root.result())}")
         print(f"Run saved to    {out_dir}")
 
     finally:

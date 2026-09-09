@@ -9,28 +9,27 @@ from rlmflow.tools.agents import build_agent_directory
 
 def agent_tree():
     root = start("root")
-    root_action = root.append(ExecAction(code="launch"))
-    researcher = root_action.append(
-        AgentStart(
-            content="research",
-            config=root.config.child("researcher"),
-        )
+    root_action = ExecAction(code="launch")
+    root.append(root_action)
+    researcher = AgentStart(
+        content="research",
+        config=root.config.child("researcher"),
     )
-    reviewer = root_action.append(
-        AgentStart(
-            content="review",
-            config=root.config.child("reviewer"),
-        )
+    root_action.append(researcher)
+    reviewer = AgentStart(
+        content="review",
+        config=root.config.child("reviewer"),
     )
+    root_action.append(reviewer)
     researcher.append(DoneOutput(result={"finding": "duplicate keys"}))
 
-    reviewer_action = reviewer.append(ExecAction(code="launch child"))
-    checker = reviewer_action.append(
-        AgentStart(
-            content="check",
-            config=reviewer.config.child("checker"),
-        )
+    reviewer_action = ExecAction(code="launch child")
+    reviewer.append(reviewer_action)
+    checker = AgentStart(
+        content="check",
+        config=reviewer.config.child("checker"),
     )
+    reviewer_action.append(checker)
     return root, root_action, researcher, reviewer, checker
 
 
@@ -84,13 +83,13 @@ def test_directory_is_a_snapshot_and_normalizes_results():
             return "custom answer"
 
     root = start("root")
-    action = root.append(ExecAction(code="launch"))
-    child = action.append(
-        AgentStart(
-            content="work",
-            config=root.config.child("worker"),
-        )
+    action = ExecAction(code="launch")
+    root.append(action)
+    child = AgentStart(
+        content="work",
+        config=root.config.child("worker"),
     )
+    action.append(child)
     before = build_agent_directory(root)
 
     child.append(DoneOutput(result=Answer()))

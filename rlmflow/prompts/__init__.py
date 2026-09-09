@@ -1,43 +1,37 @@
 """System prompt building and chat-message projection."""
 
 from rlmflow.prompts.messages import (
-    PromptBuilder,
     RenderFn,
+    build_messages,
     default_render,
     format_transition_footer,
+    render_tools,
+    transition_footer,
 )
 from rlmflow.prompts.prompts import (
-    DEFAULT_BUILDER,
     MAX_STATIC_PROMPT_CHARS,
+    RLM_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
+    PromptBuilder,
     PromptProfile,
-    Section,
-    SectionBody,
-    Sections,
-    SystemPromptBuilder,
     SystemPromptFn,
     SystemPromptSource,
     as_system_prompt_fn,
-    status_section,
-    tools_section,
 )
 
 __all__ = [
-    "DEFAULT_BUILDER",
     "MAX_STATIC_PROMPT_CHARS",
+    "RLM_SYSTEM_PROMPT",
     "SYSTEM_PROMPT",
     "PromptBuilder",
     "PromptProfile",
     "RenderFn",
-    "Section",
-    "SectionBody",
-    "Sections",
-    "SystemPromptBuilder",
     "SystemPromptFn",
     "SystemPromptSource",
     "as_system_prompt_fn",
+    "build_messages",
     "default_render",
     "format_transition_footer",
-    "status_section",
-    "tools_section",
+    "render_tools",
+    "transition_footer",
 ]

@@ -206,6 +206,23 @@ def test_worker_executes_await_in_comprehensions(tmp_path):
         runtime.close()
 
 
+def test_empty_iterator_reports_stopiteration_not_coroutine_wrapper():
+    runtime = LocalRuntime()
+    repl = runtime.repl_for(start("q"))
+
+    async def run():
+        repl.seed({}, {})
+        return await repl.run("print(next(iter(INPUTS.values()))[:500])")
+
+    try:
+        result = asyncio.run(run())
+        assert result.status is ReplStatus.ERROR
+        assert result.output == "StopIteration"
+        assert "coroutine raised StopIteration" not in result.output
+    finally:
+        runtime.close()
+
+
 def test_get_var_reads_a_variable_out_of_the_worker():
     flow = Flow(StubLLM(lambda _messages: block('result = {"n": 42}\nfinish("ok")')))
     root = start("q")

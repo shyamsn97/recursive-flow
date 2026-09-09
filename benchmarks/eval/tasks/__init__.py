@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from benchmarks.eval import DATASETS, dataset
+from benchmarks.eval.sets import register_sets
 
 # Explicit built-ins so decorator registration remains grep-able.
 from benchmarks.eval.tasks import (
@@ -20,6 +21,7 @@ from benchmarks.eval.tasks import (
     musique,  # noqa: F401
     natural_plan,  # noqa: F401
     oolong,  # noqa: F401
+    oolong_pairs,  # noqa: F401
     parallelqa,  # noqa: F401
     planbench,  # noqa: F401
     sniah,  # noqa: F401
@@ -28,46 +30,7 @@ from benchmarks.eval.tasks import (
     twowiki,  # noqa: F401
 )
 
-DATASETS.alias("smoke", ["synthetic_needle"])
-DATASETS.alias("needle", ["synthetic_needle"])
-DATASETS.alias(
-    "rlm-core",
-    [
-        "official_sniah",
-        "official_aime_2025",
-        "official_sudoku_extreme",
-        "oolong",
-        "official_codeqa",
-    ],
-)
-DATASETS.alias(
-    "delegation-suite",
-    [
-        "delegation_parallelqa",
-        "delegation_musique",
-        "delegation_twowiki",
-        "delegation_grsqa",
-        "delegation_entailmentbank",
-        "delegation_dabstep",
-        "delegation_natural_plan",
-        "delegation_planbench",
-        "delegation_codeqa",
-        "delegation_sudoku",
-        "delegation_arc_agi",
-    ],
-)
-DATASETS.alias(
-    "delegation-suite-phase1",
-    [
-        "delegation_parallelqa",
-        "delegation_musique",
-        "delegation_twowiki",
-        "delegation_dabstep",
-        "delegation_natural_plan",
-        "delegation_codeqa",
-        "delegation_sudoku",
-    ],
-)
+register_sets(DATASETS)
 DATASETS.alias("all", DATASETS.names())
 
 __all__ = ["DATASETS", "dataset"]

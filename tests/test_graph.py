@@ -12,8 +12,10 @@ from rlmflow import (
 
 def test_agent_owns_an_ordered_transcript():
     agent = start("query")
-    first = agent.append(ExecOutput(content="one"))
-    second = first.append(DoneOutput(result="ok"))
+    first = ExecOutput(content="one")
+    assert agent.append(first) is None
+    second = DoneOutput(result="ok")
+    first.append(second)
 
     assert agent.transcript() == [agent, first, second]
     assert [node.seq for node in agent.transcript()] == [0, 1, 2]
@@ -26,7 +28,8 @@ def test_agent_owns_an_ordered_transcript():
 
 def test_a_child_agent_branches_off_the_node_that_launched_it():
     root = start("parent")
-    action = root.append(ExecAction(code="launch"))
+    action = ExecAction(code="launch")
+    root.append(action)
     child = AgentStart(content="child", config=root.config.child("worker"))
 
     action.append(child)
@@ -52,10 +55,10 @@ def test_duplicate_child_names_are_rejected():
 
 def test_append_child_rehomes_a_complete_subtree():
     subtree = start("copied worker")
-    nested_action = subtree.append(ExecAction(code="launch"))
-    nested = nested_action.append(
-        AgentStart(content="nested", config=subtree.config.child("nested"))
-    )
+    nested_action = ExecAction(code="launch")
+    subtree.append(nested_action)
+    nested = AgentStart(content="nested", config=subtree.config.child("nested"))
+    nested_action.append(nested)
     nested.append(DoneOutput(result="done"))
 
     root = start("shepherd")

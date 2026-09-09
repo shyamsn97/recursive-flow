@@ -39,6 +39,7 @@ from rlmflow.runtime.repl import (
     base_namespace,
     current_binding,
 )
+from rlmflow.structured import as_finish_value
 from rlmflow.tools.agents import AGENT_OBSERVE_TOOL, AGENT_WAIT_TOOL
 from rlmflow.utils.serial import decode_host_value
 
@@ -95,9 +96,9 @@ class ReplServer:
                 if binding["structured_output"]:
                     json.dumps(answer, allow_nan=False)
                 elif len(args) == 1 and not kwargs:
-                    args = (str(args[0]),)
+                    args = (as_finish_value(args[0]),)
                 elif not args and set(kwargs) == {"answer"}:
-                    kwargs = {"answer": str(kwargs["answer"])}
+                    kwargs = {"answer": as_finish_value(kwargs["answer"])}
             counts = binding.setdefault("_rpc_counts", {})
             call_id = counts.get(name, 0)
             counts[name] = call_id + 1

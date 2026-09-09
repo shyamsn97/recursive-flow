@@ -488,17 +488,25 @@ Run the offline smoke suite with `python examples/run_examples.py`. Every run wr
 
 ## Benchmarks (research beta)
 
-The shared eval harness lives under [`benchmarks/eval/`](benchmarks/eval/). It uses a task/runner registry, writes `results.jsonl` + `summary.json`, records rlmflow graph-shape metrics, shows tqdm progress bars, and can log per-row metrics to W&B. Real runs can compare `vanilla`, `rlmflow`, and the upstream official RLM runner ported from [`avilum/minrlm/eval`](https://github.com/avilum/minrlm/tree/master/eval). It also writes model-oriented reports under `eval-runs/<model>/<benchmark>/`, including per-question JSON files with prompt, inputs, expected answer, and each runner's solution.
+Eval is organized around **named sets** — one question each, not a mixed average.
 
 ```bash
-make eval-benchmark EVAL_MODEL=gpt-5-mini
+make eval-smoke
+make eval-reasoning EVAL_MODEL=gpt-5-mini
+python -m benchmarks.eval --list-sets
 ```
 
-See [`benchmarks/eval/README.md`](benchmarks/eval/README.md) for task/runner extension points and W&B usage. The repository does not include published comparative quality, cost, or latency results.
+| Set            | Question                                              |
+| -------------- | ----------------------------------------------------- |
+| `reasoning`    | Hard problems, short context (AIME, Sudoku)           |
+| `long-context` | Recursive loop vs vanilla on long documents           |
+| `delegation`   | Cheapest correct route: local / batched query / spawn |
+
+See [docs/benchmarks.md](docs/benchmarks.md) for the full table, runners, and how to add a dataset. The repository does not include published comparative quality, cost, or latency results.
 
 ## Roadmap
 
-- [~] OOLONG, LongBench-v2, CodeQA, SWE-bench, etc. benchmarks [benchmarks](benchmarks/eval/)
+- [~] Named eval sets (`reasoning`, `long-context`, `delegation`, …) [benchmarks](docs/benchmarks.md)
 - [ ] Additional remote sandbox providers (E2B, Daytona)
 - [x] Data-only worker-to-host protocol; `LocalRuntime` remains trusted-code only
 - [~] [Experimental RAO utilities](docs/research/rao_implementation_plan.md): rollout collection, per-node rewards, leave-one-out advantages, depth weighting, and trainer export exist; validation results do not
@@ -520,8 +528,9 @@ The top-level docs are short, user-facing guides. The deep dive lives in [`docs/
 - [Node injection](docs/injections.md): append controller Nodes between streaming calls and continue the same root.
 - [Observability](docs/observability.md): querying the Node tree, run layout, stream consumers, reading a saved run, and stepping through one with `rlmflow view`.
 - [Runtimes](docs/runtimes.md): `Runtime` protocol, shipped runtimes (Local / subprocess / Docker / Modal), writing your own.
-- [Prompt customization](docs/prompt_customization.md): `SystemPromptBuilder` sections, callable dynamic sections, deriving from the default prompt, full replacement.
+- [Prompt customization](docs/prompt_customization.md): `PromptBuilder`, `Flow.build_system_prompt`, `UserQuery.build_system_prompt`, `PromptProfile` / `prompt_profile` / `prompt_router`.
 - [Security](docs/security.md): trust model, Docker isolation knobs, engine-level caps, proxied tools, approval gates.
+- [Benchmarks](docs/benchmarks.md): named eval sets (`smoke`, `reasoning`, `long-context`, `delegation`, `task-graph`, `research`, `code`).
 - [Changelog](CHANGELOG.md): release-by-release changes.
 
 ## References

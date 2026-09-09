@@ -1,10 +1,10 @@
-"""Skills as on-disk artifacts plus a dynamic prompt section.
+"""Skills as on-disk artifacts plus a PromptBuilder subclass.
 
 This example demonstrates the intended shape for user-authored skills:
 
 1. A skill is just a file on disk you choose, e.g.
    ``skills/numpy-linear-algebra/SKILL.md``. There is no hardcoded directory.
-2. A prompt-builder callable section reads selected skill files at prompt
+2. A ``PromptBuilder`` subclass concatenates selected skill files at prompt
    render time, so edits show up on the next turn.
 3. The agent runs with a real LLM client; pass ``--print-prompt`` to inspect
    the rendered prompt before the LLM call.
@@ -24,7 +24,7 @@ from pathlib import Path
 from rlmflow import (
     AgentConfig,
     Flow,
-    SystemPromptBuilder,
+    PromptBuilder,
 )
 from rlmflow.llm import OpenAIClient
 
@@ -91,12 +91,15 @@ def install_example_skill(skills_dir: Path) -> Path:
     return path
 
 
-def skills_section(skill_paths: list[Path]):
-    """Return a callable prompt section that reads skill files dynamically."""
+class SkillsPrompt(PromptBuilder):
+    """Official protocol plus skill files loaded from disk."""
 
-    def render(flow, agent) -> str:
+    def __init__(self, skill_paths: list[Path]) -> None:
+        self.skill_paths = skill_paths
+
+    def _skills(self) -> str:
         sections: list[str] = []
-        for path in skill_paths:
+        for path in self.skill_paths:
             if not path.exists():
                 continue
             body = path.read_text().strip()
@@ -108,17 +111,20 @@ def skills_section(skill_paths: list[Path]):
             "file loaded into the prompt for this run.\n\n" + "\n\n".join(sections)
         )
 
-    return render
+    def __call__(self, flow=None, node=None) -> str:
+        extra = self._skills()
+        text = super().__call__(flow, node)
+        return f"{text}\n\n{extra}" if extra else text
 
 
 def build_flow(skills_dir: Path, *, model: str) -> Flow:
     """Create a flow whose prompt includes the installed skill."""
     skill_path = install_example_skill(skills_dir)
-    flow = Flow(OpenAIClient(model=model), root_config=AgentConfig(max_iters=MAX_ITERS))
-    prompt = SystemPromptBuilder()
-    prompt.sections.add("skills", skills_section([skill_path]), title="Skills", before="tools")
-    flow.system_prompt = prompt
-    return flow
+    return Flow(
+        OpenAIClient(model=model),
+        root_config=AgentConfig(max_iters=MAX_ITERS),
+        system_prompt=SkillsPrompt([skill_path]),
+    )
 
 
 def main() -> None:
@@ -164,7 +170,7 @@ def main() -> None:
         print("- skills/numpy-linear-algebra/SKILL.md")
         if args.print_prompt:
             print("\n--- rendered system prompt ---\n")
-            print(flow.system_prompt.render(flow, root))
+            print(flow.build_system_prompt(root))
             print("\n--- live run ---\n")
 
         async def drive() -> None:

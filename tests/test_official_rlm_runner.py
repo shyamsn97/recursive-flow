@@ -32,6 +32,7 @@ def test_official_rlm_does_not_inline_fact_lookup_data_into_context():
         context_file="/tmp/context.json",
         task_file="/tmp/task.txt",
         model="model",
+        worker_model=None,
         log_dir=Path("/tmp/logs"),
         max_iters=20,
         max_depth=2,
@@ -83,4 +84,39 @@ def test_comparison_runners_share_iteration_depth_and_budget_defaults():
     assert official.max_budget == rlmflow.max_budget == 100_000
     assert rlmflow.child_max_iters == rlmflow.max_iters
     assert rlmflow.use_llm_query
+    assert rlmflow.use_llm_query_batched
     assert not rlmflow.use_agent_tree
+
+
+def test_rlmflow_runner_accepts_a_separate_worker_model():
+    runner = RLMFlowLocalRunner(worker_model="gpt-5-mini")
+
+    assert runner.worker_model == "gpt-5-mini"
+
+
+def test_rlmflow_runner_can_disable_only_batched_queries():
+    runner = RLMFlowLocalRunner(use_llm_query_batched=False)
+
+    assert runner.use_llm_query
+    assert not runner.use_llm_query_batched
+
+
+def test_official_runner_configures_a_separate_leaf_model_and_timeout():
+    runner = OfficialRLMRunner(worker_model="gpt-5-mini", timeout_seconds=1800)
+    script = _official_script(
+        context_file="/tmp/context.json",
+        task_file="/tmp/task.txt",
+        model="gpt-5",
+        worker_model=runner.worker_model,
+        log_dir=Path("/tmp/logs"),
+        max_iters=20,
+        max_depth=1,
+        max_budget=100_000,
+        facts=None,
+    )
+
+    assert runner.worker_model == "gpt-5-mini"
+    assert runner.timeout_seconds == 1800
+    assert "other_backends=['openai']" in script
+    assert "other_backend_kwargs=[{'model_name': 'gpt-5-mini'}]" in script
+    compile(script, "<official-rlm-script>", "exec")

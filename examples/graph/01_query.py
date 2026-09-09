@@ -18,32 +18,35 @@ from rlmflow import (
 def build_graph() -> AgentStart:
     """Hand-build the tree a delegating run would have recorded."""
     root = start(query="ship a tiny package")
-    turn = root.append(
-        LLMOutput(
-            content="splitting into two children",
-            code=(
-                "write = await launch_subagent("
-                "'write module', model='default', name='write')\n"
-                "test = await launch_subagent("
-                "'run pytest', model='default', name='test')"
-            ),
-            usage=LLMUsage(input_tokens=120, output_tokens=40),
-        )
+    turn = LLMOutput(
+        content="splitting into two children",
+        code=(
+            "write = await launch_subagent("
+            "'write module', model='default', name='write')\n"
+            "test = await launch_subagent("
+            "'run pytest', model='default', name='test')"
+        ),
+        usage=LLMUsage(input_tokens=120, output_tokens=40),
     )
+    root.append(turn)
     # Children hang off the action that launched them; the agent's own sequel is
     # the output of that same step.
-    launch = turn.append(ExecAction(code="write = await launch_subagent(...)"))
+    launch = ExecAction(code="write = await launch_subagent(...)")
+    turn.append(launch)
 
-    writer = launch.append(AgentStart(content="write module", config=root.config.child("write")))
+    writer = AgentStart(content="write module", config=root.config.child("write"))
+    launch.append(writer)
     writer.append(DoneOutput(result="wrote pkg/__init__.py"))
 
-    tester = launch.append(AgentStart(content="run pytest", config=root.config.child("test")))
-    failed = tester.append(ErrorOutput(error="exec_error", content="ModuleNotFoundError: pkg"))
+    tester = AgentStart(content="run pytest", config=root.config.child("test"))
+    launch.append(tester)
+    failed = ErrorOutput(error="exec_error", content="ModuleNotFoundError: pkg")
+    tester.append(failed)
     failed.append(DoneOutput(result="3 passed"))
 
-    launch.append(ExecOutput(content="['wrote pkg/__init__.py', '3 passed']")).append(
-        DoneOutput(result="package shipped")
-    )
+    output = ExecOutput(content="['wrote pkg/__init__.py', '3 passed']")
+    launch.append(output)
+    output.append(DoneOutput(result="package shipped"))
     return root
 
 

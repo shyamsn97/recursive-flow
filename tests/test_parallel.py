@@ -50,9 +50,9 @@ def test_parallel_stream_uses_one_task_queue():
             super().__init__(StubLLM(lambda _messages: block("finish('ok')")))
             self.queues = set()
 
-        async def step(self, node):
+        async def _drive(self, node):
             self.queues.add(id(self.queue))
-            return await super().step(node)
+            return await super()._drive(node)
 
     flow = ProbeFlow()
     asyncio.run(parallel_run(flow, "a", "b", "c"))

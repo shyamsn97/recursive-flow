@@ -9,6 +9,7 @@ from benchmarks.eval.types import Prediction
 
 
 def test_rlm_core_alias_expands_to_minimal_comparison_suite():
+    """rlm-core remains a compatibility alias for the old mixed comparison."""
     args = build_parser().parse_args(
         [
             "--dataset",

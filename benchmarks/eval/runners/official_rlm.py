@@ -35,11 +35,15 @@ class OfficialRLMRunner(Runner):
         max_iters: int = 20,
         max_depth: int = 2,
         max_budget: int | None = 100_000,
+        worker_model: str | None = None,
+        timeout_seconds: int = 1800,
     ) -> None:
         self.python = python or sys.executable
         self.max_iters = max_iters
         self.max_depth = max_depth
         self.max_budget = max_budget
+        self.worker_model = worker_model
+        self.timeout_seconds = timeout_seconds
 
     def run(self, example: Example, model: Model, ctx: RunContext) -> Prediction:
         start = time.perf_counter()
@@ -59,6 +63,7 @@ class OfficialRLMRunner(Runner):
                         context_file=context_file,
                         task_file=task_file,
                         model=model.name,
+                        worker_model=self.worker_model,
                         log_dir=log_dir,
                         max_iters=self.max_iters,
                         max_depth=self.max_depth,
@@ -68,7 +73,7 @@ class OfficialRLMRunner(Runner):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=max(300, self.max_iters * 60),
+                timeout=self.timeout_seconds,
                 cwd=work_dir,
                 env={**os.environ, "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", "")},
             )
@@ -124,12 +129,17 @@ def _official_script(
     context_file: str,
     task_file: str,
     model: str,
+    worker_model: str | None,
     log_dir: Path,
     max_iters: int,
     max_depth: int,
     max_budget: int | None,
     facts: dict[str, object] | None,
 ) -> str:
+    other_backends = ["openai"] if worker_model is not None else None
+    other_backend_kwargs = (
+        [{"model_name": worker_model}] if worker_model is not None else None
+    )
     return textwrap.dedent(
         f"""
         import json
@@ -169,6 +179,8 @@ def _official_script(
         rlm = RLM(
             backend="openai",
             backend_kwargs={{"model_name": {json.dumps(model)}}},
+            other_backends={other_backends!r},
+            other_backend_kwargs={other_backend_kwargs!r},
             environment="local",
             max_iterations={max_iters},
             max_depth={max_depth},

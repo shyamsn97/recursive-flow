@@ -30,11 +30,10 @@ Limits belong to the agent, not the flow. Set them on the root with `flow.start(
 The authoritative `AgentConfig` defaults are:
 
 - `max_depth=1`;
-- `max_iters=30` model turns per agent;
-- `max_budget=100_000` tokens across the complete run;
+- `max_iters=None` and `max_budget=None` (unbounded turns and tokens; set a number to cap);
 - `child_max_iters=None`, meaning children inherit `max_iters`;
 - `keep_n_messages=None`, meaning prompts retain the full transcript;
-- `max_output_length=4_000` and `max_query_chars=2_000`.
+- `max_output_length=20_000` and `max_query_chars=20_000` (official RLM's per-block REPL cap).
 
 Passing `None` explicitly opts out of the iteration or token limit.
 
@@ -269,7 +268,7 @@ flow.remove_tool("my_tool")
 
 `finish`, `launch_subagent`, `INPUTS`, and `AGENTS` are reserved: framework values are rebuilt for each step and cannot be injected over.
 
-`Flow(use_llm_query=True)` adds `llm_query_batched` to the REPL, for agents that want to fan out one-shot model calls without spawning children. It is available to host code as `flow.llm_query_batched(...)` either way.
+`Flow(use_llm_query=True)` adds `llm_query` and `llm_query_batched` to the REPL. Pass `use_llm_query_batched=False` to keep the single-query tool while removing fan-out from the agent. Both remain available to host code as `flow.llm_query(...)` and `flow.llm_query_batched(...)` either way.
 
 ## Cleanup
 

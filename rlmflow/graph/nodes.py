@@ -17,19 +17,38 @@ from types import MappingProxyType
 from typing import Any, ClassVar
 from uuid import uuid4
 
+from rlmflow.graph.config import (
+    DEFAULT_MAX_QUERY_CHARS,
+    DEFAULT_QUERY,
+    AgentConfig,
+    can_spawn,
+    validate_agent_name,
+)
+from rlmflow.graph.prompts import (
+    COLD_REPL_NOTE,
+    FINAL_ANSWER_ACTION,
+    FIRST_TURN_SAFEGUARD,
+    LAST_TURN_ADDENDUM,
+    ORCHESTRATOR_ADDENDUM,
+    TRUNCATION_SUMMARY,
+    TURN_ONE_FINISH_SENTENCE,
+    USER_PROMPT,
+    orchestrator_addendum,
+)
 from rlmflow.llm import LLMUsage
 
-DEFAULT_QUERY = """Please read through the provided INPUTS if present and answer any
-queries or respond to any instructions contained within it."""
-DEFAULT_MAX_QUERY_CHARS = 4_000
+
+class AgentBusyError(RuntimeError):
+    """Raised when something appends to an agent whose step is still in flight.
+
+    Distinct from the frontier check: the frontier is right, but it is about to
+    move. Appending here silently discards whatever the running step produces.
+    """
 
 
-class TurnMode(StrEnum):
-    """What kind of REPL exit a model turn must produce."""
-
-    NONE = "none"
-    ACTION = "action"
-    FINAL = "final"
+_active_step: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "rlmflow_active_step", default=None
+)
 
 
 def new_agent_id() -> str:
@@ -44,17 +63,14 @@ def _isoformat(stamp: float) -> str:
     return datetime.fromtimestamp(stamp, UTC).isoformat()
 
 
-class AgentBusyError(RuntimeError):
-    """Raised when something appends to an agent whose step is still in flight.
+def system_prompt_id(text: str) -> str:
+    """Stable, content-addressed id for a system prompt (the on-disk table key).
 
-    Distinct from the frontier check: the frontier is right, but it is about to
-    move. Appending here silently discards whatever the running step produces.
+    Identical prompts collapse to one id, so it is a natural dedup key and stays
+    stable across runs (handy for diffing whether the prompt changed).
     """
-
-
-_active_step: contextvars.ContextVar[Node | None] = contextvars.ContextVar(
-    "rlmflow_active_step", default=None
-)
+    digest = hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return "sys_" + digest[:12]
 
 
 def active_step() -> Node | None:
@@ -83,53 +99,32 @@ def running_step(node: Node) -> Iterator[None]:
             agent.in_flight = previous
 
 
-def system_prompt_id(text: str) -> str:
-    """Stable, content-addressed id for a system prompt (the on-disk table key).
+def agent_payload(agent: AgentStart | None) -> dict[str, Any]:
+    """The agent fields the run format repeats on every query node."""
+    config = agent.config if agent is not None else AgentConfig()
+    return {
+        "inputs": dict(config.inputs),
+        "model": config.model,
+        "prompt_profile": config.prompt_profile,
+        "output_schema": config.output_schema,
+        "reuse_repl": config.reuse_repl,
+        "launch_call_id": config.launch_call_id,
+        "max_depth": config.max_depth,
+        "max_iters": config.max_iters,
+        "child_max_iters": config.child_max_iters,
+        "max_budget": config.max_budget,
+        "keep_n_messages": config.keep_n_messages,
+        "max_output_length": config.max_output_length,
+        "max_query_chars": config.max_query_chars,
+    }
 
-    Identical prompts collapse to one id, so it is a natural dedup key and stays
-    stable across runs (handy for diffing whether the prompt changed)."""
-    digest = hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
-    return "sys_" + digest[:12]
 
+class TurnMode(StrEnum):
+    """What kind of REPL exit a model turn must produce."""
 
-@dataclass
-class AgentConfig:
-    name: str = "root"
-    path: str = "root"
-    depth: int = 0
-    model: str = "default"
-    prompt_profile: str = "default"
-    inputs: dict[str, str] = field(default_factory=dict)
-    output_schema: dict[str, Any] | None = None
-    #: Place a child in its caller's live Python worker.
-    reuse_repl: bool = False
-    #: Stable ordinal of the launch call that created this child.
-    launch_call_id: int | None = None
-    max_depth: int = 1
-    #: How many model turns this agent may take. ``None`` explicitly opts out.
-    max_iters: int | None = 30
-    child_max_iters: int | None = None
-    max_budget: int | None = 100_000
-    #: How many of the agent's own transcript turns a prompt carries. ``None``
-    #: keeps the full history. The system message and the truncation notice sit
-    #: on top of this count when it is set.
-    keep_n_messages: int | None = None
-    max_output_length: int = 4_000
-    max_query_chars: int = DEFAULT_MAX_QUERY_CHARS
-
-    def child(self, name: str, **overrides: Any) -> AgentConfig:
-        validate_agent_name(name)
-        values = {
-            "name": name,
-            "path": f"{self.path}.{name}",
-            "depth": self.depth + 1,
-            "inputs": {},
-            "output_schema": None,
-            "reuse_repl": False,
-            "launch_call_id": None,
-            "max_iters": self.child_max_iters or self.max_iters,
-        }
-        return replace(self, **{**values, **overrides})
+    NONE = "none"
+    ACTION = "action"
+    FINAL = "final"
 
 
 @dataclass(frozen=True)
@@ -203,8 +198,8 @@ class Node:
     started_at: float | None = None
     finished_at: float | None = None
 
-    def append(self, node: Node) -> Node:
-        """Hang a node off this one; whatever appends becomes its agent's frontier."""
+    def append(self, node: Node) -> None:
+        """Hang ``node`` off this frontier. Same-agent children become the new frontier."""
         agent = self.parent_agent
         if agent is None:
             raise RuntimeError("node is detached")
@@ -263,7 +258,6 @@ class Node:
         for child in appended:
             root._index.register(child)
         root._index.revision += 1
-        return node
 
     def append_child(
         self,
@@ -281,7 +275,8 @@ class Node:
         elif isinstance(self.next, AppendChild) and self.next is agent.frontier:
             action = self.next
         elif self is agent.frontier:
-            action = self.append(AppendChild())
+            action = AppendChild()
+            self.append(action)
         else:
             raise ValueError(f"{self.id} cannot append children from a stale frontier")
 
@@ -498,6 +493,15 @@ class AgentStart(Node):
         self._require_run_root()
         return tuple(self._index.errors)
 
+    def rebuild_index(self) -> RunIndex:
+        """Recompute private run aggregates after isolated graph construction."""
+        index = RunIndex()
+        for node in self.walk():
+            index.register(node)
+        index.revision = max(index.node_count - 1, 0)
+        self._index = index
+        return index
+
     def llm_turns(self) -> int:
         return sum(isinstance(node, LLMOutput) for node in self.transcript())
 
@@ -539,59 +543,9 @@ class AgentStart(Node):
         return persistence.load(path)
 
 
-FINAL_ANSWER_ACTION = """This is your last turn: the run is out of budget to keep working.
-Based on the work above, call finish(answer) now with only the final answer, in the
-exact form the query requested. Do not investigate further, and do not hold the answer
-back for verification — no turn follows this one to read a print, so submit your best
-inference rather than ending the run with nothing."""
-
-CONTINUE_NUDGE = """Continue using the REPL environment and determine your answer.
-Execute the next step of your plan in exactly one ```repl``` block, or call
-finish(...) if you have already printed and verified the final answer."""
-
-TRUNCATION_SUMMARY = """[earlier turns omitted to fit the context window; the most recent
-turns follow. The REPL kept running, so variables, imports, and helpers defined in those
-turns are still bound — reuse them instead of redefining them.]"""
-
-COLD_REPL_NOTE = """[this agent's REPL was restarted, so variables and imports from
-earlier turns are gone. Re-derive whatever you need before using it.]"""
-
-# Adapted from alexzhang13/rlm's current RLM_SYSTEM_PROMPT.
-WORKING_ACTION = """As a general strategy, start by probing the available context to
-understand it better (e.g. print a few lines, count them, etc.). Then plan briefly
-in prose and execute one ```repl``` block. Use its output as feedback for the next
-turn, reuse work already in the history, and do not repeat resolved checks."""
-
-ORCHESTRATOR_ADDENDUM = """As an RLM, act as an orchestrator, not a solver.
-
-After the initial probe, state briefly how the task decomposes into subagent and
-REPL steps, and sketch the concrete sequence of turns: what each turn computes and
-which subagent call, if any, it issues. Then execute one ```repl``` block immediately.
-
-Your own context window is small. Push long-context work that would not fit
-comfortably in it into subagents or available query tools instead of pulling that
-text into your own history. Conversely, if a Python keyword or regex search, or one
-visible passage, already pins the answer, read it directly. Long REPL output pollutes
-history too, so print only small results.
-
-Give subagents clean, focused inputs and ask for terse outputs that you can combine
-programmatically. Launch independent subagents together before waiting for them.
-When work is a deterministic Python loop, complete the loop in one block; do not
-spend one model turn per item or batch.
-
-Reserve your own turns for high-level decisions: what to ask next, how to combine
-results, and when to finalize."""
-
-
-def can_spawn(agent: AgentStart | None) -> bool:
-    if agent is None:
-        return False
-    config = agent.config
-    return config.max_depth > 0 and config.depth < config.max_depth
-
-
 @dataclass
 class UserQuery(Node):
+
     type: ClassVar[str] = "user_query"
     turn_mode: ClassVar[TurnMode] = TurnMode.ACTION
     finish_description: ClassVar[str] = "Submit your final answer."
@@ -602,49 +556,45 @@ class UserQuery(Node):
     def render(self) -> list[dict[str, str]]:
         return [{"role": "user", "content": self.instruction()}]
 
+    def build_system_prompt(self, flow: Any) -> str:
+        """System prompt for this turn. Default is the flow's inherited protocol."""
+        return flow.build_system_prompt(self)
+
     def to_record(self) -> dict[str, Any]:
         data = super().to_record()
         data["payload"].update(agent_payload(self.parent_agent))
         return data
 
 
-def working_instruction(query: UserQuery) -> str:
-    if query.content:
-        return query.content
-
-    from rlmflow.prompts.messages import profile_inputs
-
-    sections = [WORKING_ACTION]
-    profile = profile_inputs(query.parent_agent.config.inputs)
-    if profile:
-        sections.append(profile)
-    if can_spawn(query.parent_agent):
-        sections.append(ORCHESTRATOR_ADDENDUM)
-    return "\n\n".join(sections)
-
-
-@dataclass
-class InspectQuery(UserQuery):
-    """Compatibility node for persisted runs; new flows never create it."""
-
-    type: ClassVar[str] = "inspect_query"
-    name: ClassVar[str] = "inspect"
-    transition_description: ClassVar[str] = "Continue working."
-    action_description: ClassVar[str] = "Continue working from the latest result."
-
-    def instruction(self) -> str:
-        return working_instruction(self)
-
-
 @dataclass
 class PlanQuery(UserQuery):
     type: ClassVar[str] = "plan_query"
-    name: ClassVar[str] = "plan"
-    transition_description: ClassVar[str] = "Continue working."
-    action_description: ClassVar[str] = "Continue working from the latest result."
 
     def instruction(self) -> str:
-        return working_instruction(self)
+        if self.content:
+            return self.content
+        agent = self.parent_agent
+        if agent is None:
+            turns = 0
+            max_iters = None
+        else:
+            turns = sum(
+                isinstance(node, LLMOutput) and node.seq < self.seq for node in agent.transcript()
+            )
+            max_iters = agent.config.max_iters
+        if max_iters is None:
+            body = f"Turn {turns + 1}:"
+        else:
+            body = USER_PROMPT.format(iter_1=turns + 1, max_iter=max_iters)
+        if turns == 0:
+            return FIRST_TURN_SAFEGUARD + body
+        return body
+
+    def build_system_prompt(self, flow: Any) -> str:
+        text = flow.build_system_prompt(self)
+        if not can_spawn(self.parent_agent):
+            return text
+        return f"{text}\n\n{orchestrator_addendum(flow)}"
 
 
 @dataclass
@@ -654,13 +604,9 @@ class FinalQuery(UserQuery):
     finish_description: ClassVar[str] = "Submit your final answer now."
     content: str = FINAL_ANSWER_ACTION
 
-
-@dataclass
-class ContinueQuery(UserQuery):
-    """Compatibility node for persisted runs; new flows never create it."""
-
-    type: ClassVar[str] = "continue_query"
-    content: str = CONTINUE_NUDGE
+    def build_system_prompt(self, flow: Any) -> str:
+        text = flow.build_system_prompt(self).replace(TURN_ONE_FINISH_SENTENCE, "").rstrip()
+        return f"{text}\n\n{LAST_TURN_ADDENDUM}"
 
 
 @dataclass
@@ -670,37 +616,16 @@ class TruncationSummary(UserQuery):
 
 
 @dataclass
-class LLMOutput(Node):
-    type: ClassVar[str] = "llm_output"
+class ActionNode(Node):
+    """Engine work: a REPL block. Does not open an LLM turn."""
+
+    type: ClassVar[str] = "action_node"
     code: str = ""
-    usage: LLMUsage = field(default_factory=LLMUsage)
-    #: Key into the owning agent's ``system_prompts`` table.
-    prompt_id: str = ""
-
-    def render(self) -> list[dict[str, str]]:
-        return [{"role": "assistant", "content": self.content}]
-
-    def to_record(self) -> dict[str, Any]:
-        data = super().to_record()
-        data["payload"]["code"] = self.code
-        agent = self.parent_agent
-        config = agent.config if agent is not None else AgentConfig()
-        metadata: dict[str, Any] = {
-            "model": config.model,
-            "usage": asdict(self.usage),
-            "system_prompt": self.prompt_id,
-        }
-        if config.keep_n_messages is not None:
-            metadata["keep_n_messages"] = config.keep_n_messages
-        data["metadata"] = {**metadata, **data["metadata"]}
-        return data
 
 
 @dataclass
-class ExecAction(Node):
+class ExecAction(ActionNode):
     type: ClassVar[str] = "exec_action"
-    code: str = ""
-    requested_transition: str | None = None
     #: Submission order within the action's worker session, used for shared replay.
     repl_execution_order: int | None = None
     #: Agent results explicitly read during this action, in first-read order.
@@ -715,7 +640,6 @@ class ExecAction(Node):
         data = super().to_record()
         data["payload"] = {
             "code": self.code,
-            "requested_transition": self.requested_transition,
             "repl_execution_order": self.repl_execution_order,
             "retrieved_agent_ids": list(self.retrieved_agent_ids),
         }
@@ -738,11 +662,10 @@ class AppendChild(ExecAction):
             None,
         )
 
-    def append(self, node: Node) -> Node:
-        child = super().append(node)
+    def append(self, node: Node) -> None:
+        super().append(node)
         if isinstance(node, AgentStart):
             self._refresh_code()
-        return child
 
     def attach(
         self,
@@ -780,7 +703,8 @@ class AppendChild(ExecAction):
                     depth=node.config.depth + depth_delta,
                 )
 
-        return self.append(subtree)
+        self.append(subtree)
+        return subtree
 
     def _refresh_code(self) -> None:
         calls = [
@@ -798,7 +722,41 @@ class AppendChild(ExecAction):
 
 
 @dataclass
-class ExecOutput(Node):
+class OutputNode(Node):
+    """Output produced by a model, runtime, or terminal engine step."""
+
+    type: ClassVar[str] = "output_node"
+
+
+@dataclass
+class LLMOutput(OutputNode):
+    type: ClassVar[str] = "llm_output"
+    code: str = ""
+    usage: LLMUsage = field(default_factory=LLMUsage)
+    #: Key into the owning agent's ``system_prompts`` table.
+    prompt_id: str = ""
+
+    def render(self) -> list[dict[str, str]]:
+        return [{"role": "assistant", "content": self.content}]
+
+    def to_record(self) -> dict[str, Any]:
+        data = super().to_record()
+        data["payload"]["code"] = self.code
+        agent = self.parent_agent
+        config = agent.config if agent is not None else AgentConfig()
+        metadata: dict[str, Any] = {
+            "model": config.model,
+            "usage": asdict(self.usage),
+            "system_prompt": self.prompt_id,
+        }
+        if config.keep_n_messages is not None:
+            metadata["keep_n_messages"] = config.keep_n_messages
+        data["metadata"] = {**metadata, **data["metadata"]}
+        return data
+
+
+@dataclass
+class ExecOutput(OutputNode):
     type: ClassVar[str] = "exec_output"
     turn_mode: ClassVar[TurnMode] = TurnMode.ACTION
 
@@ -812,7 +770,7 @@ class ExecOutput(Node):
 
 
 @dataclass
-class ErrorOutput(Node):
+class ErrorOutput(OutputNode):
     type: ClassVar[str] = "error_output"
     turn_mode: ClassVar[TurnMode] = TurnMode.ACTION
     error: str = "exec"
@@ -834,7 +792,7 @@ class ReplDead(ErrorOutput):
 
 
 @dataclass
-class DoneOutput(Node):
+class DoneOutput(OutputNode):
     type: ClassVar[str] = "done_output"
     result: Any = None
 
@@ -842,52 +800,6 @@ class DoneOutput(Node):
         data = super().to_record()
         data["payload"].update({"result": self.result, "output": self.content})
         return data
-
-
-def agent_payload(agent: AgentStart | None) -> dict[str, Any]:
-    """The agent fields the run format repeats on every query node."""
-    config = agent.config if agent is not None else AgentConfig()
-    return {
-        "inputs": dict(config.inputs),
-        "model": config.model,
-        "prompt_profile": config.prompt_profile,
-        "output_schema": config.output_schema,
-        "reuse_repl": config.reuse_repl,
-        "launch_call_id": config.launch_call_id,
-        "max_depth": config.max_depth,
-        "max_iters": config.max_iters,
-        "child_max_iters": config.child_max_iters,
-        "max_budget": config.max_budget,
-        "keep_n_messages": config.keep_n_messages,
-        "max_output_length": config.max_output_length,
-        "max_query_chars": config.max_query_chars,
-    }
-
-
-def validate_agent_name(name: str) -> None:
-    if (
-        not isinstance(name, str)
-        or not name
-        or not name.isascii()
-        or any(not (char.isalnum() or char in "_-") for char in name)
-    ):
-        raise ValueError(f"invalid child name {name!r}")
-
-
-def requested_transition(node: Node) -> str | None:
-    """The transition selected by the action that produced this node."""
-    previous = node.prev
-    return previous.requested_transition if isinstance(previous, ExecAction) else None
-
-
-def _rebuild_index(root: AgentStart) -> RunIndex:
-    """Recompute private run aggregates after isolated direct graph construction."""
-    index = RunIndex()
-    for node in root.walk():
-        index.register(node)
-    index.revision = max(index.node_count - 1, 0)
-    root._index = index
-    return index
 
 
 def start(query: str = "", *, config: AgentConfig | None = None, **overrides: Any) -> AgentStart:
@@ -917,24 +829,27 @@ __all__ = [
     "running_step",
     "DEFAULT_QUERY",
     "COLD_REPL_NOTE",
-    "CONTINUE_NUDGE",
     "FINAL_ANSWER_ACTION",
+    "FIRST_TURN_SAFEGUARD",
+    "LAST_TURN_ADDENDUM",
     "ORCHESTRATOR_ADDENDUM",
     "TRUNCATION_SUMMARY",
-    "WORKING_ACTION",
+    "TURN_ONE_FINISH_SENTENCE",
+    "USER_PROMPT",
+    "orchestrator_addendum",
     "AgentConfig",
+    "ActionNode",
     "AgentStart",
     "AppendChild",
-    "ContinueQuery",
     "DoneOutput",
     "ErrorOutput",
     "ExecAction",
     "ExecOutput",
     "FinalQuery",
-    "InspectQuery",
     "LLMOutput",
     "LLMUsage",
     "Node",
+    "OutputNode",
     "PlanQuery",
     "ReplDead",
     "RunStats",
@@ -943,9 +858,7 @@ __all__ = [
     "UserQuery",
     "can_spawn",
     "new_agent_id",
-    "working_instruction",
     "new_node_id",
-    "requested_transition",
     "start",
     "validate_agent_name",
 ]

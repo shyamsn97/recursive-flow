@@ -22,6 +22,7 @@ from benchmarks.eval import DATASETS, LOGGERS, MODELS, RUNNERS
 from benchmarks.eval.loggers import MultiLogger
 from benchmarks.eval.loggers.jsonl import load_rows, write_json
 from benchmarks.eval.metrics import summarize
+from benchmarks.eval.sets import SETS, format_sets_help, runners_for
 from benchmarks.eval.types import (
     ComponentSpec,
     Example,
@@ -500,9 +501,33 @@ def build_logger(config: SuiteConfig) -> MultiLogger:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run rlmflow benchmarks.")
-    parser.add_argument("--dataset", "--datasets", nargs="+", default=["oolong"])
-    parser.add_argument("--runner", "--runners", nargs="+", default=["rlmflow-local"])
+    set_names = ", ".join(SETS)
+    parser = argparse.ArgumentParser(
+        description="Run rlmflow benchmarks.",
+        epilog=f"Named sets: {set_names}. Pass --list-sets for the table.",
+    )
+    parser.add_argument(
+        "--list-sets",
+        action="store_true",
+        help="Print named eval sets (smoke, reasoning, long-context, ...) and exit.",
+    )
+    parser.add_argument(
+        "--dataset",
+        "--datasets",
+        nargs="+",
+        default=["reasoning"],
+        help=(
+            "Dataset or named set. Repeatable. Named sets: "
+            f"{set_names}. Default: reasoning."
+        ),
+    )
+    parser.add_argument(
+        "--runner",
+        "--runners",
+        nargs="+",
+        default=None,
+        help="Execution strategy. Defaults to the named set's runners, else rlmflow-local.",
+    )
     parser.add_argument("--model", default="openai:gpt-5-mini")
     parser.add_argument("--logger", "--loggers", nargs="+", default=["jsonl", "console", "report"])
     parser.add_argument("--seeds", default="0")
@@ -566,8 +591,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args: argparse.Namespace) -> SuiteConfig:
-    dataset_names = DATASETS.expand(_flatten(args.dataset))
-    runner_names = RUNNERS.expand(_flatten(args.runner))
+    raw_datasets = _flatten(args.dataset)
+    dataset_names = DATASETS.expand(raw_datasets)
+    runner_names = RUNNERS.expand(
+        _flatten(args.runner) if args.runner else runners_for(raw_datasets)
+    )
     logger_names = LOGGERS.expand(_flatten(args.logger))
     if args.wandb and "wandb" not in logger_names:
         logger_names.append("wandb")
@@ -663,6 +691,9 @@ def make_run_id(*, datasets: list[str], runners: list[str], model: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.list_sets:
+        print(format_sets_help(), end="")
+        return 0
     config = config_from_args(args)
     rows = run_suite(config)
     summary = summarize(rows)
@@ -672,9 +703,9 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if overall.get("errors", 0) else 0
 
 
-def _flatten(values: list[str]) -> list[str]:
+def _flatten(values: list[str] | tuple[str, ...] | None) -> list[str]:
     out: list[str] = []
-    for value in values:
+    for value in values or ():
         out.extend(part.strip() for part in value.split(",") if part.strip())
     return out
 

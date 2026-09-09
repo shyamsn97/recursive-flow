@@ -22,8 +22,8 @@ from rlmflow import (
     DockerRuntime,
     Flow,
     LocalRuntime,
+    PromptBuilder,
     SubprocessRuntime,
-    SystemPromptBuilder,
     tool,
 )
 from rlmflow.consumers import WorkspaceSync
@@ -203,15 +203,9 @@ print(results, list_runs(), best_run(), submission_status())
 """
 
 
-def build_prompt_builder():
-    prompt = SystemPromptBuilder()
-    prompt.sections.add(
-        "autoresearch_adapter",
-        ADAPTER_PROMPT,
-        title="Autoresearch Adapter",
-        before="tools",
-    )
-    return prompt
+class AutoresearchPrompt(PromptBuilder):
+    def __call__(self, flow=None, node=None) -> str:
+        return f"{super().__call__(flow, node)}\n\n{ADAPTER_PROMPT.strip()}"
 
 
 class ExperimentCrashed(RuntimeError):
@@ -658,7 +652,7 @@ def run(args: argparse.Namespace) -> None:
         runtime=runtime,
         tools=[FILE_TOOLS, *build_autoresearch_tools(state)],
         workers=args.parallel,
-        system_prompt=build_prompt_builder(),
+        system_prompt=AutoresearchPrompt(),
     )
 
     query = f"""\

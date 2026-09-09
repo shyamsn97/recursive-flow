@@ -22,14 +22,15 @@ from rlmflow.consumers.tui import agent_table, overview_table
 
 def test_render_tree_shows_live_child_progress_and_results():
     root = start("find the needle")
-    output = root.append(LLMOutput(content="search"))
-    action = output.append(ExecAction(code="await launch_subagent(...)"))
-    child = action.append(
-        AgentStart(
-            content="search batch",
-            config=root.config.child("batch"),
-        )
+    output = LLMOutput(content="search")
+    root.append(output)
+    action = ExecAction(code="await launch_subagent(...)")
+    output.append(action)
+    child = AgentStart(
+        content="search batch",
+        config=root.config.child("batch"),
     )
+    action.append(child)
 
     running = render_tree(root)
     assert "root: children running 1/1" in running
@@ -43,7 +44,8 @@ def test_render_tree_shows_live_child_progress_and_results():
 
 def test_live_tree_renderer_handles_streamed_nodes(capsys):
     root = start("query")
-    node = root.append(LLMOutput(content="thinking"))
+    node = LLMOutput(content="thinking")
+    root.append(node)
 
     LiveTreeRenderer(clear=False).handle(node)
 
@@ -54,7 +56,8 @@ def test_live_tree_renderer_handles_streamed_nodes(capsys):
 
 def test_live_graph_tree_has_plain_fallback(capsys):
     root = start("query")
-    node = root.append(LLMOutput(content="thinking"))
+    node = LLMOutput(content="thinking")
+    root.append(node)
     viewer = LiveGraphTree(
         title="search",
         rich=False,
@@ -84,7 +87,8 @@ def test_tui_panels_use_node_tree():
 
 def test_consumer_group_renders_and_checkpoints(tmp_path, capsys):
     root = start("query")
-    node = root.append(LLMOutput(content="thinking"))
+    node = LLMOutput(content="thinking")
+    root.append(node)
     checkpoint = GraphCheckpointer(tmp_path / "run")
     consumers = ConsumerGroup([LiveTreeRenderer(clear=False), checkpoint])
 
@@ -104,15 +108,19 @@ def test_checkpointer_flushes_by_node_count_and_on_close(tmp_path):
         interval_nodes=2,
     )
 
-    first = root.append(UserQuery(content="one"))
+    first = UserQuery(content="one")
+    root.append(first)
     checkpoint.handle(first)
     assert not (tmp_path / "run" / "graph.json").exists()
 
-    second = first.append(UserQuery(content="two"))
+    second = UserQuery(content="two")
+    first.append(second)
     checkpoint.handle(second)
     assert AgentStart.load(tmp_path / "run").stats.node_count == 3
 
-    checkpoint.handle(second.append(UserQuery(content="three")))
+    third = UserQuery(content="three")
+    second.append(third)
+    checkpoint.handle(third)
     checkpoint.close()
     assert AgentStart.load(tmp_path / "run").stats.node_count == 4
 
@@ -127,7 +135,8 @@ def test_checkpointer_rejects_ambiguous_zero_thresholds(tmp_path):
 @pytest.mark.parametrize("terminal", [DoneOutput(result="ok"), ErrorOutput(content="boom")])
 def test_checkpointer_flushes_terminal_events_immediately(tmp_path, terminal):
     root = start("query")
-    node = root.append(terminal)
+    node = terminal
+    root.append(node)
     checkpoint = GraphCheckpointer(
         tmp_path / "run",
         interval_s=None,

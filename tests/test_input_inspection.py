@@ -5,14 +5,14 @@ from __future__ import annotations
 from helpers import StubLLM
 
 from rlmflow import Flow, LLMOutput, PlanQuery
-from rlmflow.graph.nodes import ORCHESTRATOR_ADDENDUM, WORKING_ACTION
+from rlmflow.graph.nodes import FIRST_TURN_SAFEGUARD, ORCHESTRATOR_ADDENDUM
 
 
 def repl(code: str) -> str:
     return f"```repl\n{code}\n```"
 
 
-def test_input_backed_tasks_remain_free_form():
+def test_input_backed_tasks_plan_inspect_and_act_iteratively():
     calls = []
 
     def reply(messages):
@@ -21,22 +21,30 @@ def test_input_backed_tasks_remain_free_form():
         assert "## Turn Guidance" not in system
         assert "Inspection turn only" not in system
         assert "Post-inspection orchestration turn" not in system
-        assert "## REPL and Delegation" in system
-        assert messages[-1]["content"].startswith(WORKING_ACTION)
-        assert "Structural INPUTS profile:" in messages[-1]["content"]
-        assert ORCHESTRATOR_ADDENDUM in messages[-1]["content"]
-        return repl("""
+        assert "Recursive Language Model" in system
+        assert ORCHESTRATOR_ADDENDUM in system
+        if len(calls) == 1:
+            assert messages[-1]["content"].startswith(FIRST_TURN_SAFEGUARD)
+            assert "Turn 1/" in messages[-1]["content"]
+        else:
+            assert FIRST_TURN_SAFEGUARD not in messages[-1]["content"]
+            assert messages[-1]["content"].startswith("Turn ")
+        if len(calls) == 1:
+            return repl('print({"characters": len(INPUTS["context"]), "kind": "text"})')
+        if len(calls) == 2:
+            return repl("""
 text = INPUTS["context"]
 answer = {"characters": len(text), "contains_requirement": "required" in text}
-finish(answer)
+print(answer)
 """.strip())
+        return repl("finish(answer)")
 
     flow = Flow(StubLLM(reply))
     root = flow.start(
         "inspect the context",
         inputs={"context": "A required supporting value."},
         max_depth=1,
-        max_iters=2,
+        max_iters=4,
         output_schema={
             "type": "object",
             "properties": {
@@ -53,7 +61,7 @@ finish(answer)
         flow.runtime.close_repls()
 
     outputs = [node for node in root.walk() if isinstance(node, LLMOutput)]
-    assert len(calls) == 1
-    assert len(outputs) == 1
-    assert sum(isinstance(node, PlanQuery) for node in root.transcript()) == 1
+    assert len(calls) == 3
+    assert len(outputs) == 3
+    assert sum(isinstance(node, PlanQuery) for node in root.transcript()) == 3
     assert result == {"characters": 28, "contains_requirement": True}

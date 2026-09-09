@@ -29,34 +29,35 @@ OUT_DIR = EXAMPLES_DIR / "_runs" / "deep-tree"
 def grow(agent: AgentStart, *, depth: int, branch: int) -> None:
     """Grow ``agent`` into a depth-``depth`` tree with ``branch`` children per fanout.
 
-    Each append goes to the agent's frontier, which is the node the last one
-    returned. Children branch off the action that launched them, the way a real
-    ``launch_subagent`` turn records it.
+    Each append hangs a child off the current frontier. Children branch off
+    the action that launched them, the way a real ``launch_subagent`` turn
+    records it.
     """
-    turn = agent.append(
-        LLMOutput(
-            content=f"plan at {agent.config.path}",
-            code=f"# depth={agent.config.depth}",
-            usage=LLMUsage(input_tokens=10, output_tokens=5),
-        )
+    turn = LLMOutput(
+        content=f"plan at {agent.config.path}",
+        code=f"# depth={agent.config.depth}",
+        usage=LLMUsage(input_tokens=10, output_tokens=5),
     )
-    action = turn.append(ExecAction(code=f"print({agent.config.path!r})"))
+    agent.append(turn)
+    action = ExecAction(code=f"print({agent.config.path!r})")
+    turn.append(action)
 
     if depth <= 0:
-        output = action.append(ExecOutput(content=f"ran {agent.config.path}"))
+        output = ExecOutput(content=f"ran {agent.config.path}")
+        action.append(output)
         output.append(DoneOutput(result=agent.config.path))
         return
 
     for index in range(branch):
-        child = action.append(
-            AgentStart(
-                content=f"subtask of {agent.config.path}",
-                config=agent.config.child(f"c{index}"),
-            )
+        child = AgentStart(
+            content=f"subtask of {agent.config.path}",
+            config=agent.config.child(f"c{index}"),
         )
+        action.append(child)
         grow(child, depth=depth - 1, branch=branch)
 
-    output = action.append(ExecOutput(content=f"fanout from {agent.config.path}"))
+    output = ExecOutput(content=f"fanout from {agent.config.path}")
+    action.append(output)
     output.append(DoneOutput(result=f"merged:{agent.config.path}"))
 
 

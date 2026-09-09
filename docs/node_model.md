@@ -1,11 +1,14 @@
 # Node Model
 
-`rlmflow` records every agent run as a typed tree of nodes. One agent's slice of that tree is its transcript, and it alternates between **observations** and **actions**:
+`rlmflow` records every agent run as a typed tree of nodes. One agent's slice of that tree is its transcript, and it alternates between **queries**, **actions**, and **outputs**:
 
-- **Observations** are inputs the agent received or observed: its opening query, a user query, an LLM reply, REPL output, an error, or a terminal result.
-- **Actions** are work the engine did on the agent's behalf: execute a block of code.
+- **Queries** (`UserQuery`) are model-facing turns: a plan, a last-turn prod, or an explicit user message.
+- **Actions** (`ActionNode`) are work the engine did on the agent's behalf: execute a block of code.
+- **Outputs** (`OutputNode`) are values produced by a model, runtime, or terminal engine step. `LLMOutput` renders as the assistant reply; `ExecOutput` and `ErrorOutput` are observations fed back to the model; `DoneOutput` ends the agent.
 
-Every action is followed by exactly one observation. This makes each transition auditable: the tree says what the engine decided to do and what happened next.
+`AgentStart` is the agent handle. `LLMOutput` is the model reply itself — there is no `LLMAction` node; `ExecAction` records the code the engine then ran.
+
+Every action is followed by exactly one output (or a `DoneOutput`). This makes each transition auditable: the tree says what the engine decided to do and what happened next.
 
 ## Hierarchy
 
@@ -15,17 +18,19 @@ Node
 ├── UserQuery
 │   ├── PlanQuery
 │   ├── FinalQuery
-│   ├── ContinueQuery
 │   └── TruncationSummary
-├── LLMOutput
-├── ExecAction
-├── ExecOutput
-├── ErrorOutput
-│   └── ReplDead
-└── DoneOutput
+├── ActionNode
+│   └── ExecAction
+│       └── AppendChild
+├── OutputNode
+│   ├── LLMOutput
+│   ├── ExecOutput
+│   ├── ErrorOutput
+│   │   └── ReplDead
+│   └── DoneOutput
 ```
 
-Every node is a dataclass carrying `content`; there is no separate observation/action base. The model "turn" is the `LLMOutput` observation itself — there is no `LLMAction` node; `ExecAction` records the code the engine then ran. Plan, final-answer, continue, and truncation are `UserQuery` subclasses the engine commits; a dead REPL is a `ReplDead`.
+`ActionNode` and `OutputNode` group nodes by what the engine executes and what its stages produce. The model "turn" is the `LLMOutput` itself. Planning, final-answer, and truncation are `UserQuery` subclasses the engine commits; a dead REPL is a `ReplDead`. `UserQuery.build_system_prompt` is the only prompt hook, so inheriting `OutputNode` does not make `LLMOutput` prompt-bearing.
 
 An `AgentStart` is both a node in its parent's tree and the handle for a whole agent: it owns that agent's `frontier`, `config`, `sub_agents`, and system prompt table. The root of a run is just the `AgentStart` nobody launched.
 
@@ -48,9 +53,8 @@ The concrete payloads are:
 | ------------------- | -------------------- | --------------------------------------------------------- |
 | `AgentStart`        | `agent_start`        | `content` (the agent's query), `config`, `system_prompts` |
 | `UserQuery`         | `user_query`         | `content`                                                 |
-| `PlanQuery`         | `plan_query`         | investigation and planning prompt (default)               |
+| `PlanQuery`         | `plan_query`         | planned next-action prompt before each working turn       |
 | `FinalQuery`        | `final_query`        | last-iter prompt (default)                                |
-| `ContinueQuery`     | `continue_query`     | continue nudge (default)                                  |
 | `TruncationSummary` | `truncation_summary` | keep_n notice (default)                                   |
 | `LLMOutput`         | `llm_output`         | `content` (the reply), `code`, `usage`, `prompt_id`       |
 | `ExecAction`        | `exec_action`        | `code`                                                    |
@@ -76,7 +80,7 @@ agent.sub_agents   # the agents it launched
 agent.leaves()     # the frontier of this agent and of every agent below it
 ```
 
-`node.append(child)` is the only link primitive. It hangs a node off this one and moves the agent's frontier there, so appending anywhere but the frontier raises. Appending an `AgentStart` opens a sub-agent instead: it branches off without moving the parent's frontier.
+`node.append(child)` is the only link primitive. It hangs a node off this one and moves the agent's frontier there, so appending anywhere but the frontier raises. It returns `None`; the caller already has the child. Appending an `AgentStart` opens a sub-agent instead: it branches off without moving the parent's frontier.
 
 ## Chat Projection
 
@@ -90,6 +94,7 @@ A one-turn successful run looks like this:
 
 ```text
 AgentStart
+  -> PlanQuery
   -> LLMOutput(code="finish('answer')")
   -> ExecAction
   -> DoneOutput(result="answer")
@@ -99,17 +104,17 @@ A multi-turn run loops through LLM and exec halves:
 
 ```text
 AgentStart
+  -> PlanQuery
   -> LLMOutput(code="x = compute()")
   -> ExecAction
   -> ExecOutput(content="...")
+  -> PlanQuery
   -> LLMOutput(code="finish({'answer': x})")
   -> ExecAction
   -> DoneOutput(result={"answer": ...})
 ```
 
-Without `output_schema`, `DoneOutput.result`, `Flow.run()`, and child result
-handles contain plain text. With an explicit schema, they contain the validated
-typed value.
+Without `output_schema`, `DoneOutput.result`, `Flow.run()`, and child result handles keep the JSON-compatible Python value passed to `finish` (strings stay strings; dicts, lists, and numbers stay typed). Values that cannot round-trip through JSON are stringified. With an explicit schema, they contain the validated typed value.
 
 Errors are observations too. The next LLM turn sees the traceback and can recover:
 
@@ -117,12 +122,13 @@ Errors are observations too. The next LLM turn sees the traceback and can recove
 LLMOutput(code="1 / 0")
   -> ExecAction
   -> ErrorOutput(error="exec", content="ZeroDivisionError: ...")
+  -> PlanQuery
   -> LLMOutput(code="finish(...)")
 ```
 
 An `ErrorOutput` means the agent's own code raised. A `ReplDead` means the REPL itself died and took the namespace with it; the agent is told that its variables are gone before the next model request.
 
-A turn can also land a typed `UserQuery` before its `LLMOutput`: `PlanQuery` once per task, `FinalQuery` on the last allowed iteration, `ContinueQuery` when the previous node did not end on a user turn, `TruncationSummary` when `keep_n` overflows, or a generic `UserQuery` explicitly appended by application code. `PlanQuery` combines iterative investigation and decomposition guidance; subsequent REPL observations continue through the ordinary loop without another planning phase.
+Every ordinary action turn lands a `PlanQuery` before its `LLMOutput`, including startup and turns after REPL output, errors, or a returned child. Its user content is `Turn N/M:` (plus a first-turn INPUTS safeguard). The system message for that turn is `node.build_system_prompt(flow)` on the `UserQuery`: the inherited protocol, plus the orchestrator addendum when the agent can spawn. `FinalQuery` replaces `PlanQuery` on the last allowed iteration and wraps the protocol with last-turn submit guidance. `TruncationSummary` records a `keep_n` overflow, and application code may append a generic `UserQuery` explicitly. Successful REPL blocks continue without an explicit model-facing transition call.
 
 ## Delegation
 

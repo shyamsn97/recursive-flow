@@ -4,34 +4,27 @@ from helpers import StubLLM
 
 from rlmflow import (
     ExecAction,
-    ExecActionStep,
     ExecOutput,
     Flow,
     LLMChunk,
     LLMOutput,
-    LLMRequestStep,
     LLMUsage,
-    MessageBuilder,
-    PlanQuery,
     ReplRun,
     ReplStatus,
     Runtime,
     WrappedRuntime,
     start,
 )
+from rlmflow.engine.steps import complete, run_repl, to_action
 
 
 def test_step_advances_exactly_one_state_transition():
     flow = Flow(StubLLM(lambda _messages: '```repl\nfinish("ok")\n```'))
     root = start("query")
 
-    transition = asyncio.run(flow.step(root))
-    produced = transition.created
+    produced = asyncio.run(flow.step(root))
 
     assert produced.type == "plan_query"
-    assert transition.submitted is root
-    assert not transition.is_agent_start
-    assert transition.error is None
     assert root.frontier is produced
     assert root.transcript() == [root, produced]
 
@@ -40,19 +33,19 @@ def test_a_run_can_be_driven_by_hand_one_step_at_a_time():
     flow = Flow(StubLLM(lambda _messages: '```repl\nfinish("ok")\n```'))
     root = start("query")
 
-    produced = [asyncio.run(flow.step(root.frontier)).created for _ in range(3)]
+    produced = [asyncio.run(flow.step(root.frontier)) for _ in range(3)]
 
     assert [node.type for node in produced] == [
         "plan_query",
         "llm_output",
         "exec_action",
     ]
-    final = asyncio.run(flow.step(root.frontier)).created
+    final = asyncio.run(flow.step(root.frontier))
     assert final.type == "done_output"
     assert root.terminal and root.result() == "ok"
 
 
-def test_llm_request_step_runs_with_plain_fake_primitives():
+def test_complete_runs_with_a_flow_and_fake_llm():
     seen = []
 
     class FakeLLM:
@@ -63,34 +56,18 @@ def test_llm_request_step_runs_with_plain_fake_primitives():
                 usage=LLMUsage(1, 2),
             )
 
-    class Messages(MessageBuilder):
-        def build(self, node):
-            return [
-                {"role": "system", "content": "system"},
-                *node.project(),
-            ]
-
-    class UnusedRuntime(Runtime):
-        def open(self, agent):
-            raise AssertionError("runtime is not used")
-
+    flow = Flow(FakeLLM())
     root = start("query")
-    step = LLMRequestStep(
-        llm=FakeLLM(),
-        messages=Messages(),
-        runtime=WrappedRuntime(UnusedRuntime(), lambda _node: {}),
-    )
+    plan = asyncio.run(flow.step(root))
+    landed = asyncio.run(complete(flow, plan))
 
-    plan = asyncio.run(step(root))
-    landed = asyncio.run(step(plan))
-
-    assert isinstance(plan, PlanQuery)
     assert isinstance(landed, LLMOutput)
     assert landed.usage == LLMUsage(1, 2)
-    assert seen[0][-1]["content"] == plan.instruction()
+    assert seen[0][-1]["content"] == flow.build_messages(plan)[-1]["content"]
+    assert plan.instruction() in seen[0][-1]["content"]
 
 
-def test_exec_action_step_runs_with_the_same_primitive_abi():
+def test_run_repl_uses_the_wrapped_runtime():
     class UnusedLLM:
         async def stream(self, _messages):
             raise AssertionError("stream is not used")
@@ -108,20 +85,17 @@ def test_exec_action_step_runs_with_the_same_primitive_abi():
             self.seeded = (tools, inputs)
 
     root = start("query")
-    action = root.append(ExecAction(code="print('observed')"))
+    action = ExecAction(code="print('observed')")
+    root.append(action)
     runtime = FakeRuntime()
     repl = FakeRepl()
     runtime.repls[root.id] = repl
-    wrapped = WrappedRuntime(runtime, lambda _node: {"tool": "value"})
-    step = ExecActionStep(
-        llm=UnusedLLM(),
-        messages=MessageBuilder(),
-        runtime=wrapped,
-    )
+    flow = Flow(UnusedLLM(), runtime=runtime)
+    flow.wrapped_runtime = WrappedRuntime(runtime, lambda _node: {"tool": "value"})
 
-    landed = asyncio.run(step(action))
+    landed = asyncio.run(run_repl(flow, action))
 
     assert isinstance(landed, ExecOutput)
     assert landed.content == "observed"
-    assert wrapped.runtime is runtime
+    assert asyncio.run(to_action(flow, LLMOutput(content="x", code="print(1)"))).code == "print(1)"
     assert repl.seeded == ({"tool": "value"}, {})

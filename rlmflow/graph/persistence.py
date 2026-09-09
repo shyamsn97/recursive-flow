@@ -8,28 +8,29 @@ import os
 import shutil
 import time
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
 from rlmflow.graph.nodes import (
+    ActionNode,
     AgentConfig,
     AgentStart,
     AppendChild,
-    ContinueQuery,
     DoneOutput,
     ErrorOutput,
     ExecAction,
     ExecOutput,
     FinalQuery,
-    InspectQuery,
     LLMOutput,
     LLMUsage,
     Node,
+    OutputNode,
     PlanQuery,
     ReplDead,
     TruncationSummary,
     UserQuery,
+    _isoformat,
     new_agent_id,
     new_node_id,
 )
@@ -66,14 +67,14 @@ for _node_type in (
     Node,
     AgentStart,
     UserQuery,
-    InspectQuery,
     PlanQuery,
     FinalQuery,
-    ContinueQuery,
     TruncationSummary,
     LLMOutput,
+    ActionNode,
     ExecAction,
     AppendChild,
+    OutputNode,
     ExecOutput,
     ErrorOutput,
     ReplDead,
@@ -418,10 +419,6 @@ def _epoch(stamp: str | None) -> float | None:
     return datetime.fromisoformat(stamp).timestamp() if stamp else None
 
 
-def _isoformat(stamp: float) -> str:
-    return datetime.fromtimestamp(stamp, UTC).isoformat()
-
-
 def _config(path: str, payload: dict[str, Any]) -> AgentConfig:
     """Reconstruct the complete persisted agent configuration."""
     defaults = AgentConfig()
@@ -440,8 +437,8 @@ def _config(path: str, payload: dict[str, Any]) -> AgentConfig:
         child_max_iters=payload.get("child_max_iters"),
         max_budget=payload.get("max_budget", defaults.max_budget),
         keep_n_messages=payload.get("keep_n_messages"),
-        max_output_length=payload.get("max_output_length", 4_000),
-        max_query_chars=payload.get("max_query_chars", 2_000),
+        max_output_length=payload.get("max_output_length", defaults.max_output_length),
+        max_query_chars=payload.get("max_query_chars", defaults.max_query_chars),
     )
 
 

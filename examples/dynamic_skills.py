@@ -1,11 +1,9 @@
-"""Dynamically add skills to a running agent via a live prompt section.
+"""Dynamically add skills to a running agent via a PromptBuilder subclass.
 
 Two pieces work together here:
 
-1. A **callable prompt section**. ``Flow`` resolves and renders
-   ``flow.system_prompt`` every turn, so a section
-   whose body is a function reflects whatever it reads *right now*. Point it at a
-   mutable ``SkillLibrary`` and the rendered "Skills" section is always live.
+1. A **``PromptBuilder`` subclass**. ``Flow`` resolves ``flow.system_prompt``
+   every turn, so a builder that reads a mutable ``SkillLibrary`` is always live.
 2. An **``add_skill`` tool**. A plain ``@tool``-decorated function passed via
    ``tools=[...]`` lands in the REPL namespace and auto-documents itself in the
    prompt. Because it closes over the same ``SkillLibrary``, the agent can
@@ -33,7 +31,7 @@ from rlmflow import (
     AgentConfig,
     Flow,
     LLMUsage,
-    SystemPromptBuilder,
+    PromptBuilder,
 )
 from rlmflow.llm import client_for
 from rlmflow.tools import tool
@@ -88,7 +86,8 @@ def make_add_skill(library: SkillLibrary):
     @tool(
         "Install a reusable skill (a name plus a markdown body of guidance) into "
         "your own skill library. It appears in the Skills section of your system "
-        "prompt starting next turn."
+        "prompt starting next turn.",
+        proxy=True,
     )
     def add_skill(name: str, body: str) -> str:
         library.add(name, body)
@@ -151,18 +150,23 @@ class ScriptedLLM:
         )
 
 
+class SkillsPrompt(PromptBuilder):
+    def __init__(self, library: SkillLibrary) -> None:
+        self.library = library
+
+    def __call__(self, flow=None, node=None) -> str:
+        extra = self.library.render()
+        text = super().__call__(flow, node)
+        return f"{text}\n\n{extra}" if extra else text
+
+
 def build_flow(library: SkillLibrary, llm, *, max_iters: int) -> Flow:
-    flow = Flow(
+    return Flow(
         llm,
         root_config=AgentConfig(max_iters=max_iters),
         tools=[make_add_skill(library)],
+        system_prompt=SkillsPrompt(library),
     )
-    prompt = SystemPromptBuilder()
-    prompt.sections.add(
-        "skills", lambda flow, graph: library.render(), title="Skills", before="tools"
-    )
-    flow.system_prompt = prompt
-    return flow
 
 
 def main() -> None:

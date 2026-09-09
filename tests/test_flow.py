@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import threading
 import time
 from types import SimpleNamespace
@@ -25,7 +26,11 @@ from rlmflow import (
     persistence,
     start,
 )
-from rlmflow.graph.nodes import CONTINUE_NUDGE, ORCHESTRATOR_ADDENDUM, WORKING_ACTION
+from rlmflow.graph.nodes import (
+    FIRST_TURN_SAFEGUARD,
+    LAST_TURN_ADDENDUM,
+    ORCHESTRATOR_ADDENDUM,
+)
 from rlmflow.prompts import PromptProfile, default_render
 from rlmflow.runtime import LocalRuntime, Runtime
 from rlmflow.tools import tool
@@ -51,11 +56,9 @@ class ScriptedLLM:
         # makes a needle fire for the wrong one: once the planning turn mentioned
         # delegation, a child answering "boom" matched its parent's "delegate" entry
         # and tried to launch past max_depth. Script against task content only.
-        last = (
-            last.replace(WORKING_ACTION, "")
-            .replace(ORCHESTRATOR_ADDENDUM, "")
-            .replace(CONTINUE_NUDGE, "")
-        )
+        last = last.replace(FIRST_TURN_SAFEGUARD, "").replace(ORCHESTRATOR_ADDENDUM, "")
+        last = last.replace(LAST_TURN_ADDENDUM, "")
+        last = re.sub(r"Turn \d+(?:/\d+)?:", "", last)
         for needle, reply in self.script:
             if needle in last:
                 if isinstance(reply, Exception):
@@ -64,9 +67,7 @@ class ScriptedLLM:
         raise AssertionError(f"no scripted reply for {last!r}")
 
 
-def block(code, *, transition="act"):
-    if transition and "finish(" not in code and "transition(" not in code:
-        code = f"{code}\ntransition({transition!r})"
+def block(code):
     return f"thinking\n```python\n{code}\n```"
 
 
@@ -83,7 +84,7 @@ def test_truncate_output_preserves_traceback_tail():
 def test_finish():
     llm = ScriptedLLM([("count", block("x = 2\nprint(x)")), ("2", block("finish(x * 3)"))])
     flow = Flow(llm)
-    assert flow.run("count for me") == "6"
+    assert flow.run("count for me") == 6
     assert llm.calls[0][0]["role"] == "system"
 
 
@@ -123,7 +124,7 @@ def test_execution_guard_rejects_code_before_it_reaches_the_runtime():
     root = start("start")
 
     assert Flow(llm, execution_guard=guard).run(root) == "safe"
-    assert seen == ["forbidden()\ntransition('act')", "finish('safe')"]
+    assert seen == ["forbidden()", "finish('safe')"]
     assert any(
         isinstance(node, ErrorOutput) and node.content == "rejected by execution guard"
         for node in root.walk()
@@ -142,14 +143,16 @@ def test_max_iters():
     assert sum(isinstance(n, LLMOutput) for n in root.walk()) == 3
 
 
-def test_max_iters_has_a_safe_default_and_none_opts_out():
+def test_iters_and_budget_are_unbounded_unless_set():
     llm = ScriptedLLM([("loop", block("print('again')")), ("again", block("finish('ok')"))])
     root = start("loop")
-    assert root.config.max_iters == 30
-    assert root.config.max_budget == 100_000
-    unbounded = start("unbounded", max_iters=None, max_budget=None)
-    assert unbounded.config.max_iters is None
-    assert unbounded.config.max_budget is None
+    assert root.config.max_iters is None
+    assert root.config.max_budget is None
+    assert root.config.max_output_length == 20_000
+    assert root.config.max_query_chars == 20_000
+    bounded = start("bounded", max_iters=30, max_budget=100_000)
+    assert bounded.config.max_iters == 30
+    assert bounded.config.max_budget == 100_000
     assert Flow(llm).run(root) == "ok"
 
 
@@ -300,7 +303,6 @@ def test_plan_query_allows_iterative_investigation_before_delegation():
         "launch_subagent('alpha-workstream', model='default', name='a'), "
         "launch_subagent('beta-workstream', model='default', name='b'))\n"
         "print([await h.wait_for_result() for h in handles])",
-        transition="act",
     )
     llm = ScriptedLLM(
         [
@@ -310,10 +312,7 @@ def test_plan_query_allows_iterative_investigation_before_delegation():
             ),
             (
                 "preview",
-                block(
-                    "requirements = INPUTS['task'].splitlines()[1:]\nprint(requirements)",
-                    transition="act",
-                ),
+                    block("requirements = INPUTS['task'].splitlines()[1:]\nprint(requirements)"),
             ),
             ("requirement A", launch),
             ("alpha-workstream", block("finish('A')")),
@@ -328,7 +327,7 @@ def test_plan_query_allows_iterative_investigation_before_delegation():
     )
 
     assert Flow(llm).run(root) == "done"
-    assert sum(isinstance(node, PlanQuery) for node in root.transcript()) == 1
+    assert sum(isinstance(node, PlanQuery) for node in root.transcript()) == 4
     assert [child.config.name for child in root.sub_agents] == ["a", "b"]
     parent_outputs = [
         node.content.strip() for node in root.transcript() if isinstance(node, ExecOutput)
@@ -349,13 +348,13 @@ def test_save_writes_a_run_directory(tmp_path):
 
     run = root.save(tmp_path / "run")
     graph = json.loads((run / "graph.json").read_text())
-    assert (graph["version"], graph["node_count"], graph["metadata"]) == (3, 13, {})
+    assert (graph["version"], graph["node_count"], graph["metadata"]) == (3, 14, {})
     assert graph["nodes"][0]["payload"]["inputs"] == {"doc": "hi"}
     assert graph["nodes"][0]["parent_id"] is None
 
     summary = json.loads((run / "latest.json").read_text())
     assert summary["agent_ids"] == ["root", "root.a"]
-    assert (summary["root_agent_id"], summary["node_count"]) == ("root", 13)
+    assert (summary["root_agent_id"], summary["node_count"]) == ("root", 14)
     assert (summary["finished"], summary["result"]) == (True, "AB")
 
     action = next(n for n in root.transcript() if isinstance(n, ExecAction))
@@ -410,7 +409,7 @@ def test_run_records_prompts_seq_and_timing():
     turns = [node for node in root.transcript() if isinstance(node, LLMOutput)]
     first, last = root.system_prompt_for(turns[0]), root.system_prompt_for(turns[-1])
     assert "Python REPL" in " ".join(first.split())
-    assert "## REPL and Delegation" in first
+    assert "Recursive Language Model" in first
     assert "## Turn Guidance" not in first
     assert first == last
     assert root.latest_system_prompt() == last
@@ -423,7 +422,7 @@ def test_run_records_prompts_seq_and_timing():
 def test_appending_off_the_frontier_is_refused():
     llm = ScriptedLLM([("count", block("x = 2\nprint(x)")), ("2", block("finish(x * 3)"))])
     root = start("count for me")
-    assert Flow(llm).run(root) == "6"
+    assert Flow(llm).run(root) == 6
 
     stale = root.transcript()[1]
     with pytest.raises(ValueError, match="frontier"):
@@ -443,14 +442,14 @@ def test_structured_output_is_stored_parsed():
     ("expression", "expected"),
     [
         ("'text'", "text"),
-        ("41", "41"),
-        ("True", "True"),
-        ("None", "None"),
-        ("[1, 'é']", "[1, 'é']"),
-        ("{'n': 41}", "{'n': 41}"),
+        ("41", 41),
+        ("True", True),
+        ("None", None),
+        ("[1, 'é']", [1, "é"]),
+        ("{'n': 41}", {"n": 41}),
     ],
 )
-def test_unstructured_finish_returns_plain_text(expression, expected):
+def test_unstructured_finish_keeps_json_values(expression, expected):
     llm = ScriptedLLM([("value", block(f"finish({expression})"))])
     root = start("return value")
 
@@ -549,7 +548,7 @@ def paused_run(tmp_path, name="run"):
 def test_resuming_a_saved_run_replays_its_repl(tmp_path):
     loaded = paused_run(tmp_path)
     llm = ScriptedLLM([("stored", block("finish(secret + 1)"))])
-    assert Flow(llm).run(loaded) == "42"
+    assert Flow(llm).run(loaded) == 42
     assert not [node for node in loaded.walk() if isinstance(node, ErrorOutput)]
     assert len(llm.calls) == 1  # the replay itself asks the model nothing
 
@@ -568,7 +567,7 @@ def test_lazy_restore_waits_until_code_needs_the_repl(tmp_path):
 
     asyncio.run(stop_before_execution())
     assert flow.runtime.get(loaded) is None
-    assert flow.run(loaded) == "42"
+    assert flow.run(loaded) == 42
     assert flow.runtime.get_var(loaded, "secret") == 41
 
 
@@ -632,9 +631,13 @@ def test_controller_attaches_multiple_subtrees_between_streams():
 
         anchor = root.frontier
         child_a = start("child a")
-        child_a.append(ExecAction(code="value = 'A'")).append(ExecOutput(content="child a"))
+        action_a = ExecAction(code="value = 'A'")
+        child_a.append(action_a)
+        action_a.append(ExecOutput(content="child a"))
         child_b = start("child b")
-        child_b.append(ExecAction(code="value = 'B'")).append(ExecOutput(content="child b"))
+        action_b = ExecAction(code="value = 'B'")
+        child_b.append(action_b)
+        action_b.append(ExecOutput(content="child b"))
         anchor.append_child(child_a, name="a")
         anchor.append_child(child_b, name="b")
 
@@ -874,7 +877,7 @@ def test_children_step_concurrently():
                 ),
             ),
             *[(f"child {i}", block(f"finish({i})")) for i in range(3)],
-            ("['0', '1', '2']", block("finish('all')")),
+            ("[0, 1, 2]", block("finish('all')")),
         ],
     )
     root = start("fan out", max_depth=1)
@@ -884,7 +887,7 @@ def test_children_step_concurrently():
         return await asyncio.wait_for(Flow(llm).arun(root), timeout=5)
 
     assert asyncio.run(main()) == "all"
-    assert [child.result() for child in root.sub_agents] == ["0", "1", "2"]
+    assert [child.result() for child in root.sub_agents] == [0, 1, 2]
 
 
 def test_background_child_outlives_root_and_stream_drains_it():
@@ -977,7 +980,7 @@ def test_completed_child_result_access_satisfies_finish_gate():
     )
     root = start("start child", max_depth=1)
 
-    assert Flow(llm).run(root) == "42"
+    assert Flow(llm).run(root) == 42
     child = root.sub_agents[0]
     assert child.id in root.retrieved_agent_ids()
     assert any(
@@ -1376,6 +1379,19 @@ def test_llm_query_batched_is_an_opt_in_tool():
 
     # Off by default, so an agent cannot call what its prompt never described.
     assert "llm_query_batched" not in Flow(ReplyLLM(reply)).tools
+
+
+def test_llm_query_batched_can_be_disabled_without_disabling_single_queries():
+    flow = Flow(
+        ReplyLLM(lambda messages: messages[-1]["content"].upper()),
+        use_llm_query=True,
+        use_llm_query_batched=False,
+    )
+
+    assert "llm_query" in flow.tools
+    assert "llm_query_batched" not in flow.tools
+    assert flow.use_llm_query
+    assert not flow.use_llm_query_batched
 
 
 def test_workers_bounds_blocking_model_calls():

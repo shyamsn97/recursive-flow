@@ -204,12 +204,12 @@ def test_worker_runtime_integrates_with_flow():
         def chat(self, _messages):
             self.calls += 1
             if self.calls == 1:
-                return '```python\nx = 40\nprint(x + 2)\ntransition("act")\n```'
+                return '```python\nx = 40\nprint(x + 2)\n```'
             return "```python\nfinish(x)\n```"
 
     flow = Flow(ScriptedLLM(), runtime=LocalRuntime())
     try:
-        assert flow.run("count") == "40"
+        assert flow.run("count") == 40
     finally:
         asyncio.run(flow.aclose())
 
@@ -233,7 +233,6 @@ def test_runtime_delegates_without_sharing_workers():
                 "'child task', model='default', name='child')\n"
                 "answer = await child.wait_for_result()\n"
                 "print(answer)\n"
-                'transition("act")\n'
                 "```"
             )
 
@@ -297,7 +296,6 @@ def test_reuse_repl_places_child_in_parent_worker(tmp_path):
                 "child = await launch_subagent("
                 "'child task', model='default', name='child', reuse_repl=True)\n"
                 "print(await child.wait_for_result())\n"
-                'transition("act")\n'
                 "```"
             )
 
@@ -305,7 +303,7 @@ def test_reuse_repl_places_child_in_parent_worker(tmp_path):
     flow = Flow(ScriptedLLM(), runtime=runtime)
     root = flow.start("delegate", max_depth=1)
     try:
-        assert flow.run(root) == "['parent', 'child']"
+        assert flow.run(root) == ["parent", "child"]
         parent_repl = runtime.repls[root.id]
         assert parent_repl.session.execution_timeout == 17
         # Same worker, separate tenant: the child's REPL rides the parent's session.

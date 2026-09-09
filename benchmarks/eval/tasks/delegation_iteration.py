@@ -1,14 +1,18 @@
-"""Small stable suites for delegation-policy iteration."""
+"""Pinned subsets of the task-graph adapters for routing and iteration."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
 from benchmarks.eval import dataset
 from benchmarks.eval.tasks.arc_agi import ArcAgiTaskGraphDataset
+from benchmarks.eval.tasks.dabstep import DABstepTaskGraphDataset
 from benchmarks.eval.tasks.delegation_codeqa import DelegationCodeQADataset
 from benchmarks.eval.tasks.delegation_sudoku import DelegationSudokuDataset
 from benchmarks.eval.tasks.musique import MuSiQueTaskGraphDataset
+from benchmarks.eval.tasks.natural_plan import NaturalPlanTaskGraphDataset
+from benchmarks.eval.tasks.oolong_pairs import PAPER_CONTEXT_LEN, OolongPairsDataset
 from benchmarks.eval.tasks.parallelqa import ParallelQATaskGraphDataset
 from benchmarks.eval.tasks.planbench import PlanBenchTaskGraphDataset
 from benchmarks.eval.tasks.twowiki import TwoWikiTaskGraphDataset
@@ -21,17 +25,24 @@ FIVE_TASKS = (
     ("delegation_sudoku_18_cross-product", "local_constraint_control"),
     ("delegation_arc_agi_20_2ba387bc", "parallel_analysis_and_synthesis"),
 )
+TEN_PAIR_IDS = ("4", "16")
 TEN_TASKS = (
-    ("delegation_parallelqa_11", "local_numeric_control"),
-    ("delegation_parallelqa_22", "local_lookup_control"),
-    ("delegation_parallelqa_63", "local_arithmetic_control"),
-    ("delegation_parallelqa_94", "parallel_lookup"),
-    ("delegation_musique_05_4hop1__38130_8966_31714_79432", "multi_hop_retrieval"),
-    ("delegation_twowiki_08_d594f50208c111ebbd8bac1f6bf848b6", "parallel_evidence"),
-    ("delegation_planbench_16_logistics_instance_20", "candidate_and_verification"),
-    ("delegation_codeqa_17_official_codeqa_00072", "long_context_isolation"),
-    ("delegation_sudoku_18_cross-product", "local_constraint_control"),
-    ("delegation_arc_agi_20_2ba387bc", "parallel_analysis_and_synthesis"),
+    ("delegation_parallelqa_11", "local_numeric_control", "local"),
+    ("delegation_parallelqa_22", "local_lookup_control", "local"),
+    ("delegation_parallelqa_63", "local_arithmetic_control", "local"),
+    ("delegation_parallelqa_94", "parallel_lookup", "local"),
+    ("delegation_musique_05_4hop1__38130_8966_31714_79432", "multi_hop_retrieval", "subagent"),
+    ("delegation_twowiki_07_948c33ea0baf11ebab90acde48001122", "sequential_inference", "subagent"),
+    ("delegation_twowiki_08_d594f50208c111ebbd8bac1f6bf848b6", "parallel_evidence", "subagent"),
+    ("delegation_planbench_16_logistics_instance_20", "candidate_and_verification", "local"),
+    ("delegation_codeqa_17_official_codeqa_00072", "long_context_isolation", "batched_query"),
+    ("delegation_sudoku_18_cross-product", "local_constraint_control", "local"),
+    ("delegation_arc_agi_19_1ae2feb7", "parallel_analysis_and_synthesis", "local"),
+    ("delegation_arc_agi_20_2ba387bc", "parallel_analysis_and_synthesis", "local"),
+    ("delegation_dabstep_11_2536", "document_and_recompute", "subagent"),
+    ("delegation_natural_plan_13_trip_planning_example_593", "coupled_planning", "subagent"),
+    (f"oolong_pairs_{PAPER_CONTEXT_LEN}_04", "batched_semantic_date_filter", "batched_query"),
+    (f"oolong_pairs_{PAPER_CONTEXT_LEN}_16", "batched_asymmetric_roles", "batched_query"),
 )
 REGRESSION_TASKS = (
     ("delegation_parallelqa_63", "authoritative_tool_selection"),
@@ -40,11 +51,34 @@ REGRESSION_TASKS = (
     ("delegation_planbench_16_logistics_instance_20", "candidate_and_verification"),
     ("delegation_arc_agi_20_2ba387bc", "recursive_budget_control"),
 )
-SELECTED_TASKS = FIVE_TASKS
+ROUTING_PAIR_IDS = ("4", "11", "16", "20")
+ROUTING_TASKS = (
+    ("oolong_pairs_8192_04", "batched_semantic_date_filter", "batched_query"),
+    ("oolong_pairs_8192_11", "batched_asymmetric_roles", "batched_query"),
+    ("oolong_pairs_8192_16", "batched_complex_classification", "batched_query"),
+    ("oolong_pairs_8192_20", "batched_compound_roles", "batched_query"),
+    ("delegation_twowiki_08_d594f50208c111ebbd8bac1f6bf848b6", "parallel_evidence", "subagent"),
+    ("delegation_musique_05_4hop1__38130_8966_31714_79432", "multi_hop_retrieval", "subagent"),
+    ("delegation_parallelqa_63", "local_arithmetic_control", "local"),
+    ("delegation_sudoku_18_cross-product", "local_constraint_control", "local"),
+)
+
+_SCORERS = (
+    ("oolong_pairs_", OolongPairsDataset),
+    ("delegation_parallelqa_", ParallelQATaskGraphDataset),
+    ("delegation_musique_", MuSiQueTaskGraphDataset),
+    ("delegation_twowiki_", TwoWikiTaskGraphDataset),
+    ("delegation_planbench_", PlanBenchTaskGraphDataset),
+    ("delegation_codeqa_", DelegationCodeQADataset),
+    ("delegation_sudoku_", DelegationSudokuDataset),
+    ("delegation_arc_agi_", ArcAgiTaskGraphDataset),
+    ("delegation_dabstep_", DABstepTaskGraphDataset),
+    ("delegation_natural_plan_", NaturalPlanTaskGraphDataset),
+)
 
 
-class _DelegationIterationDataset(Dataset):
-    selected_tasks: tuple[tuple[str, str], ...] = ()
+class _Subset(Dataset):
+    selected_tasks: tuple[tuple[str, ...], ...] = ()
 
     def __init__(self, sources: tuple[Dataset, ...]) -> None:
         self._datasets = sources
@@ -54,33 +88,19 @@ class _DelegationIterationDataset(Dataset):
         for source in self._datasets:
             for example in source.examples(split=split, limit=None, seed=seed):
                 available[example.id] = example
-
-        missing = [
-            example_id for example_id, _role in self.selected_tasks if example_id not in available
-        ]
+        missing = [item[0] for item in self.selected_tasks if item[0] not in available]
         if missing:
-            raise ValueError(f"delegation iteration suite is missing tasks: {missing}")
-
-        selected = [
-            replace(
-                available[example_id],
-                metadata={**available[example_id].metadata, "iteration_role": role},
-            )
-            for example_id, role in self.selected_tasks
-        ]
+            raise ValueError(f"delegation subset is missing tasks: {missing}")
+        selected = []
+        for example_id, role, *rest in self.selected_tasks:
+            metadata = {**available[example_id].metadata, "iteration_role": role}
+            if rest:
+                metadata["expected_route"] = rest[0]
+            selected.append(replace(available[example_id], metadata=metadata))
         return selected if limit is None else selected[:limit]
 
     def score(self, example: Example, prediction: Prediction) -> Score:
-        prefixes = (
-            ("delegation_parallelqa_", ParallelQATaskGraphDataset),
-            ("delegation_musique_", MuSiQueTaskGraphDataset),
-            ("delegation_twowiki_", TwoWikiTaskGraphDataset),
-            ("delegation_planbench_", PlanBenchTaskGraphDataset),
-            ("delegation_codeqa_", DelegationCodeQADataset),
-            ("delegation_sudoku_", DelegationSudokuDataset),
-            ("delegation_arc_agi_", ArcAgiTaskGraphDataset),
-        )
-        for prefix, source_type in prefixes:
+        for prefix, source_type in _SCORERS:
             if example.id.startswith(prefix):
                 source = next(
                     (item for item in self._datasets if isinstance(item, source_type)),
@@ -91,67 +111,90 @@ class _DelegationIterationDataset(Dataset):
         raise ValueError(f"no scorer for iteration task {example.id}")
 
 
-@dataset("delegation-iteration-five", tags=["delegation", "iteration", "canary"])
-class DelegationIterationDataset(_DelegationIterationDataset):
-    """A stable mix of delegation opportunities and local controls."""
+def _pack(
+    name: str,
+    class_name: str,
+    tasks: tuple[tuple[str, ...], ...],
+    sources: Callable[[str], tuple[Dataset, ...]],
+    tags: list[str],
+):
+    class Pack(_Subset):
+        selected_tasks = tasks
 
-    selected_tasks = FIVE_TASKS
+        def __init__(self, data_dir: str = "evals/data") -> None:
+            super().__init__(sources(data_dir))
 
-    def __init__(self, data_dir: str = "evals/data") -> None:
-        super().__init__(
-            (
-                ParallelQATaskGraphDataset(data_dir=data_dir),
-                PlanBenchTaskGraphDataset(data_dir=data_dir),
-                DelegationSudokuDataset(),
-                ArcAgiTaskGraphDataset(data_dir=data_dir),
-            )
-        )
-
-
-@dataset("delegation-iteration-ten", tags=["delegation", "iteration"])
-class DelegationIterationTenDataset(_DelegationIterationDataset):
-    """A broader ten-task suite that remains cheap enough for prompt iteration."""
-
-    selected_tasks = TEN_TASKS
-
-    def __init__(self, data_dir: str = "evals/data") -> None:
-        super().__init__(
-            (
-                ParallelQATaskGraphDataset(data_dir=data_dir),
-                MuSiQueTaskGraphDataset(data_dir=data_dir),
-                TwoWikiTaskGraphDataset(data_dir=data_dir),
-                PlanBenchTaskGraphDataset(data_dir=data_dir),
-                DelegationCodeQADataset(data_dir=data_dir),
-                DelegationSudokuDataset(),
-                ArcAgiTaskGraphDataset(data_dir=data_dir),
-            )
-        )
+    Pack.__name__ = class_name
+    Pack.__qualname__ = class_name
+    return dataset(name, tags=tags)(Pack)
 
 
-@dataset("delegation-regression-five", tags=["delegation", "iteration", "regression"])
-class DelegationRegressionDataset(_DelegationIterationDataset):
-    """Five failures targeted by the current delegation fixes."""
-
-    selected_tasks = REGRESSION_TASKS
-
-    def __init__(self, data_dir: str = "evals/data") -> None:
-        super().__init__(
-            (
-                ParallelQATaskGraphDataset(data_dir=data_dir),
-                MuSiQueTaskGraphDataset(data_dir=data_dir),
-                TwoWikiTaskGraphDataset(data_dir=data_dir),
-                PlanBenchTaskGraphDataset(data_dir=data_dir),
-                ArcAgiTaskGraphDataset(data_dir=data_dir),
-            )
-        )
-
+DelegationIterationDataset = _pack(
+    "delegation-iteration-five",
+    "DelegationIterationDataset",
+    FIVE_TASKS,
+    lambda d: (
+        ParallelQATaskGraphDataset(data_dir=d),
+        PlanBenchTaskGraphDataset(data_dir=d),
+        DelegationSudokuDataset(),
+        ArcAgiTaskGraphDataset(data_dir=d),
+    ),
+    ["delegation", "iteration", "canary"],
+)
+DelegationIterationTenDataset = _pack(
+    "delegation-iteration-ten",
+    "DelegationIterationTenDataset",
+    TEN_TASKS,
+    lambda d: (
+        ParallelQATaskGraphDataset(data_dir=d),
+        MuSiQueTaskGraphDataset(data_dir=d),
+        TwoWikiTaskGraphDataset(data_dir=d),
+        PlanBenchTaskGraphDataset(data_dir=d),
+        DelegationCodeQADataset(data_dir=d),
+        DelegationSudokuDataset(),
+        ArcAgiTaskGraphDataset(data_dir=d),
+        DABstepTaskGraphDataset(data_dir=d),
+        NaturalPlanTaskGraphDataset(data_dir=d),
+        OolongPairsDataset(data_dir=d, context_len=PAPER_CONTEXT_LEN, question_ids=TEN_PAIR_IDS),
+    ),
+    ["delegation", "iteration"],
+)
+DelegationRegressionDataset = _pack(
+    "delegation-regression-five",
+    "DelegationRegressionDataset",
+    REGRESSION_TASKS,
+    lambda d: (
+        ParallelQATaskGraphDataset(data_dir=d),
+        MuSiQueTaskGraphDataset(data_dir=d),
+        TwoWikiTaskGraphDataset(data_dir=d),
+        PlanBenchTaskGraphDataset(data_dir=d),
+        ArcAgiTaskGraphDataset(data_dir=d),
+    ),
+    ["delegation", "iteration", "regression"],
+)
+DelegationRoutingDataset = _pack(
+    "delegation-routing",
+    "DelegationRoutingDataset",
+    ROUTING_TASKS,
+    lambda d: (
+        OolongPairsDataset(data_dir=d, context_len=8192, question_ids=ROUTING_PAIR_IDS),
+        TwoWikiTaskGraphDataset(data_dir=d),
+        MuSiQueTaskGraphDataset(data_dir=d),
+        ParallelQATaskGraphDataset(data_dir=d),
+        DelegationSudokuDataset(),
+    ),
+    ["delegation", "iteration", "routing"],
+)
 
 __all__ = [
     "DelegationIterationDataset",
     "DelegationIterationTenDataset",
     "DelegationRegressionDataset",
+    "DelegationRoutingDataset",
     "FIVE_TASKS",
     "REGRESSION_TASKS",
-    "SELECTED_TASKS",
+    "ROUTING_PAIR_IDS",
+    "ROUTING_TASKS",
+    "TEN_PAIR_IDS",
     "TEN_TASKS",
 ]

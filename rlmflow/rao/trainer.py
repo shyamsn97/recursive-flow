@@ -47,10 +47,10 @@ class TinkerSampler(TinkerClient):
         from tinker import types  # type: ignore[import-not-found]
 
         sink = kwargs.pop("sample_sink", None)
-        prompt = self.renderer.build_generation_prompt(messages)
+        prompt, renderer_stop = self._render_prompt(messages)
         stop = self.stop
-        if stop is None and hasattr(self.renderer, "get_stop_sequences"):
-            stop = self.renderer.get_stop_sequences()
+        if stop is None:
+            stop = renderer_stop
         params_kwargs = {
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             "temperature": kwargs.get("temperature", self.temperature),
@@ -69,7 +69,7 @@ class TinkerSampler(TinkerClient):
         sequence = first_sequence(output)
         tokens = as_list(getattr(sequence, "tokens", None))
         logprobs = [float(value) for value in as_list(getattr(sequence, "logprobs", None))]
-        text = self._message_text(self.renderer.parse_response(tokens))
+        text = self._parse_tokens(tokens)
         usage = LLMUsage(input_tokens=len(prompt_ints(prompt)), output_tokens=len(tokens))
         self.last_usage = usage
         if sink is not None:
@@ -211,6 +211,11 @@ class TinkerTrainer:
         datums = build_datums(items, types)
         if not datums:
             return {"datums": 0, "skipped": "no trainable turns"}
+        # Current Tinker derives the sampled-token mask from zero advantages for
+        # importance sampling and rejects the older explicit ``weights`` key.
+        if self.config.loss_fn == "importance_sampling":
+            for datum in datums:
+                datum.loss_fn_inputs.pop("weights", None)
         self.training.forward_backward(datums, loss_fn=self.config.loss_fn).result()
         self.training.optim_step(types.AdamParams(learning_rate=self.config.learning_rate)).result()
         self.steps += 1

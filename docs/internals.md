@@ -9,9 +9,9 @@ Runtime    live REPL sessions
 TaskQueue  calls in flight, and when one lands
 ```
 
-There is no `Graph`, `Run`, `Driver`, Event hierarchy, detached worker queue, or merge subsystem, and no `Agent` class either — an agent is the `AgentStart` node that opened it. All execution, prompt, model, and tool methods live directly on `Flow`.
+There is no `Graph`, `Run`, `Driver`, Event hierarchy, detached worker queue, or merge subsystem, and no `Agent` class either — an agent is the `AgentStart` node that opened it. `Flow` is the public facade. Restore, builtin factories, child launch, and prompt assembly are `(flow, ...)` functions in `engine/restore.py`, `engine/delegation.py`, `tools/namespace.py`, and `prompts/messages.py`.
 
-The layout follows that. `rlmflow.graph` is the run itself — the node types and the format they are written to disk in. `rlmflow.flow` is the entry point, and `rlmflow.engine` is what it is built out of: `execution.py` (driver-scoped `TaskQueue`s plus `Pool`, `ThreadPool`, and `SequentialPool`), `boundaries.py` for the `until` vocabulary, and `parallel.py` for driving several roots through one flow. Everything public is re-exported from `rlmflow` itself, so which file a name lives in is an implementation detail rather than something a caller imports through.
+The layout follows that. `rlmflow.graph` is the run itself — the node types and the format they are written to disk in. `rlmflow.flow` is the entry point, and `rlmflow.engine` is what it is built out of: `execution.py` (driver-scoped `TaskQueue`s plus `Pool`, `ThreadPool`, and `SequentialPool`), `boundaries.py` for the `until` vocabulary, `parallel.py` for driving several roots through one flow, plus `steps`, `restore`, and `delegation`. Everything public is re-exported from `rlmflow` itself, so which file a name lives in is an implementation detail rather than something a caller imports through.
 
 ## Node tree
 
@@ -39,7 +39,7 @@ agent.terminal
 agent.result()
 ```
 
-`Node.append(child)` is the only link primitive. It hangs one node off this one, gives it this node's inherited identity, and rejects an append anywhere but the agent's frontier — which is what keeps one agent's transcript a single chain. It is O(1). Appending an `AgentStart` branches instead of advancing: the child joins `agent.sub_agents` and the parent's frontier does not move.
+`Node.append(child)` is the only link primitive. It hangs one node off this one, gives it this node's inherited identity, and rejects an append anywhere but the agent's frontier — which is what keeps one agent's transcript a single chain. It is O(1) and returns `None`. The step that called it returns the created node. Appending an `AgentStart` branches instead of advancing: the child joins `agent.sub_agents` and the parent's frontier does not move.
 
 `walk()` is an iterative generator over the subtree; `iter_backwards()` is the single chain back to this agent's `AgentStart`. `agent.terminal` is local: it asks only whether that agent's frontier is a `DoneOutput`.
 
@@ -55,19 +55,23 @@ stream driver(roots)
   -> stream resubmits that node when its agent is not terminal
 ```
 
-`Flow.step` looks up a `StepFunction` class with `get_step_fn` (MRO over `self.steps`, seeded from `DEFAULT_STEPS`) and constructs it with the same `LLMClient`, `MessageBuilder`, and `WrappedRuntime` every time. The wrapper exposes the original runtime as `.runtime`, so a custom step can use lower-level REPL operations without making the default step ABI depend on `Flow`. Override a type with `update_step_fn`. `PlanQuery` / `FinalQuery` / `ContinueQuery` / `TruncationSummary` inherit the `UserQuery` registration.
+`Flow.step` resolves a producer from `self.transitions` (own rows, then `_base`), calls it as `(flow, node) -> Node`, appends the result, and returns that node. Default producers and the guards those rows use live on `@Flow.transitions.on(...)` in `rlmflow.engine.steps`. Extra behavior is `@Review.transitions.on(...)`. `PlanQuery` / `FinalQuery` / `TruncationSummary` inherit the `UserQuery` chat row unless an earlier guarded row matches.
 
 ```text
-AgentStart   -> LLMRequestStep (PlanQuery when the agent has inputs)
-UserQuery    -> LLMRequestStep (follow-up PlanQuery after DoneOutput)
-ExecOutput   -> LLMRequestStep
-ErrorOutput  -> LLMRequestStep
-LLMOutput    -> LLMOutputStep (ExecAction)
-ExecAction   -> ExecActionStep
+AgentStart   -> to_plan (PlanQuery)
+UserQuery    -> complete (LLMOutput), or to_plan after DoneOutput
+ExecOutput   -> to_plan (PlanQuery)
+ErrorOutput  -> to_plan (PlanQuery)
+LLMOutput    -> to_action (ExecAction)
+ExecAction   -> run_repl (output node, or a UserQuery selected by transition("name"))
 DoneOutput   -> terminal, never stepped
 ```
 
-`step(node)` applies budget policy and dispatches one transition. It returns `Transition(submitted, created, error)`, converting infrastructure failure into a terminal graph node while letting cancellation unwind. The `timed` context manager stamps the created node with how long the step ran.
+Guards can preempt those rows: `out_of_room` → `FinalQuery`, `needs_truncation` → `TruncationSummary`.
+
+`Transitions.choices(CurrentQuery, *targets)` declares model-selectable routes. The `transition("name")` REPL control tool is always bound but appears in the prompt only when the current behavior has choices. A valid call ends the action and makes the selected `UserQuery` its direct successor; there is no intermediate `ExecOutput`.
+
+`step(node)` applies budget policy and dispatches one producer. It returns the created `Node`. The queue's internal `Transition(submitted, created, error)` converts infrastructure failure into a terminal graph node while letting cancellation unwind. The `timed` context manager stamps the created node with how long the step ran.
 
 ## Concurrency
 
@@ -79,9 +83,9 @@ Delegation submits each new child to the same queue. A driver-scoped condition w
 
 ## Model and exec turns
 
-`LLMRequestStep` records the system prompt, consumes `llm.stream(...)`, and appends one `LLMOutput`. Inspect, plan, final-answer, continue, and truncation land as their own nodes before the model call.
+`complete` records the system prompt, consumes `llm.stream(...)`, and returns one `LLMOutput`. Plan, final-answer, and truncation guidance land as their own nodes before the model call. A `PlanQuery` precedes every ordinary action so each new observation gets an explicit plan-and-act boundary in the graph.
 
-`ExecActionStep` calls `WrappedRuntime.execute`, which seeds the agent's REPL with the current tool namespace and `INPUTS`, delegates to the original runtime, and turns the resulting `ReplRun` into exactly one node:
+`run_repl` calls `WrappedRuntime.execute`, which seeds the agent's REPL with the current tool namespace and `INPUTS`, delegates to the original runtime, and turns the resulting `ReplRun` into exactly one node:
 
 ```text
 ReplStatus.DONE   -> DoneOutput(result=run.answer)

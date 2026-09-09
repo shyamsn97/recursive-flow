@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import ast
 import asyncio
 import json
-import re
 import sys
 from types import SimpleNamespace
 
@@ -14,7 +12,6 @@ from benchmarks.eval import DATASETS
 from benchmarks.eval.delegation.align import ChildAlignment, score_alignment
 from benchmarks.eval.delegation.annotations import ANNOTATIONS, annotation_for
 from benchmarks.eval.delegation.conditions import (
-    CapabilityOnlyStartStep,
     DelegationCondition,
     apply_condition,
     system_prompt_for,
@@ -36,12 +33,15 @@ from benchmarks.eval.tasks.delegation_codeqa import (
 )
 from benchmarks.eval.tasks.delegation_codeqa import DelegationCodeQADataset
 from benchmarks.eval.tasks.delegation_iteration import (
+    FIVE_TASKS,
     REGRESSION_TASKS,
-    SELECTED_TASKS,
+    ROUTING_TASKS,
+    TEN_PAIR_IDS,
     TEN_TASKS,
     DelegationIterationDataset,
     DelegationIterationTenDataset,
     DelegationRegressionDataset,
+    DelegationRoutingDataset,
 )
 from benchmarks.eval.tasks.delegation_sudoku import SOLUTION as SUDOKU_SOLUTION
 from benchmarks.eval.tasks.delegation_sudoku import DelegationSudokuDataset
@@ -67,7 +67,8 @@ from rlmflow import (
     PlanQuery,
     start,
 )
-from rlmflow.graph.nodes import ORCHESTRATOR_ADDENDUM, WORKING_ACTION
+from rlmflow.engine.steps import to_plan
+from rlmflow.graph.nodes import FIRST_TURN_SAFEGUARD, ORCHESTRATOR_ADDENDUM
 
 
 def test_delegation_manifest_has_exactly_twenty_ordered_problems():
@@ -127,9 +128,10 @@ def test_capability_only_keeps_agent_api_but_removes_policy_sections():
     root = flow.start("solve", inputs={"task": "one coherent problem"}, max_depth=2)
     prompt = flow.build_messages(root.frontier)[0]["content"]
 
-    assert flow.get_step_fn(root) is CapabilityOnlyStartStep
+    assert isinstance(asyncio.run(flow.step(root)), LLMOutput)
+    assert flow.transitions.resolve(root) is not to_plan
     assert "launch_subagent" in prompt
-    assert "Delegate substantial independent workstreams" not in prompt
+    assert ORCHESTRATOR_ADDENDUM not in prompt
     assert "## Examples" not in prompt
 
 
@@ -143,45 +145,20 @@ def test_default_prompt_is_depth_aware_and_bounded():
     child_prompt = flow.build_messages(child.frontier)[0]["content"]
     leaf_prompt = flow.build_messages(leaf.frontier)[0]["content"]
 
-    local_heading = "**Local work — probe, print the candidate, then submit it.**"
-    delegation_heading = "**Delegation — a source too large to read here.**"
-
-    # The source is official-rlm's base prompt and orchestrator addendum, adapted
-    # for rlmflow's APIs plus the explicit print-then-finish contract.
-    assert len(root_prompt) <= 9_500
-    # A spawn-capable child carries the delegation trigger list but not the example.
-    assert len(child_prompt) <= 9_000
-    assert len(leaf_prompt) <= 6_500
-    assert local_heading in root_prompt
-    assert delegation_heading in root_prompt
-    assert local_heading in child_prompt
-    assert delegation_heading not in child_prompt
+    assert len(root_prompt) <= 8_000
+    assert len(child_prompt) <= 8_000
+    assert len(leaf_prompt) <= 8_000
     assert "launch_subagent" in child_prompt
     assert "launch_subagent" not in leaf_prompt
-    assert "output_schema=" not in root_prompt
-    assert "AgentHandle" in root_prompt
-    assert 'inputs={"paths": "\\n".join(batch)}' in root_prompt
-
-    # Local leads: print-then-submit is what every row depends on, while delegation
-    # fired on 3 of 34 rows, all on the one task that scored 0.000 nine times.
-    assert root_prompt.index(local_heading) < root_prompt.index(delegation_heading)
+    assert "You are a Recursive Language Model" in root_prompt
+    assert ORCHESTRATOR_ADDENDUM not in root_prompt
 
     compact = " ".join(root_prompt.lower().split())
     for phrase in ("must delegate", "must launch", "must wait", "must retrieve"):
         assert phrase not in compact
 
-    repl_blocks = re.findall(r"```repl\s*\n(.*?)\n```", root_prompt, re.DOTALL)
-    # Six: both examples demonstrate separate work / inspect / finish turns. Cutting
-    # the local example to two blocks — dropping the probe and its assert — was part
-    # of a rewrite that lost 0.240 paired, so the three-step shape is load-bearing.
-    assert len(repl_blocks) == 6
-    for code in repl_blocks:
-        compile(
-            ast.parse(code),
-            "<prompt-example>",
-            "exec",
-            flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
-        )
+    assert "## Examples" not in root_prompt
+    assert "**Local work" not in root_prompt
 
 
 def test_default_prompt_shows_schema_only_when_explicit():
@@ -203,19 +180,23 @@ def test_default_prompt_shows_schema_only_when_explicit():
     assert "This run requires structured output" not in plain_prompt
     assert "This run requires structured output" in structured_prompt
     assert '"answer"' in structured_prompt
+    assert 'finish({"n": 41})' in structured_prompt
 
 
-def test_default_prompt_uses_minimal_opening_action():
+def test_default_flow_opens_with_a_plan_action_for_roots_and_children():
     flow = Flow(StubLLM(lambda _messages: "unused"))
     root = flow.start("solve", inputs={"task": "data"}, max_depth=2)
     child = start("scope", inputs={"task": "data"}, depth=1, max_depth=2)
 
-    root_action = asyncio.run(flow.step(root)).created
-    child_action = asyncio.run(flow.step(child)).created
-    assert root_action.instruction().startswith(WORKING_ACTION)
-    assert child_action.instruction().startswith(WORKING_ACTION)
-    assert ORCHESTRATOR_ADDENDUM in root_action.instruction()
-    assert ORCHESTRATOR_ADDENDUM in child_action.instruction()
+    root_action = asyncio.run(flow.step(root))
+    child_action = asyncio.run(flow.step(child))
+    assert isinstance(root_action, PlanQuery)
+    assert isinstance(child_action, PlanQuery)
+    assert root_action.instruction().startswith(FIRST_TURN_SAFEGUARD)
+    assert "Turn 1:" in root_action.instruction()
+    assert child_action.instruction().startswith(FIRST_TURN_SAFEGUARD)
+    assert ORCHESTRATOR_ADDENDUM in flow.build_messages(root_action)[0]["content"]
+    assert ORCHESTRATOR_ADDENDUM in flow.build_messages(child_action)[0]["content"]
 
 
 def test_prompt_only_benchmarks_do_not_receive_fabricated_inputs():
@@ -225,7 +206,7 @@ def test_prompt_only_benchmarks_do_not_receive_fabricated_inputs():
     flow = Flow(StubLLM(lambda _messages: "unused"))
 
     assert inputs == {}
-    assert isinstance(asyncio.run(flow.step(root)).created, PlanQuery)
+    assert isinstance(asyncio.run(flow.step(root)), PlanQuery)
 
 
 def test_parallelqa_fact_lookup_is_documented_in_the_rlmflow_prompt():
@@ -248,13 +229,20 @@ def test_parallelqa_fact_lookup_is_documented_in_the_rlmflow_prompt():
 
 def test_delegation_metrics_capture_launch_batches_failures_and_usage():
     root = start("solve", max_depth=2)
-    action = root.append(LLMOutput(content="launch")).append(ExecAction(code="launch"))
-    child_a = action.append(AgentStart(content="branch a", config=root.config.child("a")))
-    child_b = action.append(AgentStart(content="branch b", config=root.config.child("b")))
+    reply = LLMOutput(content="launch")
+    root.append(reply)
+    action = ExecAction(code="launch")
+    reply.append(action)
+    child_a = AgentStart(content="branch a", config=root.config.child("a"))
+    action.append(child_a)
+    child_b = AgentStart(content="branch b", config=root.config.child("b"))
+    action.append(child_b)
     child_a.append(DoneOutput(result="A"))
     child_b.append(DoneOutput(result="[child failed: boom]"))
     action.mark_agent_retrieved(child_a.id)
-    action.append(ExecOutput(content="children done")).append(DoneOutput(result="root"))
+    output = ExecOutput(content="children done")
+    action.append(output)
+    output.append(DoneOutput(result="root"))
 
     metrics = delegation_metrics(root)
 
@@ -299,8 +287,10 @@ def test_alignment_rewards_successful_local_restraint_without_child_count():
 
 def test_alignment_uses_external_labels_and_outcome_gate():
     root = start("solve", max_depth=2)
-    action = root.append(ExecAction(code="launch"))
-    child = action.append(AgentStart(content="find facts", config=root.config.child("facts")))
+    action = ExecAction(code="launch")
+    root.append(action)
+    child = AgentStart(content="find facts", config=root.config.child("facts"))
+    action.append(child)
     child.append(DoneOutput(result="facts"))
     labels = [
         ChildAlignment(
@@ -393,9 +383,9 @@ def test_iteration_suite_selects_five_stable_roles(monkeypatch, tmp_path):
 
     examples = dataset.examples(split="test", limit=None, seed=0)
 
-    assert [example.id for example in examples] == [task[0] for task in SELECTED_TASKS]
+    assert [example.id for example in examples] == [task[0] for task in FIVE_TASKS]
     assert [example.metadata["iteration_role"] for example in examples] == [
-        task[1] for task in SELECTED_TASKS
+        task[1] for task in FIVE_TASKS
     ]
     assert len(dataset.examples(split="test", limit=2, seed=0)) == 2
 
@@ -404,8 +394,150 @@ def test_ten_task_iteration_suite_is_stable(tmp_path):
     dataset = DelegationIterationTenDataset(data_dir=str(tmp_path))
 
     assert dataset.selected_tasks == TEN_TASKS
-    assert len(TEN_TASKS) == 10
-    assert len({example_id for example_id, _role in TEN_TASKS}) == 10
+    assert len(TEN_TASKS) == 16
+    assert len({item[0] for item in TEN_TASKS}) == 16
+    assert TEN_PAIR_IDS == ("4", "16")
+    assert {item[2] for item in TEN_TASKS} == {"local", "subagent", "batched_query"}
+    assert any(item[0].startswith("oolong_pairs_32768_") for item in TEN_TASKS)
+    assert any(item[0].startswith("delegation_dabstep_") for item in TEN_TASKS)
+    assert any(item[0].startswith("delegation_natural_plan_") for item in TEN_TASKS)
+    assert any(item[0].startswith("delegation_twowiki_07_") for item in TEN_TASKS)
+    assert any(item[0].startswith("delegation_arc_agi_19_") for item in TEN_TASKS)
+
+
+def test_ten_task_iteration_suite_resolves_the_extra_problems(monkeypatch, tmp_path):
+    dataset = DelegationIterationTenDataset(data_dir=str(tmp_path))
+    (
+        parallelqa,
+        musique,
+        twowiki,
+        planbench,
+        codeqa,
+        _sudoku,
+        arc,
+        dabstep,
+        natural_plan,
+        pairs,
+    ) = dataset._datasets
+    parallelqa._rows = [
+        {"id": source_id, "question": f"question {source_id}", "answer": source_id, "branch": 2}
+        for source_id in FROZEN_IDS
+    ]
+    monkeypatch.setattr(
+        musique,
+        "_load",
+        lambda: [
+            {
+                "id": MUSIQUE_ID,
+                "question": "musique",
+                "answer": "answer",
+                "answerable": True,
+                "question_decomposition": [{}, {}, {}, {}],
+                "paragraphs": [],
+            },
+            {
+                "id": MUSIQUE_ID,
+                "question": "musique",
+                "answer": "",
+                "answerable": False,
+                "question_decomposition": [],
+                "paragraphs": [],
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        twowiki,
+        "_load",
+        lambda: [
+            {
+                "id": source_id,
+                "type": kind,
+                "question": "two wiki",
+                "answer": "answer",
+                "supporting_facts": [],
+                "context": [],
+            }
+            for kind, source_id in TWOWIKI_IDS.items()
+        ],
+    )
+    monkeypatch.setattr(planbench, "_download", lambda name: f"({name})")
+    codeqa._rows = [
+        {
+            "_source_index": CODEQA_INDEX,
+            "question": "Which behavior is correct?",
+            "context": "repository",
+            "choice_A": "A",
+            "choice_B": "B",
+            "choice_C": "C",
+            "choice_D": "D",
+            "answer": "B",
+        }
+    ]
+    monkeypatch.setattr(
+        arc,
+        "_load",
+        lambda _source_id: {
+            "train": [],
+            "test": [{"input": [[0]], "output": [[0]]}],
+        },
+    )
+    dabstep.materialize_context = False
+    dabstep._rows = [
+        {
+            "task_id": source_id,
+            "question": "Return the number.",
+            "guidelines": "",
+            "answer": "12.5",
+            "level": "hard",
+        }
+        for source_id in ("2536", "2769")
+    ]
+    natural_plan._rows = {
+        "trip": [
+            {
+                "_source_id": NATURAL_PLAN_IDS["trip"],
+                "prompt_0shot": "Plan.",
+                "golden_plan": "",
+                "cities": "A**B",
+                "durations": "2**2",
+            }
+        ],
+        "meeting": [
+            {
+                "_source_id": NATURAL_PLAN_IDS["meeting"],
+                "prompt_0shot": "Meet.",
+                "golden_plan": ["You start at X at 9:00AM"],
+                "constraints": [],
+                "dist_matrix": {},
+            }
+        ],
+        "calendar": [
+            {
+                "_source_id": NATURAL_PLAN_IDS["calendar"],
+                "prompt_0shot": "Schedule.",
+                "golden_plan": "Monday, 9:00 - 9:30",
+            }
+        ],
+    }
+    pairs._rows = [
+        {
+            "id": question_id,
+            "question": f"pairs {question_id}",
+            "answer": [f"({question_id}, 99)"],
+            "type": "list_of_answers",
+        }
+        for question_id in ("4", "16")
+    ]
+    pairs._context = "32k unlabeled context"
+
+    examples = dataset.examples(split="test", limit=None, seed=0)
+
+    assert [example.id for example in examples] == [task[0] for task in TEN_TASKS]
+    assert [example.metadata["expected_route"] for example in examples] == [
+        task[2] for task in TEN_TASKS
+    ]
+    assert pairs.context_len == 32768
+    assert dataset.score(examples[-1], Prediction(answer="(16, 99)")).correct
 
 
 def test_regression_suite_targets_five_observed_failures(tmp_path):
@@ -414,6 +546,77 @@ def test_regression_suite_targets_five_observed_failures(tmp_path):
     assert dataset.selected_tasks == REGRESSION_TASKS
     assert len(REGRESSION_TASKS) == 5
     assert len({example_id for example_id, _role in REGRESSION_TASKS}) == 5
+
+
+def test_routing_suite_pins_delegation_and_local_controls(monkeypatch, tmp_path):
+    dataset = DelegationRoutingDataset(data_dir=str(tmp_path))
+    pairs, twowiki, musique, parallelqa, _sudoku = dataset._datasets
+    pairs._rows = [
+        {
+            "id": question_id,
+            "question": f"pairs {question_id}",
+            "answer": [f"({question_id}, 99)"],
+            "type": "list_of_answers",
+        }
+        for question_id in ("4", "11", "16", "20")
+    ]
+    pairs._context = "8k unlabeled context"
+    monkeypatch.setattr(
+        twowiki,
+        "_load",
+        lambda: [
+            {
+                "id": source_id,
+                "type": kind,
+                "question": "two wiki",
+                "answer": "answer",
+                "supporting_facts": [],
+                "context": [],
+            }
+            for kind, source_id in TWOWIKI_IDS.items()
+        ],
+    )
+    monkeypatch.setattr(
+        musique,
+        "_load",
+        lambda: [
+            {
+                "id": MUSIQUE_ID,
+                "question": "musique",
+                "answer": "answer",
+                "answerable": True,
+                "question_decomposition": [{}, {}, {}, {}],
+                "paragraphs": [],
+            },
+            {
+                "id": MUSIQUE_ID,
+                "question": "musique",
+                "answer": "",
+                "answerable": False,
+                "question_decomposition": [],
+                "paragraphs": [],
+            },
+        ],
+    )
+    parallelqa._rows = [
+        {"id": source_id, "question": f"question {source_id}", "answer": source_id, "branch": 2}
+        for source_id in FROZEN_IDS
+    ]
+
+    examples = dataset.examples(split="test", limit=None, seed=0)
+
+    assert DATASETS.expand(["delegation-routing"]) == ["delegation-routing"]
+    assert dataset.selected_tasks == ROUTING_TASKS
+    assert len(ROUTING_TASKS) == 8
+    assert [example.id for example in examples] == [task[0] for task in ROUTING_TASKS]
+    assert [example.metadata["iteration_role"] for example in examples] == [
+        task[1] for task in ROUTING_TASKS
+    ]
+    assert [example.metadata["expected_route"] for example in examples] == [
+        task[2] for task in ROUTING_TASKS
+    ]
+    assert examples[0].context == {"context": "8k unlabeled context"}
+    assert dataset.score(examples[0], Prediction(answer="(4, 99)")).correct
 
 
 def test_musique_scores_answer_and_support_jointly():
